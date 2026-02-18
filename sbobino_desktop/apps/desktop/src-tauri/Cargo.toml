@@ -1,0 +1,35 @@
+[package]
+name = "sbobino-desktop"
+version = "0.1.0"
+description = "Sbobino Desktop Rewrite"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[lib]
+name = "sbobino_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+futures-util.workspace = true
+reqwest.workspace = true
+chrono.workspace = true
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+docx-rs = "0.4"
+printpdf = "0.8"
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+sbobino-domain = { path = "../../../crates/domain" }
+sbobino-application = { path = "../../../crates/application" }
+sbobino-infrastructure = { path = "../../../crates/infrastructure" }
