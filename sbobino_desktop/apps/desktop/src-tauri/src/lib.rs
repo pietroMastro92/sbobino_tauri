@@ -13,7 +13,7 @@ use tracing_subscriber::{fmt, EnvFilter};
 use crate::commands::artifacts::{
     chat_artifact, delete_artifacts, empty_deleted_artifacts, export_artifact, get_artifact,
     hard_delete_artifacts, list_artifacts, list_deleted_artifacts, list_recent_artifacts,
-    read_audio_file, rename_artifact, restore_artifacts, update_artifact,
+    read_audio_file, rename_artifact, restore_artifacts, summarize_artifact, update_artifact,
 };
 use crate::commands::provisioning::{
     provisioning_cancel, provisioning_download_model, provisioning_models, provisioning_start,
@@ -25,12 +25,13 @@ use crate::commands::realtime::{
 };
 use crate::commands::runtime::get_transcription_runtime_health;
 use crate::commands::settings::{
-    delete_prompt, get_ai_providers, get_settings, get_settings_snapshot, list_prompts,
-    reset_prompts, save_prompt, test_prompt, update_ai_providers, update_settings,
+    delete_prompt, get_ai_providers, get_settings, get_settings_snapshot, list_gemini_models,
+    list_prompts, reset_prompts, save_prompt, test_prompt, update_ai_providers, update_settings,
     update_settings_partial,
 };
 use crate::commands::transcription::{cancel_transcription, start_transcription};
 use crate::commands::updates::check_updates;
+use crate::commands::window::open_settings_window;
 use crate::state::{ProvisioningRuntime, RealtimeRuntime};
 use sbobino_infrastructure::adapters::whisper_stream::WhisperStreamEngine;
 
@@ -84,6 +85,7 @@ pub fn run() {
             update_settings_partial,
             get_ai_providers,
             update_ai_providers,
+            list_gemini_models,
             list_prompts,
             save_prompt,
             delete_prompt,
@@ -103,6 +105,7 @@ pub fn run() {
             empty_deleted_artifacts,
             export_artifact,
             chat_artifact,
+            summarize_artifact,
             read_audio_file,
             start_realtime,
             pause_realtime,
@@ -117,6 +120,7 @@ pub fn run() {
             provisioning_cancel,
             get_transcription_runtime_health,
             check_updates,
+            open_settings_window,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run sbobino desktop app");

@@ -3930,6 +3930,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures-util",
+ "hound",
  "reqwest 0.12.28",
  "rusqlite",
  "sbobino-application",

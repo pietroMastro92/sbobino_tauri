@@ -9,12 +9,15 @@ use std::{
 };
 use tracing::info;
 
-use sbobino_application::{ArtifactService, SettingsService, TranscriptionService};
-use sbobino_domain::{AiProvider, AppSettings, PromptTask};
+use sbobino_application::{
+    ArtifactService, SettingsService, TranscriptEnhancer, TranscriptionService,
+};
+use sbobino_domain::{AiProvider, AppSettings, PromptTask, TranscriptionEngine};
 
 use adapters::{
-    ffmpeg::FfmpegAdapter, gemini::GeminiEnhancer, noop_enhancer::NoopEnhancer,
-    whisper_cpp::WhisperCppEngine, whisper_stream::WhisperStreamEngine,
+    ffmpeg::FfmpegAdapter, foundation_apple::FoundationAppleEnhancer, gemini::GeminiEnhancer,
+    noop_enhancer::NoopEnhancer, whisper_cpp::WhisperCppEngine, whisper_kit::WhisperKitEngine,
+    whisper_stream::WhisperStreamEngine,
 };
 use repositories::{
     fs_settings_repository::FsSettingsRepository,
@@ -51,6 +54,8 @@ const REQUIRED_COREML_ENCODERS: [(&str, &str); 5] = [
 pub struct RuntimeHealth {
     pub whisper_cli_path: String,
     pub whisper_cli_resolved: String,
+    pub whisperkit_cli_path: String,
+    pub whisperkit_cli_resolved: String,
     pub whisper_stream_path: String,
     pub whisper_stream_resolved: String,
     pub models_dir_configured: String,
@@ -94,27 +99,27 @@ impl RuntimeTranscriptionFactory {
         let ffmpeg_path = self.resolve_binary_path(&settings.transcription.ffmpeg_path, "ffmpeg");
         let whisper_cli_path =
             self.resolve_binary_path(&settings.transcription.whisper_cli_path, "whisper-cli");
+        let whisperkit_cli_path = self.resolve_binary_path(
+            &settings.transcription.whisperkit_cli_path,
+            "whisperkit-cli",
+        );
         let models_dir = self.resolve_models_dir(&settings.transcription.models_dir);
 
         let transcoder = Arc::new(FfmpegAdapter::new(ffmpeg_path));
-        let speech_engine = Arc::new(WhisperCppEngine::new(whisper_cli_path, models_dir));
-
-        let enhancer: Arc<dyn sbobino_application::TranscriptEnhancer> =
-            match settings.ai.active_provider {
-                AiProvider::Gemini => {
-                    if let Some(api_key) = settings.ai.providers.gemini.api_key.clone() {
-                        Arc::new(GeminiEnhancer::new(
-                            api_key,
-                            settings.ai.providers.gemini.model.clone(),
-                            settings.prompt_for_task(PromptTask::Optimize),
-                            settings.prompt_for_task(PromptTask::Summary),
-                        ))
-                    } else {
-                        Arc::new(NoopEnhancer)
-                    }
+        let speech_engine: Arc<dyn sbobino_application::SpeechToTextEngine> =
+            match settings.transcription.engine {
+                TranscriptionEngine::WhisperCpp => {
+                    Arc::new(WhisperCppEngine::new(whisper_cli_path, models_dir))
                 }
-                AiProvider::FoundationApple | AiProvider::None => Arc::new(NoopEnhancer),
+                TranscriptionEngine::WhisperKit => {
+                    Arc::new(WhisperKitEngine::new(whisperkit_cli_path, models_dir))
+                }
             };
+
+        let enhancer = self
+            .build_active_enhancer()
+            .map_err(|error| format!("failed to build AI enhancer: {error}"))?
+            .unwrap_or_else(|| Arc::new(NoopEnhancer));
 
         Ok(Arc::new(TranscriptionService::new(
             transcoder,
@@ -167,6 +172,52 @@ impl RuntimeTranscriptionFactory {
         )))
     }
 
+    pub fn build_foundation_enhancer(&self) -> Result<Option<FoundationAppleEnhancer>, String> {
+        self.build_foundation_enhancer_with_overrides(None, None)
+    }
+
+    pub fn build_foundation_enhancer_with_overrides(
+        &self,
+        optimize_prompt_override: Option<String>,
+        summary_prompt_override: Option<String>,
+    ) -> Result<Option<FoundationAppleEnhancer>, String> {
+        if !cfg!(target_os = "macos") {
+            return Ok(None);
+        }
+
+        let settings = self.load_settings()?;
+        if !settings.ai.providers.foundation_apple.enabled {
+            return Ok(None);
+        }
+
+        Ok(Some(FoundationAppleEnhancer::new(
+            optimize_prompt_override.or_else(|| settings.prompt_for_task(PromptTask::Optimize)),
+            summary_prompt_override.or_else(|| settings.prompt_for_task(PromptTask::Summary)),
+        )))
+    }
+
+    pub fn build_active_enhancer(&self) -> Result<Option<Arc<dyn TranscriptEnhancer>>, String> {
+        let settings = self.load_settings()?;
+        match settings.ai.active_provider {
+            AiProvider::Gemini => {
+                let enhancer = self.build_gemini_enhancer_with_overrides(
+                    None,
+                    settings.prompt_for_task(PromptTask::Optimize),
+                    settings.prompt_for_task(PromptTask::Summary),
+                )?;
+                Ok(enhancer.map(|value| Arc::new(value) as Arc<dyn TranscriptEnhancer>))
+            }
+            AiProvider::FoundationApple => {
+                let enhancer = self.build_foundation_enhancer_with_overrides(
+                    settings.prompt_for_task(PromptTask::Optimize),
+                    settings.prompt_for_task(PromptTask::Summary),
+                )?;
+                Ok(enhancer.map(|value| Arc::new(value) as Arc<dyn TranscriptEnhancer>))
+            }
+            AiProvider::None => Ok(None),
+        }
+    }
+
     pub fn build_whisper_stream_engine(&self) -> Result<WhisperStreamEngine, String> {
         let settings = self.load_settings()?;
         let whisper_stream_path = self.resolve_binary_path(
@@ -201,6 +252,7 @@ impl RuntimeTranscriptionFactory {
         let models_dir = PathBuf::from(&resolved_models_dir);
 
         let whisper_cli_configured = settings.transcription.whisper_cli_path.clone();
+        let whisperkit_cli_configured = settings.transcription.whisperkit_cli_path.clone();
         let whisper_stream_configured = settings
             .transcription
             .whisper_cli_path
@@ -208,6 +260,8 @@ impl RuntimeTranscriptionFactory {
 
         let whisper_cli_resolution =
             self.resolve_binary_details(&whisper_cli_configured, "whisper-cli");
+        let whisperkit_cli_resolution =
+            self.resolve_binary_details(&whisperkit_cli_configured, "whisperkit-cli");
         let whisper_stream_resolution =
             self.resolve_binary_details(&whisper_stream_configured, "whisper-stream");
 
@@ -223,6 +277,8 @@ impl RuntimeTranscriptionFactory {
         Ok(RuntimeHealth {
             whisper_cli_path: whisper_cli_configured,
             whisper_cli_resolved: whisper_cli_resolution.resolved_path,
+            whisperkit_cli_path: whisperkit_cli_configured,
+            whisperkit_cli_resolved: whisperkit_cli_resolution.resolved_path,
             whisper_stream_path: whisper_stream_configured,
             whisper_stream_resolved: whisper_stream_resolution.resolved_path,
             models_dir_configured: configured_models_dir,

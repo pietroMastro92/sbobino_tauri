@@ -32,6 +32,12 @@ pub trait TranscriptEnhancer: Send + Sync {
         text: &str,
         language_code: &str,
     ) -> Result<SummaryFaq, ApplicationError>;
+
+    async fn ask(&self, _prompt: &str) -> Result<String, ApplicationError> {
+        Err(ApplicationError::PostProcessing(
+            "chat is not supported by the active AI provider".to_string(),
+        ))
+    }
 }
 
 #[async_trait]

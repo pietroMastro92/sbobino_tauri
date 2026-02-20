@@ -1,5 +1,8 @@
+use std::collections::BTreeSet;
+
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{Emitter, State};
 
 use sbobino_domain::{
     AiProvider, AiSettings, AppSettings, GeneralSettings, LanguageCode, PromptSettings, PromptTask,
@@ -7,6 +10,10 @@ use sbobino_domain::{
 };
 
 use crate::{error::CommandError, state::AppState};
+
+fn emit_settings_updated(app: &tauri::AppHandle, settings: &AppSettings) {
+    let _ = app.emit("settings://updated", settings);
+}
 
 #[derive(Debug, Deserialize, Default)]
 pub struct UpdateSettingsPartialPayload {
@@ -22,6 +29,109 @@ pub struct UpdateAiProvidersPayload {
     pub foundation_apple_enabled: Option<bool>,
     pub gemini_api_key: Option<Option<String>>,
     pub gemini_model: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct ListGeminiModelsPayload {
+    pub api_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiModelsResponse {
+    models: Option<Vec<GeminiModelEntry>>,
+    next_page_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiModelEntry {
+    name: Option<String>,
+    supported_generation_methods: Option<Vec<String>>,
+}
+
+async fn collect_gemini_models_from_endpoint(
+    client: &reqwest::Client,
+    endpoint: &str,
+    api_key: &str,
+    collected: &mut BTreeSet<String>,
+) -> Result<(), CommandError> {
+    let mut page_token: Option<String> = None;
+
+    for _ in 0..25 {
+        let mut request = client
+            .get(endpoint)
+            .query(&[("key", api_key)])
+            .query(&[("pageSize", "1000")]);
+
+        if let Some(token) = page_token.as_ref() {
+            request = request.query(&[("pageToken", token.as_str())]);
+        }
+
+        let response = request
+            .send()
+            .await
+            .map_err(|error| CommandError::new("gemini_models", error.to_string()))?;
+
+        if response.status() == StatusCode::UNAUTHORIZED
+            || response.status() == StatusCode::FORBIDDEN
+        {
+            return Err(CommandError::new(
+                "gemini_models",
+                "Gemini API key is invalid or unauthorized",
+            ));
+        }
+
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(());
+        }
+
+        if !response.status().is_success() {
+            return Err(CommandError::new(
+                "gemini_models",
+                format!(
+                    "Gemini models request failed with status {}",
+                    response.status()
+                ),
+            ));
+        }
+
+        let payload = response
+            .json::<GeminiModelsResponse>()
+            .await
+            .map_err(|error| CommandError::new("gemini_models", error.to_string()))?;
+
+        for model in payload.models.unwrap_or_default() {
+            let supports_generation = model
+                .supported_generation_methods
+                .as_ref()
+                .is_some_and(|methods| methods.iter().any(|method| method == "generateContent"));
+
+            if !supports_generation {
+                continue;
+            }
+
+            if let Some(name) = model.name {
+                let cleaned = name.trim().trim_start_matches("models/").to_string();
+                if !cleaned.is_empty() {
+                    let _ = collected.insert(cleaned);
+                }
+            }
+        }
+
+        let next = payload
+            .next_page_token
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+
+        if next.is_none() {
+            break;
+        }
+
+        page_token = next;
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -63,14 +173,17 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, Com
 
 #[tauri::command]
 pub async fn update_settings(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     settings: AppSettings,
 ) -> Result<AppSettings, CommandError> {
-    state
+    let updated = state
         .settings_service
         .update(settings)
         .await
-        .map_err(CommandError::from)
+        .map_err(CommandError::from)?;
+    emit_settings_updated(&app, &updated);
+    Ok(updated)
 }
 
 #[tauri::command]
@@ -86,10 +199,11 @@ pub async fn get_settings_snapshot(
 
 #[tauri::command]
 pub async fn update_settings_partial(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     payload: UpdateSettingsPartialPayload,
 ) -> Result<AppSettings, CommandError> {
-    state
+    let updated = state
         .settings_service
         .update_partial(
             payload.general,
@@ -98,7 +212,9 @@ pub async fn update_settings_partial(
             payload.prompts,
         )
         .await
-        .map_err(CommandError::from)
+        .map_err(CommandError::from)?;
+    emit_settings_updated(&app, &updated);
+    Ok(updated)
 }
 
 #[tauri::command]
@@ -112,10 +228,11 @@ pub async fn get_ai_providers(state: State<'_, AppState>) -> Result<AiSettings, 
 
 #[tauri::command]
 pub async fn update_ai_providers(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     payload: UpdateAiProvidersPayload,
 ) -> Result<AiSettings, CommandError> {
-    state
+    let ai = state
         .settings_service
         .update_ai_settings(
             payload.active_provider,
@@ -124,7 +241,65 @@ pub async fn update_ai_providers(
             payload.gemini_model,
         )
         .await
-        .map_err(CommandError::from)
+        .map_err(CommandError::from)?;
+
+    if let Ok(snapshot) = state.settings_service.snapshot().await {
+        emit_settings_updated(&app, &snapshot);
+    }
+
+    Ok(ai)
+}
+
+#[tauri::command]
+pub async fn list_gemini_models(
+    state: State<'_, AppState>,
+    payload: Option<ListGeminiModelsPayload>,
+) -> Result<Vec<String>, CommandError> {
+    let settings = state
+        .settings_service
+        .snapshot()
+        .await
+        .map_err(CommandError::from)?;
+
+    let api_key = payload
+        .and_then(|entry| entry.api_key)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            settings
+                .ai
+                .providers
+                .gemini
+                .api_key
+                .clone()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+        .ok_or_else(|| CommandError::new("validation", "Gemini API key is required"))?;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|error| CommandError::new("gemini_models", error.to_string()))?;
+
+    let mut collected = BTreeSet::new();
+    collect_gemini_models_from_endpoint(
+        &client,
+        "https://generativelanguage.googleapis.com/v1beta/models",
+        &api_key,
+        &mut collected,
+    )
+    .await?;
+
+    collect_gemini_models_from_endpoint(
+        &client,
+        "https://generativelanguage.googleapis.com/v1/models",
+        &api_key,
+        &mut collected,
+    )
+    .await?;
+
+    Ok(collected.into_iter().collect())
 }
 
 #[tauri::command]
@@ -138,6 +313,7 @@ pub async fn list_prompts(state: State<'_, AppState>) -> Result<Vec<PromptTempla
 
 #[tauri::command]
 pub async fn save_prompt(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     payload: SavePromptPayload,
 ) -> Result<Vec<PromptTemplate>, CommandError> {
@@ -146,12 +322,14 @@ pub async fn save_prompt(
         .save_prompt(payload.template, payload.bind_task)
         .await
         .map_err(CommandError::from)?;
+    emit_settings_updated(&app, &updated_settings);
 
     Ok(updated_settings.prompts.templates)
 }
 
 #[tauri::command]
 pub async fn delete_prompt(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     payload: DeletePromptPayload,
 ) -> Result<Vec<PromptTemplate>, CommandError> {
@@ -160,12 +338,14 @@ pub async fn delete_prompt(
         .delete_prompt(payload.id)
         .await
         .map_err(CommandError::from)?;
+    emit_settings_updated(&app, &updated_settings);
 
     Ok(updated_settings.prompts.templates)
 }
 
 #[tauri::command]
 pub async fn reset_prompts(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Vec<PromptTemplate>, CommandError> {
     let updated_settings = state
@@ -173,6 +353,7 @@ pub async fn reset_prompts(
         .reset_prompts()
         .await
         .map_err(CommandError::from)?;
+    emit_settings_updated(&app, &updated_settings);
 
     Ok(updated_settings.prompts.templates)
 }
@@ -207,16 +388,37 @@ pub async fn test_prompt(
         .unwrap_or(settings.transcription.language)
         .as_whisper_code()
         .to_string();
+    let active_provider = settings.ai.active_provider.clone();
 
-    let Some(enhancer) = state
-        .runtime_factory
-        .build_gemini_enhancer_with_overrides(Some(model.clone()), None, None)
-        .map_err(|e| CommandError::new("runtime_factory", e))?
-    else {
-        return Err(CommandError::new(
-            "validation",
-            "Gemini API key is required to test prompts",
-        ));
+    let enhancer = match active_provider.clone() {
+        AiProvider::Gemini => state
+            .runtime_factory
+            .build_gemini_enhancer_with_overrides(Some(model.clone()), None, None)
+            .map_err(|e| CommandError::new("runtime_factory", e))?
+            .ok_or_else(|| {
+                CommandError::new(
+                    "validation",
+                    "Gemini API key is required to test prompts",
+                )
+            })
+            .map(|value| Box::new(value) as Box<dyn sbobino_application::TranscriptEnhancer>)?,
+        AiProvider::FoundationApple => state
+            .runtime_factory
+            .build_foundation_enhancer_with_overrides(None, None)
+            .map_err(|e| CommandError::new("runtime_factory", e))?
+            .ok_or_else(|| {
+                CommandError::new(
+                    "validation",
+                    "Foundation Model is unavailable. Verify Apple Intelligence is enabled on this Mac.",
+                )
+            })
+            .map(|value| Box::new(value) as Box<dyn sbobino_application::TranscriptEnhancer>)?,
+        AiProvider::None => {
+            return Err(CommandError::new(
+                "validation",
+                "Select an AI provider in Settings > AI Services before testing prompts.",
+            ));
+        }
     };
 
     let prompt_override = payload.prompt_override.as_deref();
@@ -224,10 +426,29 @@ pub async fn test_prompt(
 
     match task {
         PromptTask::Optimize => {
-            let output = enhancer
-                .optimize_with_prompt(&input, &language, prompt_override)
-                .await
-                .map_err(CommandError::from)?;
+            let output = match active_provider.clone() {
+                AiProvider::Gemini => {
+                    // Gemini supports direct prompt override in optimize.
+                    let gemini = state
+                        .runtime_factory
+                        .build_gemini_enhancer_with_overrides(Some(model.clone()), None, None)
+                        .map_err(|e| CommandError::new("runtime_factory", e))?
+                        .ok_or_else(|| {
+                            CommandError::new(
+                                "validation",
+                                "Gemini API key is required to test prompts",
+                            )
+                        })?;
+                    gemini
+                        .optimize_with_prompt(&input, &language, prompt_override)
+                        .await
+                        .map_err(CommandError::from)?
+                }
+                _ => enhancer
+                    .optimize(&input, &language)
+                    .await
+                    .map_err(CommandError::from)?,
+            };
 
             Ok(TestPromptResponse {
                 output: output.clone(),
@@ -237,10 +458,28 @@ pub async fn test_prompt(
             })
         }
         PromptTask::Summary | PromptTask::Faq => {
-            let output = enhancer
-                .summarize_and_faq_with_prompt(&input, &language, prompt_override)
-                .await
-                .map_err(CommandError::from)?;
+            let output = match active_provider.clone() {
+                AiProvider::Gemini => {
+                    let gemini = state
+                        .runtime_factory
+                        .build_gemini_enhancer_with_overrides(Some(model.clone()), None, None)
+                        .map_err(|e| CommandError::new("runtime_factory", e))?
+                        .ok_or_else(|| {
+                            CommandError::new(
+                                "validation",
+                                "Gemini API key is required to test prompts",
+                            )
+                        })?;
+                    gemini
+                        .summarize_and_faq_with_prompt(&input, &language, prompt_override)
+                        .await
+                        .map_err(CommandError::from)?
+                }
+                _ => enhancer
+                    .summarize_and_faq(&input, &language)
+                    .await
+                    .map_err(CommandError::from)?,
+            };
 
             Ok(TestPromptResponse {
                 output: format!("Summary:\n{}\n\nFAQs:\n{}", output.summary, output.faqs),

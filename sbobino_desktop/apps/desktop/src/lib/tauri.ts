@@ -56,6 +56,13 @@ export async function updateAiProviders(
   });
 }
 
+export async function listGeminiModels(api_key?: string): Promise<string[]> {
+  if (!api_key || api_key.trim().length === 0) {
+    return invoke<string[]>("list_gemini_models");
+  }
+  return invoke<string[]>("list_gemini_models", { payload: { api_key } });
+}
+
 export async function listPromptTemplates(): Promise<PromptTemplate[]> {
   return invoke<PromptTemplate[]>("list_prompts");
 }
@@ -183,6 +190,13 @@ export async function chatArtifact(payload: {
   return invoke<string>("chat_artifact", { payload });
 }
 
+export async function summarizeArtifact(payload: {
+  id: string;
+  prompt: string;
+}): Promise<string> {
+  return invoke<string>("summarize_artifact", { payload });
+}
+
 export async function startRealtime(payload?: {
   model?: AppSettings["model"];
   language?: AppSettings["language"];
@@ -249,6 +263,31 @@ export async function readAudioFile(path: string): Promise<number[]> {
 
 export async function checkUpdates(): Promise<UpdateCheckResponse> {
   return invoke<UpdateCheckResponse>("check_updates");
+}
+
+export async function openSettingsWindow(pane?: string): Promise<boolean> {
+  if (!pane) {
+    return invoke<boolean>("open_settings_window");
+  }
+  return invoke<boolean>("open_settings_window", { payload: { pane } });
+}
+
+export async function subscribeSettingsUpdated(
+  onUpdated: (settings: AppSettings) => void,
+): Promise<() => void> {
+  const unlisten = await listen<AppSettings>("settings://updated", (event) => {
+    onUpdated(event.payload);
+  });
+  return unlisten;
+}
+
+export async function subscribeSettingsNavigate(
+  onNavigate: (pane: string) => void,
+): Promise<() => void> {
+  const unlisten = await listen<string>("settings://navigate", (event) => {
+    onNavigate(event.payload);
+  });
+  return unlisten;
 }
 
 export async function subscribeJobProgress(

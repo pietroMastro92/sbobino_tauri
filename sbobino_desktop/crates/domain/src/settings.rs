@@ -56,11 +56,47 @@ impl SpeechModel {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+pub enum TranscriptionEngine {
+    WhisperCpp,
+    #[default]
+    WhisperKit,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum AiProvider {
     #[default]
     None,
     FoundationApple,
     Gemini,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteServiceKind {
+    #[default]
+    Google,
+    OpenAi,
+    Anthropic,
+    Azure,
+    LmStudio,
+    Ollama,
+    OpenRouter,
+    Xai,
+    HuggingFace,
+    Custom,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct RemoteServiceConfig {
+    pub id: String,
+    pub kind: RemoteServiceKind,
+    pub label: String,
+    pub enabled: bool,
+    pub api_key: Option<String>,
+    pub model: Option<String>,
+    pub base_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -104,17 +140,34 @@ impl Default for GeneralSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WhisperOptions {
+    // Shared behavior
     pub translate_to_english: bool,
+    // whisper.cpp-focused controls
     pub no_context: bool,
     pub split_on_word: bool,
+    // Shared thresholds / decoding controls
     pub temperature: f32,
+    pub temperature_increment_on_fallback: f32,
+    pub temperature_fallback_count: u8,
     pub entropy_threshold: f32,
     pub logprob_threshold: f32,
+    pub first_token_logprob_threshold: f32,
+    pub no_speech_threshold: f32,
     pub word_threshold: f32,
     pub best_of: u8,
     pub beam_size: u8,
     pub threads: u8,
     pub processors: u8,
+    // WhisperKit-focused controls
+    pub use_prefill_prompt: bool,
+    pub use_prefill_cache: bool,
+    pub without_timestamps: bool,
+    pub word_timestamps: bool,
+    pub prompt: Option<String>,
+    pub concurrent_worker_count: u8,
+    pub chunking_strategy: String,
+    pub audio_encoder_compute_units: String,
+    pub text_decoder_compute_units: String,
 }
 
 impl Default for WhisperOptions {
@@ -124,13 +177,26 @@ impl Default for WhisperOptions {
             no_context: false,
             split_on_word: false,
             temperature: 0.0,
+            temperature_increment_on_fallback: 0.2,
+            temperature_fallback_count: 5,
             entropy_threshold: 2.5,
             logprob_threshold: -1.0,
+            first_token_logprob_threshold: -1.5,
+            no_speech_threshold: 0.6,
             word_threshold: 0.01,
             best_of: 5,
             beam_size: 1,
             threads: 4,
             processors: 1,
+            use_prefill_prompt: true,
+            use_prefill_cache: true,
+            without_timestamps: false,
+            word_timestamps: false,
+            prompt: None,
+            concurrent_worker_count: 4,
+            chunking_strategy: "vad".to_string(),
+            audio_encoder_compute_units: "cpu_and_neural_engine".to_string(),
+            text_decoder_compute_units: "cpu_and_neural_engine".to_string(),
         }
     }
 }
@@ -138,9 +204,11 @@ impl Default for WhisperOptions {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TranscriptionSettings {
+    pub engine: TranscriptionEngine,
     pub model: SpeechModel,
     pub language: LanguageCode,
     pub whisper_cli_path: String,
+    pub whisperkit_cli_path: String,
     pub ffmpeg_path: String,
     pub models_dir: String,
     pub enable_ai_post_processing: bool,
@@ -150,9 +218,11 @@ pub struct TranscriptionSettings {
 impl Default for TranscriptionSettings {
     fn default() -> Self {
         Self {
+            engine: TranscriptionEngine::default(),
             model: SpeechModel::Base,
             language: LanguageCode::Auto,
             whisper_cli_path: "whisper-cli".to_string(),
+            whisperkit_cli_path: "whisperkit-cli".to_string(),
             ffmpeg_path: "ffmpeg".to_string(),
             models_dir: "models".to_string(),
             enable_ai_post_processing: false,
@@ -201,6 +271,7 @@ pub struct AiProviderSettings {
 pub struct AiSettings {
     pub active_provider: AiProvider,
     pub providers: AiProviderSettings,
+    pub remote_services: Vec<RemoteServiceConfig>,
 }
 
 impl Default for AiSettings {
@@ -208,6 +279,7 @@ impl Default for AiSettings {
         Self {
             active_provider: AiProvider::None,
             providers: AiProviderSettings::default(),
+            remote_services: Vec::new(),
         }
     }
 }
@@ -258,12 +330,14 @@ pub enum PromptTask {
 #[serde(default)]
 pub struct AppSettings {
     // Legacy-compatible flat fields used by current app flows.
+    pub transcription_engine: TranscriptionEngine,
     pub model: SpeechModel,
     pub language: LanguageCode,
     pub ai_post_processing: bool,
     pub gemini_model: String,
     pub gemini_api_key: Option<String>,
     pub whisper_cli_path: String,
+    pub whisperkit_cli_path: String,
     pub ffmpeg_path: String,
     pub models_dir: String,
     pub auto_update_enabled: bool,
@@ -284,12 +358,14 @@ impl Default for AppSettings {
         let prompts = PromptSettings::default();
 
         Self {
+            transcription_engine: transcription.engine.clone(),
             model: transcription.model.clone(),
             language: transcription.language.clone(),
             ai_post_processing: transcription.enable_ai_post_processing,
             gemini_model: ai.providers.gemini.model.clone(),
             gemini_api_key: ai.providers.gemini.api_key.clone(),
             whisper_cli_path: transcription.whisper_cli_path.clone(),
+            whisperkit_cli_path: transcription.whisperkit_cli_path.clone(),
             ffmpeg_path: transcription.ffmpeg_path.clone(),
             models_dir: transcription.models_dir.clone(),
             auto_update_enabled: general.auto_update_enabled,
@@ -307,9 +383,11 @@ impl AppSettings {
         self.general.auto_update_enabled = self.auto_update_enabled;
         self.general.auto_update_repo = self.auto_update_repo.clone();
 
+        self.transcription.engine = self.transcription_engine.clone();
         self.transcription.model = self.model.clone();
         self.transcription.language = self.language.clone();
         self.transcription.whisper_cli_path = self.whisper_cli_path.clone();
+        self.transcription.whisperkit_cli_path = self.whisperkit_cli_path.clone();
         self.transcription.ffmpeg_path = self.ffmpeg_path.clone();
         self.transcription.models_dir = self.models_dir.clone();
         self.transcription.enable_ai_post_processing = self.ai_post_processing;
@@ -327,9 +405,11 @@ impl AppSettings {
         self.auto_update_enabled = self.general.auto_update_enabled;
         self.auto_update_repo = self.general.auto_update_repo.clone();
 
+        self.transcription_engine = self.transcription.engine.clone();
         self.model = self.transcription.model.clone();
         self.language = self.transcription.language.clone();
         self.whisper_cli_path = self.transcription.whisper_cli_path.clone();
+        self.whisperkit_cli_path = self.transcription.whisperkit_cli_path.clone();
         self.ffmpeg_path = self.transcription.ffmpeg_path.clone();
         self.models_dir = self.transcription.models_dir.clone();
         self.ai_post_processing = self.transcription.enable_ai_post_processing;

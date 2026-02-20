@@ -161,12 +161,11 @@ async fn soft_delete_restore_and_hard_delete_follow_trash_flow() {
         .await
         .expect("hard delete should succeed");
     assert_eq!(hard_deleted, 1);
-    assert!(
-        repo.get_by_id(&artifact_id)
-            .await
-            .expect("lookup should query")
-            .is_none()
-    );
+    assert!(repo
+        .get_by_id(&artifact_id)
+        .await
+        .expect("lookup should query")
+        .is_none());
 }
 
 #[tokio::test]
@@ -179,7 +178,9 @@ async fn purge_deleted_older_than_days_removes_only_expired_items() {
     let old_id = old_artifact.id.clone();
     let fresh_artifact = artifact_with_job("job-fresh", "/tmp/fresh.wav", "fresh");
     let fresh_id = fresh_artifact.id.clone();
-    repo.save(&old_artifact).await.expect("save old should succeed");
+    repo.save(&old_artifact)
+        .await
+        .expect("save old should succeed");
     repo.save(&fresh_artifact)
         .await
         .expect("save fresh should succeed");

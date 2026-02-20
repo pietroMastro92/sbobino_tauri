@@ -10,9 +10,21 @@ export type LanguageCode =
   | "ja";
 
 export type SpeechModel = "tiny" | "base" | "small" | "medium" | "large_turbo";
+export type TranscriptionEngine = "whisper_cpp" | "whisper_kit";
 export type ArtifactKind = "file" | "realtime";
 
 export type AiProvider = "none" | "foundation_apple" | "gemini";
+export type RemoteServiceKind =
+  | "google"
+  | "open_ai"
+  | "anthropic"
+  | "azure"
+  | "lm_studio"
+  | "ollama"
+  | "open_router"
+  | "xai"
+  | "hugging_face"
+  | "custom";
 export type PromptCategory =
   | "cleanup"
   | "summary"
@@ -32,19 +44,42 @@ export type WhisperOptions = {
   no_context: boolean;
   split_on_word: boolean;
   temperature: number;
+  temperature_increment_on_fallback: number;
+  temperature_fallback_count: number;
   entropy_threshold: number;
   logprob_threshold: number;
+  first_token_logprob_threshold: number;
+  no_speech_threshold: number;
   word_threshold: number;
   best_of: number;
   beam_size: number;
   threads: number;
   processors: number;
+  use_prefill_prompt: boolean;
+  use_prefill_cache: boolean;
+  without_timestamps: boolean;
+  word_timestamps: boolean;
+  prompt: string | null;
+  concurrent_worker_count: number;
+  chunking_strategy: "none" | "vad";
+  audio_encoder_compute_units:
+    | "all"
+    | "cpu_only"
+    | "cpu_and_gpu"
+    | "cpu_and_neural_engine";
+  text_decoder_compute_units:
+    | "all"
+    | "cpu_only"
+    | "cpu_and_gpu"
+    | "cpu_and_neural_engine";
 };
 
 export type TranscriptionSettings = {
+  engine: TranscriptionEngine;
   model: SpeechModel;
   language: LanguageCode;
   whisper_cli_path: string;
+  whisperkit_cli_path: string;
   ffmpeg_path: string;
   models_dir: string;
   enable_ai_post_processing: boolean;
@@ -68,6 +103,17 @@ export type AiProviderSettings = {
 export type AiSettings = {
   active_provider: AiProvider;
   providers: AiProviderSettings;
+  remote_services: RemoteServiceConfig[];
+};
+
+export type RemoteServiceConfig = {
+  id: string;
+  kind: RemoteServiceKind;
+  label: string;
+  enabled: boolean;
+  api_key: string | null;
+  model: string | null;
+  base_url: string | null;
 };
 
 export type PromptTemplate = {
@@ -93,12 +139,14 @@ export type PromptSettings = {
 
 export type AppSettings = {
   // Legacy fields kept for wire compatibility with existing commands.
+  transcription_engine: TranscriptionEngine;
   model: SpeechModel;
   language: LanguageCode;
   ai_post_processing: boolean;
   gemini_model: string;
   gemini_api_key: string | null;
   whisper_cli_path: string;
+  whisperkit_cli_path: string;
   ffmpeg_path: string;
   models_dir: string;
   auto_update_enabled: boolean;
@@ -198,6 +246,8 @@ export type ProvisioningModelCatalogEntry = {
 export type RuntimeHealth = {
   whisper_cli_path: string;
   whisper_cli_resolved: string;
+  whisperkit_cli_path: string;
+  whisperkit_cli_resolved: string;
   whisper_stream_path: string;
   whisper_stream_resolved: string;
   models_dir_configured: string;

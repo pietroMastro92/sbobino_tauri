@@ -7,6 +7,8 @@ use crate::{error::CommandError, state::AppState};
 pub struct RuntimeHealthResponse {
     pub whisper_cli_path: String,
     pub whisper_cli_resolved: String,
+    pub whisperkit_cli_path: String,
+    pub whisperkit_cli_resolved: String,
     pub whisper_stream_path: String,
     pub whisper_stream_resolved: String,
     pub models_dir_configured: String,
@@ -30,6 +32,8 @@ pub async fn get_transcription_runtime_health(
     Ok(RuntimeHealthResponse {
         whisper_cli_path: health.whisper_cli_path,
         whisper_cli_resolved: health.whisper_cli_resolved,
+        whisperkit_cli_path: health.whisperkit_cli_path,
+        whisperkit_cli_resolved: health.whisperkit_cli_resolved,
         whisper_stream_path: health.whisper_stream_path,
         whisper_stream_resolved: health.whisper_stream_resolved,
         models_dir_configured: health.models_dir_configured,

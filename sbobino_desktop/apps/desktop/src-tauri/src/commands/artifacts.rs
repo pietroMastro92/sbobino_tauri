@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::State;
 
-use sbobino_application::ArtifactQuery;
+use sbobino_application::{ApplicationError, ArtifactQuery, TranscriptEnhancer};
 use sbobino_domain::{ArtifactKind, TranscriptArtifact};
 
 use crate::{error::CommandError, state::AppState};
@@ -31,6 +31,19 @@ pub struct ChatArtifactPayload {
     pub id: String,
     pub prompt: String,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct SummarizeArtifactPayload {
+    pub id: String,
+    pub prompt: String,
+}
+
+const CHAT_CONTEXT_BUDGETS: &[(usize, usize)] = &[(8, 7600), (6, 5200), (4, 3400), (2, 2000)];
+const CHAT_CHUNK_TARGET_CHARS: usize = 900;
+const CHAT_CHUNK_OVERLAP_WORDS: usize = 24;
+const SUMMARY_CHUNK_TARGET_CHARS: usize = 1700;
+const SUMMARY_CHUNK_OVERLAP_WORDS: usize = 30;
+const SUMMARY_SYNTHESIS_BUDGETS: &[usize] = &[12_000, 8_000, 5_000, 3_000];
 
 #[derive(Debug, Deserialize)]
 pub struct ListArtifactsPayload {
@@ -407,24 +420,359 @@ pub async fn chat_artifact(
 
     let enhancer = state
         .runtime_factory
-        .build_gemini_enhancer()
+        .build_active_enhancer()
         .map_err(|e| CommandError::new("runtime_factory", e))?
         .ok_or_else(|| {
             CommandError::new(
-                "missing_api_key",
-                "Gemini API key is not configured in settings.",
+                "missing_ai_provider",
+                "No AI provider is configured in Settings > AI Services.",
             )
         })?;
 
-    let context = format!(
-        "You are an assistant for transcript analysis.\n\nTranscript:\n{}\n\nSummary:\n{}\n\nFAQs:\n{}\n\nUser question:\n{}",
-        artifact.optimized_transcript,
-        artifact.summary,
-        artifact.faqs,
-        payload.prompt
+    let prompt = payload.prompt.trim();
+    if prompt.is_empty() {
+        return Err(CommandError::new(
+            "validation",
+            "chat prompt cannot be empty",
+        ));
+    }
+
+    let candidates = build_chat_context_candidates(&artifact, prompt);
+    ask_with_overflow_fallback(enhancer.as_ref(), candidates)
+        .await
+        .map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub async fn summarize_artifact(
+    state: State<'_, AppState>,
+    payload: SummarizeArtifactPayload,
+) -> Result<String, CommandError> {
+    let artifact = state
+        .artifact_service
+        .get(&payload.id)
+        .await
+        .map_err(CommandError::from)?
+        .ok_or_else(|| CommandError::new("not_found", "artifact not found"))?;
+
+    let enhancer = state
+        .runtime_factory
+        .build_active_enhancer()
+        .map_err(|e| CommandError::new("runtime_factory", e))?
+        .ok_or_else(|| {
+            CommandError::new(
+                "missing_ai_provider",
+                "No AI provider is configured in Settings > AI Services.",
+            )
+        })?;
+
+    let transcript = effective_transcript(&artifact);
+    if transcript.trim().is_empty() {
+        return Err(CommandError::new(
+            "empty_content",
+            "no transcription available to summarize",
+        ));
+    }
+
+    let user_prompt = payload.prompt.trim();
+    let instructions = if user_prompt.is_empty() {
+        "Summarize this transcript clearly and concisely."
+    } else {
+        user_prompt
+    };
+
+    summarize_with_rag(enhancer.as_ref(), &transcript, instructions)
+        .await
+        .map_err(CommandError::from)
+}
+
+fn effective_transcript(artifact: &TranscriptArtifact) -> String {
+    let optimized = artifact.optimized_transcript.trim();
+    if !optimized.is_empty() {
+        return optimized.to_string();
+    }
+    artifact.raw_transcript.trim().to_string()
+}
+
+fn chunk_text_by_words(text: &str, target_chars: usize, overlap_words: usize) -> Vec<String> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.is_empty() {
+        return Vec::new();
+    }
+
+    let mut chunks = Vec::new();
+    let mut start = 0_usize;
+
+    while start < words.len() {
+        let mut end = start;
+        let mut chars = 0_usize;
+
+        while end < words.len() {
+            let word_len = words[end].chars().count() + usize::from(end > start);
+            if end > start && chars + word_len > target_chars {
+                break;
+            }
+            chars += word_len;
+            end += 1;
+        }
+
+        if end == start {
+            end = (start + 1).min(words.len());
+        }
+
+        chunks.push(words[start..end].join(" "));
+
+        if end >= words.len() {
+            break;
+        }
+
+        let mut next_start = end.saturating_sub(overlap_words);
+        if next_start <= start {
+            next_start = end;
+        }
+        start = next_start;
+    }
+
+    chunks
+}
+
+fn normalize_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn tokenize_for_search(query: &str) -> Vec<String> {
+    query
+        .split(|ch: char| !ch.is_alphanumeric())
+        .filter_map(|token| {
+            let trimmed = token.trim();
+            if trimmed.chars().count() < 3 {
+                None
+            } else {
+                Some(trimmed.to_lowercase())
+            }
+        })
+        .collect()
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect::<String>()
+}
+
+fn score_chunk(chunk_lower: &str, query_lower: &str, query_tokens: &[String]) -> f32 {
+    let mut score = 0.0_f32;
+    if !query_lower.is_empty() && chunk_lower.contains(query_lower) {
+        score += 4.0;
+    }
+
+    for token in query_tokens {
+        if chunk_lower.contains(token) {
+            score += 1.0;
+            score += (chunk_lower.matches(token).take(6).count() as f32) * 0.15;
+        }
+    }
+
+    score
+}
+
+fn build_chat_context_candidates(artifact: &TranscriptArtifact, prompt: &str) -> Vec<String> {
+    let transcript = effective_transcript(artifact);
+    let normalized_prompt = normalize_whitespace(prompt);
+    let query_lower = normalized_prompt.to_lowercase();
+    let query_tokens = tokenize_for_search(&normalized_prompt);
+    let chunks = chunk_text_by_words(
+        &transcript,
+        CHAT_CHUNK_TARGET_CHARS,
+        CHAT_CHUNK_OVERLAP_WORDS,
     );
 
-    enhancer.ask(&context).await.map_err(CommandError::from)
+    let mut scored: Vec<(usize, f32, String)> = chunks
+        .iter()
+        .enumerate()
+        .map(|(index, chunk)| {
+            let chunk_lower = chunk.to_lowercase();
+            let score = score_chunk(&chunk_lower, &query_lower, &query_tokens);
+            (index, score, chunk.clone())
+        })
+        .collect();
+
+    scored.sort_by(|left, right| {
+        right
+            .1
+            .partial_cmp(&left.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+
+    let mut selected: Vec<(usize, String)> = scored
+        .iter()
+        .filter(|(_, score, _)| *score > 0.0)
+        .take(10)
+        .map(|(index, _, chunk)| (*index, chunk.clone()))
+        .collect();
+
+    if selected.is_empty() {
+        selected = chunks
+            .iter()
+            .enumerate()
+            .take(4)
+            .map(|(index, chunk)| (index, chunk.clone()))
+            .collect();
+    }
+
+    selected.sort_by_key(|(index, _)| *index);
+
+    CHAT_CONTEXT_BUDGETS
+        .iter()
+        .map(|(max_chunks, max_chars)| {
+            let mut packed = String::new();
+            for (idx, chunk) in selected.iter().take(*max_chunks) {
+                let line = format!("[{}] {}\n", idx + 1, chunk);
+                if packed.chars().count() + line.chars().count() > *max_chars {
+                    break;
+                }
+                packed.push_str(&line);
+            }
+
+            if packed.trim().is_empty() {
+                packed = truncate_chars(
+                    selected
+                        .first()
+                        .map(|(_, value)| value.as_str())
+                        .unwrap_or_default(),
+                    *max_chars,
+                );
+            }
+
+            let summary = truncate_chars(artifact.summary.trim(), 1400);
+            let faqs = truncate_chars(artifact.faqs.trim(), 1400);
+            let title = artifact.title.trim();
+
+            format!(
+                "You are an assistant for transcript analysis.\n\
+                 Answer using the provided transcript snippets. If you cannot infer the answer, state what is missing.\n\n\
+                 Artifact title: {title}\n\n\
+                 Existing summary:\n{summary}\n\n\
+                 Existing FAQs:\n{faqs}\n\n\
+                 Transcript snippets:\n{packed}\n\
+                 User question:\n{normalized_prompt}"
+            )
+        })
+        .collect()
+}
+
+async fn summarize_with_rag(
+    enhancer: &dyn TranscriptEnhancer,
+    transcript: &str,
+    user_instructions: &str,
+) -> Result<String, ApplicationError> {
+    let chunks = chunk_text_by_words(
+        transcript,
+        SUMMARY_CHUNK_TARGET_CHARS,
+        SUMMARY_CHUNK_OVERLAP_WORDS,
+    );
+
+    if chunks.is_empty() {
+        return Err(ApplicationError::Validation(
+            "cannot summarize an empty transcript".to_string(),
+        ));
+    }
+
+    let mut chunk_notes = Vec::with_capacity(chunks.len());
+    let total = chunks.len();
+
+    for (index, chunk) in chunks.iter().enumerate() {
+        let chunk_prompt = format!(
+            "You are preparing intermediate notes for a transcript summary.\n\
+             Follow the user instructions exactly.\n\n\
+             User instructions:\n{user_instructions}\n\n\
+             Analyze chunk {}/{} and return concise notes only.\n\
+             Include key facts, decisions, action items, names, and numeric details when present.\n\
+             Keep output compact and avoid filler.\n\n\
+             Transcript chunk:\n{}",
+            index + 1,
+            total,
+            chunk
+        );
+
+        let note = ask_with_overflow_fallback(
+            enhancer,
+            vec![
+                chunk_prompt.clone(),
+                truncate_chars(&chunk_prompt, 2600),
+                truncate_chars(&chunk_prompt, 1900),
+            ],
+        )
+        .await?;
+
+        chunk_notes.push(format!("Chunk {} notes:\n{}", index + 1, note.trim()));
+    }
+
+    let merged_notes = chunk_notes.join("\n\n");
+    let candidates = SUMMARY_SYNTHESIS_BUDGETS
+        .iter()
+        .map(|budget| {
+            let clipped_notes = truncate_chars(&merged_notes, *budget);
+            format!(
+                "You are creating the final transcript summary from chunk notes.\n\
+                 Follow user instructions exactly.\n\n\
+                 User instructions:\n{user_instructions}\n\n\
+                 Produce the final summary now.\n\
+                 Return only the final text.\n\n\
+                 Chunk notes:\n{clipped_notes}"
+            )
+        })
+        .collect::<Vec<_>>();
+
+    ask_with_overflow_fallback(enhancer, candidates).await
+}
+
+fn is_context_window_error(error: &ApplicationError) -> bool {
+    match error {
+        ApplicationError::PostProcessing(message) => {
+            let text = message.to_lowercase();
+            text.contains("context window")
+                || text.contains("model context window")
+                || text.contains("context length")
+                || text.contains("prompt is too long")
+        }
+        _ => false,
+    }
+}
+
+async fn ask_with_overflow_fallback(
+    enhancer: &dyn TranscriptEnhancer,
+    candidates: Vec<String>,
+) -> Result<String, ApplicationError> {
+    let mut last_context_error: Option<ApplicationError> = None;
+
+    for candidate in candidates {
+        match enhancer.ask(&candidate).await {
+            Ok(answer) => {
+                let trimmed = answer.trim();
+                if !trimmed.is_empty() {
+                    return Ok(trimmed.to_string());
+                }
+            }
+            Err(error) => {
+                if is_context_window_error(&error) {
+                    last_context_error = Some(error);
+                    continue;
+                }
+                return Err(error);
+            }
+        }
+    }
+
+    if last_context_error.is_some() {
+        return Err(ApplicationError::PostProcessing(
+            "Exceeded model context window size. The app now uses chunked retrieval, but this request is still too large. Try a shorter custom prompt or fewer summary constraints."
+                .to_string(),
+        ));
+    }
+
+    Err(ApplicationError::PostProcessing(
+        "empty response from AI provider".to_string(),
+    ))
 }
 
 #[tauri::command]
@@ -700,4 +1048,61 @@ fn escape_html(value: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use chrono::Utc;
+
+    use super::{
+        build_chat_context_candidates, chunk_text_by_words, is_context_window_error,
+        ApplicationError, ArtifactKind, TranscriptArtifact,
+    };
+
+    fn sample_artifact(text: &str) -> TranscriptArtifact {
+        TranscriptArtifact {
+            id: "id-1".to_string(),
+            job_id: "job-1".to_string(),
+            title: "Sample".to_string(),
+            kind: ArtifactKind::File,
+            input_path: "/tmp/sample.wav".to_string(),
+            raw_transcript: text.to_string(),
+            optimized_transcript: String::new(),
+            summary: String::new(),
+            faqs: String::new(),
+            metadata: BTreeMap::new(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn chunker_splits_and_progresses() {
+        let input =
+            "one two three four five six seven eight nine ten eleven twelve thirteen fourteen";
+        let chunks = chunk_text_by_words(input, 20, 2);
+        assert!(chunks.len() >= 3);
+        assert!(chunks.iter().all(|chunk| !chunk.trim().is_empty()));
+    }
+
+    #[test]
+    fn chat_context_candidates_are_created() {
+        let text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau";
+        let artifact = sample_artifact(text);
+        let candidates = build_chat_context_candidates(&artifact, "what about gamma and sigma?");
+        assert!(!candidates.is_empty());
+        assert!(candidates
+            .iter()
+            .all(|value| value.contains("User question:")));
+    }
+
+    #[test]
+    fn detects_context_window_errors() {
+        let error = ApplicationError::PostProcessing(
+            "Foundation bridge error: Exceeded model context window size".to_string(),
+        );
+        assert!(is_context_window_error(&error));
+    }
 }

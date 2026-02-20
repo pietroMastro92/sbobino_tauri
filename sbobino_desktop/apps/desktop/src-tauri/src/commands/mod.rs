@@ -5,3 +5,4 @@ pub mod runtime;
 pub mod settings;
 pub mod transcription;
 pub mod updates;
+pub mod window;

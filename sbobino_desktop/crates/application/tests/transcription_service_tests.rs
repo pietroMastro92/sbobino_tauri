@@ -215,7 +215,8 @@ impl ArtifactRepository for InMemoryArtifactRepository {
 
         let mut moved = 0;
         for id in ids {
-            if artifacts.iter().any(|artifact| artifact.id == *id) && deleted_ids.insert(id.clone()) {
+            if artifacts.iter().any(|artifact| artifact.id == *id) && deleted_ids.insert(id.clone())
+            {
                 moved += 1;
             }
         }

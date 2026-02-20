@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{Emitter, State};
 use uuid::Uuid;
 
-use sbobino_application::{RealtimeDelta, TranscriptEnhancer};
+use sbobino_application::RealtimeDelta;
 use sbobino_domain::{ArtifactKind, LanguageCode, SpeechModel, TranscriptArtifact};
 
 use crate::{error::CommandError, state::AppState};
@@ -216,7 +216,7 @@ pub async fn stop_realtime(
     if settings.transcription.enable_ai_post_processing {
         if let Some(enhancer) = state
             .runtime_factory
-            .build_gemini_enhancer()
+            .build_active_enhancer()
             .map_err(|e| CommandError::new("runtime_factory", e))?
         {
             if let Ok(next_optimized) = enhancer.optimize(&consolidated, &language_code).await {

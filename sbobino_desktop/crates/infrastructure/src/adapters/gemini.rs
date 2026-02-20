@@ -137,6 +137,10 @@ impl TranscriptEnhancer for GeminiEnhancer {
         self.summarize_and_faq_with_prompt(text, language_code, None)
             .await
     }
+
+    async fn ask(&self, prompt: &str) -> Result<String, ApplicationError> {
+        GeminiEnhancer::ask(self, prompt).await
+    }
 }
 
 fn normalize_prompt(value: Option<String>) -> Option<String> {

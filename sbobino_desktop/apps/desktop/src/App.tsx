@@ -3,10 +3,16 @@ import { confirm as confirmDialog, open, save } from "@tauri-apps/plugin-dialog"
 import {
   ArrowLeft,
   AudioLines,
+  Bot,
+  Check,
+  Cloud,
   Clock3,
   ChevronDown,
+  Cpu,
+  Database,
   FileAudio,
   FileText,
+  Globe,
   History as HistoryIcon,
   House,
   Info,
@@ -25,10 +31,12 @@ import {
   Save,
   Settings2,
   Sparkles,
+  Plus,
   Search,
   Trash2,
   Upload,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import {
   cancelTranscription,
@@ -42,7 +50,9 @@ import {
   getArtifact,
   hardDeleteArtifacts,
   listDeletedArtifacts,
+  listGeminiModels,
   listRecentArtifacts,
+  openSettingsWindow,
   pauseRealtime,
   provisioningCancel,
   provisioningDownloadModel,
@@ -54,6 +64,8 @@ import {
   resumeRealtime,
   restoreArtifacts,
   saveSettings,
+  saveSettingsPartial,
+  summarizeArtifact,
   startRealtime,
   startTranscription,
   stopRealtime,
@@ -66,6 +78,8 @@ import {
   subscribeRealtimeDelta,
   subscribeRealtimeSaved,
   subscribeRealtimeStatus,
+  subscribeSettingsNavigate,
+  subscribeSettingsUpdated,
   testPromptTemplate,
   updateArtifact,
 } from "./lib/tauri";
@@ -80,8 +94,11 @@ import type {
   ProvisioningProgressEvent,
   ProvisioningModelCatalogEntry,
   RealtimeDelta,
+  RemoteServiceConfig,
+  RemoteServiceKind,
   RuntimeHealth,
   SpeechModel,
+  TranscriptionEngine,
   TranscriptArtifact,
   UpdateCheckResponse,
   WhisperOptions,
@@ -96,13 +113,14 @@ type Section =
   | "history"
   | "deleted_history"
   | "detail"
-  | "realtime"
-  | "settings";
+  | "realtime";
 type DetailMode = "transcript" | "segments" | "summary" | "chat";
 type InspectorMode = "details" | "info";
 type SettingsPane =
   | "general"
   | "transcription"
+  | "whisper_cpp"
+  | "whisper_kit"
   | "local_models"
   | "ai_services"
   | "prompts"
@@ -135,10 +153,132 @@ const modelOptions: Array<{ value: SpeechModel; label: string }> = [
   { value: "large_turbo", label: "Large Turbo" },
 ];
 
+const transcriptionEngineOptions: Array<{ value: TranscriptionEngine; label: string }> = [
+  { value: "whisper_kit", label: "WhisperKit" },
+  { value: "whisper_cpp", label: "Whisper C++" },
+];
+
+const chunkingOptions: Array<{ value: WhisperOptions["chunking_strategy"]; label: string }> = [
+  { value: "vad", label: "Voice Activity Detection" },
+  { value: "none", label: "No chunking" },
+];
+
+const computeUnitOptions: Array<{
+  value: WhisperOptions["audio_encoder_compute_units"];
+  label: string;
+}> = [
+  { value: "cpu_and_neural_engine", label: "CPU + Neural Engine" },
+  { value: "cpu_and_gpu", label: "CPU + GPU" },
+  { value: "cpu_only", label: "CPU only" },
+  { value: "all", label: "All" },
+];
+
 const promptTaskOptions: Array<{ value: PromptTask; label: string }> = [
   { value: "optimize", label: "Optimize transcript" },
   { value: "summary", label: "Summary" },
   { value: "faq", label: "FAQ" },
+];
+
+const fallbackGeminiModelOptions = [
+  "gemini-2.5-flash-lite",
+  "gemini-2.5-flash",
+  "gemini-2.5-pro",
+  "gemini-2.0-flash",
+  "gemini-2.0-flash-lite",
+  "gemini-1.5-flash",
+  "gemini-1.5-pro",
+];
+
+type ServiceCatalogItem = {
+  kind: RemoteServiceKind;
+  label: string;
+  icon: LucideIcon;
+  tone: "google" | "openai" | "anthropic" | "azure" | "lmstudio" | "ollama" | "openrouter" | "xai" | "huggingface" | "custom";
+  defaultModel: string | null;
+  defaultBaseUrl: string | null;
+};
+
+const serviceCatalog: ServiceCatalogItem[] = [
+  {
+    kind: "google",
+    label: "Google",
+    icon: Sparkles,
+    tone: "google",
+    defaultModel: "gemini-2.5-flash",
+    defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
+  },
+  {
+    kind: "open_ai",
+    label: "OpenAI",
+    icon: Bot,
+    tone: "openai",
+    defaultModel: "gpt-4.1-mini",
+    defaultBaseUrl: "https://api.openai.com/v1",
+  },
+  {
+    kind: "anthropic",
+    label: "Anthropic",
+    icon: Sparkles,
+    tone: "anthropic",
+    defaultModel: "claude-3-7-sonnet-latest",
+    defaultBaseUrl: "https://api.anthropic.com/v1",
+  },
+  {
+    kind: "azure",
+    label: "Azure",
+    icon: Cloud,
+    tone: "azure",
+    defaultModel: null,
+    defaultBaseUrl: "https://{resource}.openai.azure.com",
+  },
+  {
+    kind: "lm_studio",
+    label: "LMStudio",
+    icon: Database,
+    tone: "lmstudio",
+    defaultModel: null,
+    defaultBaseUrl: "http://127.0.0.1:1234/v1",
+  },
+  {
+    kind: "ollama",
+    label: "Ollama",
+    icon: Cpu,
+    tone: "ollama",
+    defaultModel: "llama3.1",
+    defaultBaseUrl: "http://127.0.0.1:11434",
+  },
+  {
+    kind: "open_router",
+    label: "OpenRouter",
+    icon: Globe,
+    tone: "openrouter",
+    defaultModel: "openai/gpt-4.1-mini",
+    defaultBaseUrl: "https://openrouter.ai/api/v1",
+  },
+  {
+    kind: "xai",
+    label: "xAI",
+    icon: Sparkles,
+    tone: "xai",
+    defaultModel: "grok-2-latest",
+    defaultBaseUrl: "https://api.x.ai/v1",
+  },
+  {
+    kind: "hugging_face",
+    label: "Hugging Face",
+    icon: Bot,
+    tone: "huggingface",
+    defaultModel: null,
+    defaultBaseUrl: "https://api-inference.huggingface.co",
+  },
+  {
+    kind: "custom",
+    label: "Custom",
+    icon: Settings2,
+    tone: "custom",
+    defaultModel: null,
+    defaultBaseUrl: null,
+  },
 ];
 
 const defaultPromptTestInput = "This is an example of some transcribed text.";
@@ -147,26 +287,93 @@ const defaultWhisperOptions: WhisperOptions = {
   no_context: false,
   split_on_word: false,
   temperature: 0,
+  temperature_increment_on_fallback: 0.2,
+  temperature_fallback_count: 5,
   entropy_threshold: 2.5,
   logprob_threshold: -1,
+  first_token_logprob_threshold: -1.5,
+  no_speech_threshold: 0.6,
   word_threshold: 0.01,
   best_of: 5,
   beam_size: 1,
   threads: 4,
   processors: 1,
+  use_prefill_prompt: true,
+  use_prefill_cache: true,
+  without_timestamps: false,
+  word_timestamps: false,
+  prompt: null,
+  concurrent_worker_count: 4,
+  chunking_strategy: "vad",
+  audio_encoder_compute_units: "cpu_and_neural_engine",
+  text_decoder_compute_units: "cpu_and_neural_engine",
 };
 
-const settingsPaneDefinitions: Array<{
+type SettingsPaneDefinition = {
   key: SettingsPane;
   label: string;
   description: string;
-}> = [
-  { key: "transcription", label: "Transcription", description: "Whisper decoding and defaults" },
-  { key: "local_models", label: "Local Models", description: "Model downloads and health" },
-  { key: "advanced", label: "Advanced", description: "Runtime binary paths" },
-  { key: "general", label: "General", description: "Updates and app basics" },
-  { key: "ai_services", label: "AI Services", description: "Provider configuration" },
-  { key: "prompts", label: "Prompts", description: "Template management" },
+  group: "General" | "Transcription" | "AI";
+  icon: LucideIcon;
+};
+
+const settingsPaneDefinitions: SettingsPaneDefinition[] = [
+  {
+    key: "general",
+    label: "General",
+    description: "App updates and general behavior",
+    group: "General",
+    icon: House,
+  },
+  {
+    key: "transcription",
+    label: "Transcription",
+    description: "Default engine, model and language",
+    group: "Transcription",
+    icon: Mic,
+  },
+  {
+    key: "whisper_kit",
+    label: "WhisperKit",
+    description: "Apple-native inference settings",
+    group: "Transcription",
+    icon: AudioLines,
+  },
+  {
+    key: "whisper_cpp",
+    label: "Whisper C++",
+    description: "whisper.cpp decoding controls",
+    group: "Transcription",
+    icon: Settings2,
+  },
+  {
+    key: "local_models",
+    label: "Local Models",
+    description: "Model downloads and runtime health",
+    group: "Transcription",
+    icon: Upload,
+  },
+  {
+    key: "advanced",
+    label: "Advanced",
+    description: "CLI and FFmpeg paths",
+    group: "Transcription",
+    icon: Settings2,
+  },
+  {
+    key: "ai_services",
+    label: "AI Services",
+    description: "Provider configuration",
+    group: "AI",
+    icon: Sparkles,
+  },
+  {
+    key: "prompts",
+    label: "Prompts",
+    description: "Template management",
+    group: "AI",
+    icon: MessageSquareText,
+  },
 ];
 
 function fileLabel(path: string): string {
@@ -256,6 +463,65 @@ function formatJobStageLabel(stage: string): string {
     .replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
+function formatProviderLabel(kind: RemoteServiceKind): string {
+  const entry = serviceCatalog.find((item) => item.kind === kind);
+  if (entry) return entry.label;
+  return kind.replace(/_/g, " ").replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function formatAppError(error: unknown): string {
+  const pickMessage = (value: unknown, depth = 0): string | null => {
+    if (depth > 5 || value == null) return null;
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : null;
+    }
+    if (value instanceof Error) {
+      const direct = value.message?.trim();
+      if (direct) return direct;
+      const cause = (value as Error & { cause?: unknown }).cause;
+      return pickMessage(cause, depth + 1);
+    }
+    if (typeof value !== "object") return null;
+
+    const record = value as Record<string, unknown>;
+    const direct = typeof record.message === "string" ? record.message.trim() : "";
+    if (direct.length > 0) return direct;
+
+    return (
+      pickMessage(record.error, depth + 1)
+      ?? pickMessage(record.cause, depth + 1)
+      ?? pickMessage(record.details, depth + 1)
+      ?? pickMessage(record.data, depth + 1)
+    );
+  };
+
+  const message = pickMessage(error);
+  if (message) return message;
+
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+function formatAppErrorCode(error: unknown): string | null {
+  const pickCode = (value: unknown, depth = 0): string | null => {
+    if (depth > 5 || value == null || typeof value !== "object") return null;
+    const record = value as Record<string, unknown>;
+    if (typeof record.code === "string" && record.code.trim().length > 0) {
+      return record.code.trim();
+    }
+    return pickCode(record.error, depth + 1)
+      ?? pickCode(record.cause, depth + 1)
+      ?? pickCode(record.details, depth + 1)
+      ?? pickCode(record.data, depth + 1);
+  };
+
+  return pickCode(error);
+}
+
 function ProgressRing({ percentage, size = 18 }: { percentage: number; size?: number }): JSX.Element {
   const clamped = clampPercentage(percentage);
   const ringStyle = {
@@ -279,6 +545,13 @@ function readStoredFlag(key: string, fallback: boolean): boolean {
   if (raw === "true") return true;
   if (raw === "false") return false;
   return fallback;
+}
+
+function createRemoteServiceId(kind: RemoteServiceKind): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `${kind}_${crypto.randomUUID()}`;
+  }
+  return `${kind}_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`;
 }
 
 function normalizeSettings(settings: AppSettings): AppSettings {
@@ -307,6 +580,10 @@ function normalizeSettings(settings: AppSettings): AppSettings {
           ...settings.ai.providers.gemini,
         },
       },
+      remote_services: (settings.ai.remote_services ?? []).map((service) => ({
+        ...service,
+        label: service.label || formatProviderLabel(service.kind),
+      })),
     },
     prompts: {
       ...settings.prompts,
@@ -319,8 +596,10 @@ function normalizeSettings(settings: AppSettings): AppSettings {
 
   normalized.model = normalized.transcription.model;
   normalized.language = normalized.transcription.language;
+  normalized.transcription_engine = normalized.transcription.engine;
   normalized.ai_post_processing = normalized.transcription.enable_ai_post_processing;
   normalized.whisper_cli_path = normalized.transcription.whisper_cli_path;
+  normalized.whisperkit_cli_path = normalized.transcription.whisperkit_cli_path;
   normalized.ffmpeg_path = normalized.transcription.ffmpeg_path;
   normalized.models_dir = normalized.transcription.models_dir;
 
@@ -342,13 +621,26 @@ function sanitizeWhisperOptions(options: WhisperOptions): WhisperOptions {
     no_context: options.no_context,
     split_on_word: options.split_on_word,
     temperature: clamp(options.temperature, 0, 1),
+    temperature_increment_on_fallback: clamp(options.temperature_increment_on_fallback, 0, 2),
+    temperature_fallback_count: Math.round(clamp(options.temperature_fallback_count, 0, 20)),
     entropy_threshold: clamp(options.entropy_threshold, 0, 10),
     logprob_threshold: clamp(options.logprob_threshold, -10, 0),
+    first_token_logprob_threshold: clamp(options.first_token_logprob_threshold, -10, 0),
+    no_speech_threshold: clamp(options.no_speech_threshold, 0, 1),
     word_threshold: clamp(options.word_threshold, 0, 1),
     best_of: Math.round(clamp(options.best_of, 1, 20)),
     beam_size: Math.round(clamp(options.beam_size, 1, 20)),
     threads: Math.round(clamp(options.threads, 1, 32)),
     processors: Math.round(clamp(options.processors, 1, 16)),
+    use_prefill_prompt: options.use_prefill_prompt,
+    use_prefill_cache: options.use_prefill_cache,
+    without_timestamps: options.without_timestamps,
+    word_timestamps: options.word_timestamps,
+    prompt: options.prompt?.trim() ? options.prompt : null,
+    concurrent_worker_count: Math.round(clamp(options.concurrent_worker_count, 1, 16)),
+    chunking_strategy: options.chunking_strategy === "none" ? "none" : "vad",
+    audio_encoder_compute_units: options.audio_encoder_compute_units,
+    text_decoder_compute_units: options.text_decoder_compute_units,
   };
 }
 
@@ -547,7 +839,11 @@ function TranscriptSegmentsTileSwitch({
   );
 }
 
-export function App() {
+type AppProps = {
+  standaloneSettingsWindow?: boolean;
+};
+
+export function App({ standaloneSettingsWindow = false }: AppProps) {
   const {
     settings,
     selectedFile,
@@ -630,6 +926,11 @@ export function App() {
 
   const [updateInfo, setUpdateInfo] = useState<UpdateCheckResponse | null>(null);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
+  const [aiServicesAcknowledged, setAiServicesAcknowledged] = useState(false);
+  const [aiServiceConfigOpen, setAiServiceConfigOpen] = useState<string | null>(null);
+  const [geminiModelChoices, setGeminiModelChoices] = useState<string[]>(fallbackGeminiModelOptions);
+  const [loadingGeminiModels, setLoadingGeminiModels] = useState(false);
+  const [geminiModelFetchNonce, setGeminiModelFetchNonce] = useState(0);
 
   const [activePromptId, setActivePromptId] = useState("");
   const [promptDraft, setPromptDraft] = useState<PromptTemplate | null>(null);
@@ -674,10 +975,10 @@ export function App() {
   }, [rightSidebarOpen]);
 
   useEffect(() => {
-    if (section === "settings" && settingsPane === "local_models") {
+    if (standaloneSettingsWindow && settingsPane === "local_models") {
       void refreshRuntimeHealth();
     }
-  }, [section, settingsPane]);
+  }, [settingsPane, standaloneSettingsWindow]);
 
   useEffect(() => {
     if (section !== "deleted_history") {
@@ -753,6 +1054,167 @@ export function App() {
       disposed = true;
     };
   }, [setArtifacts, setError, setSettings]);
+
+  useEffect(() => {
+    if (!standaloneSettingsWindow) {
+      return;
+    }
+
+    const pane = new URLSearchParams(window.location.search).get("pane");
+    if (!pane) {
+      return;
+    }
+
+    const matchedPane = settingsPaneDefinitions.find((entry) => entry.key === pane);
+    if (matchedPane) {
+      setSettingsPane(matchedPane.key);
+    }
+  }, [standaloneSettingsWindow]);
+
+  useEffect(() => {
+    if (!settings) {
+      return;
+    }
+    if (settings.ai.active_provider !== "none") {
+      return;
+    }
+    const hasGoogleService = (settings.ai.remote_services ?? []).some(
+      (service) => service.kind === "google",
+    );
+    if (isMacOS && settings.ai.providers.foundation_apple.enabled) {
+      void patchAiSettings((current) => ({
+        ...current,
+        active_provider: "foundation_apple",
+      }));
+      return;
+    }
+    if (hasGoogleService && settings.ai.providers.gemini.api_key?.trim()) {
+      void patchAiSettings((current) => ({
+        ...current,
+        active_provider: "gemini",
+      }));
+    }
+  }, [
+    isMacOS,
+    settings?.ai.active_provider,
+    settings?.ai.remote_services,
+    settings?.ai.providers.foundation_apple.enabled,
+    settings?.ai.providers.gemini.api_key,
+  ]);
+
+  useEffect(() => {
+    if (settings?.ai.active_provider === "gemini") {
+      setAiServiceConfigOpen("gemini");
+    }
+  }, [settings?.ai.active_provider]);
+
+  useEffect(() => {
+    if (!settings || settings.ai.active_provider !== "gemini") {
+      return;
+    }
+    const hasGoogleService = (settings.ai.remote_services ?? []).some(
+      (service) => service.kind === "google",
+    );
+    if (hasGoogleService) {
+      return;
+    }
+
+    void patchAiSettings((current) => ({
+      ...current,
+      remote_services: [
+        ...(current.remote_services ?? []),
+        {
+          id: createRemoteServiceId("google"),
+          kind: "google",
+          label: "Google",
+          enabled: true,
+          api_key: current.providers.gemini.api_key ?? null,
+          model: current.providers.gemini.model,
+          base_url: "https://generativelanguage.googleapis.com/v1beta",
+        },
+      ],
+    }));
+  }, [settings?.ai.active_provider, settings?.ai.remote_services]);
+
+  useEffect(() => {
+    if (aiServiceConfigOpen !== "gemini") {
+      return;
+    }
+    const apiKey = settings?.ai.providers.gemini.api_key?.trim();
+    if (!apiKey) {
+      setGeminiModelChoices(fallbackGeminiModelOptions);
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      setLoadingGeminiModels(true);
+      try {
+        const models = await listGeminiModels(apiKey);
+
+        if (!cancelled && models.length > 0) {
+          const current = settings?.ai.providers.gemini.model;
+          const merged = Array.from(
+            new Set([...(current ? [current] : []), ...models, ...fallbackGeminiModelOptions]),
+          );
+          setGeminiModelChoices(merged);
+        }
+      } catch {
+        if (!cancelled) {
+          setGeminiModelChoices((previous) =>
+            previous.length > 0 ? previous : fallbackGeminiModelOptions,
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingGeminiModels(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    aiServiceConfigOpen,
+    geminiModelFetchNonce,
+    settings?.ai.providers.gemini.api_key,
+    settings?.ai.providers.gemini.model,
+  ]);
+
+  useEffect(() => {
+    if (!standaloneSettingsWindow) {
+      return;
+    }
+
+    let unlisten: (() => void) | undefined;
+    void (async () => {
+      unlisten = await subscribeSettingsNavigate((pane) => {
+        const matchedPane = settingsPaneDefinitions.find((entry) => entry.key === pane);
+        if (matchedPane) {
+          setSettingsPane(matchedPane.key);
+        }
+      });
+    })();
+
+    return () => {
+      unlisten?.();
+    };
+  }, [standaloneSettingsWindow]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+
+    void (async () => {
+      unlisten = await subscribeSettingsUpdated((incoming) => {
+        setSettings(normalizeSettings(incoming));
+      });
+    })();
+
+    return () => {
+      unlisten?.();
+    };
+  }, [setSettings]);
 
   useEffect(() => {
     let unsubProgress: (() => void) | undefined;
@@ -1100,6 +1562,21 @@ export function App() {
     });
   }, [settingsQuery]);
 
+  const visibleSettingsPaneGroups = useMemo(() => {
+    const groups = new Map<SettingsPaneDefinition["group"], SettingsPaneDefinition[]>();
+
+    for (const pane of visibleSettingsPanes) {
+      const existing = groups.get(pane.group);
+      if (existing) {
+        existing.push(pane);
+      } else {
+        groups.set(pane.group, [pane]);
+      }
+    }
+
+    return Array.from(groups.entries()).map(([group, panes]) => ({ group, panes }));
+  }, [visibleSettingsPanes]);
+
   useEffect(() => {
     setAudioDurationSeconds(0);
   }, [detailAudioInputPath]);
@@ -1156,7 +1633,7 @@ export function App() {
       if (sequence === settingsSaveSequenceRef.current && previous) {
         setSettings(previous);
       }
-      setError(`Could not save settings: ${String(settingsError)}`);
+      setError(`Could not save settings: ${formatAppError(settingsError)}`);
     }
   }
 
@@ -1165,6 +1642,32 @@ export function App() {
     const previous = normalizeSettings(settings);
     const next = normalizeSettings(mutator(normalizeSettings(settings)));
     await persistSettings(next, previous);
+  }
+
+  async function patchAiSettings(
+    mutator: (current: AppSettings["ai"]) => AppSettings["ai"],
+  ): Promise<void> {
+    if (!settings) return;
+    const previous = normalizeSettings(settings);
+    const next = normalizeSettings({
+      ...previous,
+      ai: mutator(previous.ai),
+    });
+
+    const sequence = ++settingsSaveSequenceRef.current;
+    setSettings(next);
+
+    try {
+      const persisted = await saveSettingsPartial({ ai: next.ai });
+      if (sequence === settingsSaveSequenceRef.current) {
+        setSettings(normalizeSettings(persisted));
+      }
+    } catch (settingsError) {
+      if (sequence === settingsSaveSequenceRef.current) {
+        setSettings(previous);
+      }
+      setError(`Could not save settings: ${formatAppError(settingsError)}`);
+    }
   }
 
   async function refreshSettingsFromDisk(): Promise<void> {
@@ -1265,6 +1768,16 @@ export function App() {
     }));
   }
 
+  async function onChangeTranscriptionEngine(engine: TranscriptionEngine): Promise<void> {
+    await patchSettings((current) => ({
+      ...current,
+      transcription: {
+        ...current.transcription,
+        engine,
+      },
+    }));
+  }
+
   async function onToggleAi(enabled: boolean): Promise<void> {
     await patchSettings((current) => ({
       ...current,
@@ -1343,6 +1856,14 @@ export function App() {
       setError(null);
     } catch (artifactError) {
       setError(`Failed to open transcript: ${String(artifactError)}`);
+    }
+  }
+
+  async function onOpenStandaloneSettingsWindow(pane?: SettingsPane): Promise<void> {
+    try {
+      await openSettingsWindow(pane);
+    } catch (windowError) {
+      setError(`Failed to open settings window: ${String(windowError)}`);
     }
   }
 
@@ -1714,12 +2235,18 @@ export function App() {
 
     setIsGeneratingSummary(true);
     try {
-      const answer = await chatArtifact({ id: activeArtifact.id, prompt });
+      const answer = await summarizeArtifact({ id: activeArtifact.id, prompt });
       setDraftSummary(answer);
       setDetailMode("summary");
       setError(null);
     } catch (summaryError) {
-      setError(`Summary failed: ${String(summaryError)}`);
+      const code = formatAppErrorCode(summaryError);
+      const message = formatAppError(summaryError);
+      if (code === "missing_ai_provider" || code === "missing_api_key") {
+        setError("Summary failed: configure an AI provider in Settings > AI Services.");
+      } else {
+        setError(`Summary failed: ${message}`);
+      }
     } finally {
       setIsGeneratingSummary(false);
     }
@@ -1742,14 +2269,19 @@ export function App() {
       const answer = await chatArtifact({ id: activeArtifact.id, prompt });
       setChatHistory((previous) => [...previous, { role: "assistant", text: answer }]);
     } catch (chatError) {
+      const code = formatAppErrorCode(chatError);
+      const message = formatAppError(chatError);
+      const providerMissing = code === "missing_ai_provider" || code === "missing_api_key";
       setChatHistory((previous) => [
         ...previous,
         {
           role: "assistant",
-          text: "Chat unavailable. Configure AI provider in Settings > AI Services.",
+          text: providerMissing
+            ? "Chat unavailable. Configure AI provider in Settings > AI Services."
+            : `Chat failed: ${message}`,
         },
       ]);
-      setError(String(chatError));
+      setError(providerMissing ? "Chat unavailable. Configure AI provider in Settings > AI Services." : message);
     } finally {
       setIsAskingChat(false);
     }
@@ -1917,8 +2449,7 @@ export function App() {
           <button
             className="quick-action quick-action-models"
             onClick={() => {
-              setSection("settings");
-              setSettingsPane("local_models");
+              void onOpenStandaloneSettingsWindow("local_models");
             }}
           >
             <Settings2 size={16} />
@@ -2207,12 +2738,9 @@ export function App() {
               value={settings?.ai.active_provider ?? "none"}
               onChange={(event) => {
                 const provider = event.target.value as AppSettings["ai"]["active_provider"];
-                void patchSettings((current) => ({
+                void patchAiSettings((current) => ({
                   ...current,
-                  ai: {
-                    ...current.ai,
-                    active_provider: provider,
-                  },
+                  active_provider: provider,
                 }));
               }}
             >
@@ -2344,12 +2872,9 @@ export function App() {
             value={settings?.ai.active_provider ?? "none"}
             onChange={(event) => {
               const provider = event.target.value as AppSettings["ai"]["active_provider"];
-              void patchSettings((current) => ({
+              void patchAiSettings((current) => ({
                 ...current,
-                ai: {
-                  ...current.ai,
-                  active_provider: provider,
-                },
+                active_provider: provider,
               }));
             }}
           >
@@ -2470,8 +2995,7 @@ export function App() {
         <button
           className="secondary-button"
           onClick={() => {
-            setSection("settings");
-            setSettingsPane("prompts");
+            void onOpenStandaloneSettingsWindow("prompts");
           }}
         >
           Manage Prompts
@@ -2756,15 +3280,32 @@ export function App() {
       return <div className="settings-placeholder">Settings unavailable.</div>;
     }
 
-    const whisperOptions = settings.transcription.whisper_options ?? defaultWhisperOptions;
-
     return (
       <div className="settings-stack">
         <section className="settings-panel">
           <header>
             <h3>Transcription Defaults</h3>
-            <p>Used for every new transcription job.</p>
+            <p>Used for every new transcription job across engines.</p>
           </header>
+
+          <div className="settings-row settings-row-block">
+            <div>
+              <strong>Transcription engine</strong>
+              <small>Select the backend used for local transcription runs.</small>
+            </div>
+            <select
+              value={settings.transcription.engine}
+              onChange={(event) => {
+                void onChangeTranscriptionEngine(event.target.value as TranscriptionEngine);
+              }}
+            >
+              {transcriptionEngineOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
 
           <div className="settings-row settings-row-block">
             <div>
@@ -2816,11 +3357,23 @@ export function App() {
             />
           </div>
         </section>
+      </div>
+    );
+  }
 
+  function renderSettingsWhisperCpp(): JSX.Element {
+    if (!settings) {
+      return <div className="settings-placeholder">Settings unavailable.</div>;
+    }
+
+    const whisperOptions = settings.transcription.whisper_options ?? defaultWhisperOptions;
+
+    return (
+      <div className="settings-stack">
         <section className="settings-panel">
           <header>
-            <h3>Whisper Settings</h3>
-            <p>Direct decoding controls from whisper.cpp.</p>
+            <h3>Whisper C++</h3>
+            <p>Decoding controls used by `whisper-cli` (whisper.cpp).</p>
           </header>
 
           <div className="settings-row">
@@ -3035,6 +3588,191 @@ export function App() {
     );
   }
 
+  function renderSettingsWhisperKit(): JSX.Element {
+    if (!settings) {
+      return <div className="settings-placeholder">Settings unavailable.</div>;
+    }
+
+    const whisperOptions = settings.transcription.whisper_options ?? defaultWhisperOptions;
+
+    return (
+      <div className="settings-stack">
+        <section className="settings-panel">
+          <header>
+            <h3>WhisperKit</h3>
+            <p>Apple-native inference and model execution controls.</p>
+          </header>
+
+          <div className="settings-row settings-row-block">
+            <div>
+              <strong>Chunking strategy</strong>
+            </div>
+            <select
+              value={whisperOptions.chunking_strategy}
+              onChange={(event) => {
+                void onPatchWhisperOptions((current) => ({
+                  ...current,
+                  chunking_strategy: event.target.value as WhisperOptions["chunking_strategy"],
+                }));
+              }}
+            >
+              {chunkingOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="settings-row settings-row-block">
+            <div>
+              <strong>Concurrent workers</strong>
+              <small>Maximum parallel worker count for decoding.</small>
+            </div>
+            <input
+              type="number"
+              min={1}
+              max={16}
+              value={whisperOptions.concurrent_worker_count}
+              onChange={(event) => {
+                void onPatchWhisperOptions((current) => ({
+                  ...current,
+                  concurrent_worker_count: Number(event.target.value),
+                }));
+              }}
+            />
+          </div>
+
+          <div className="settings-row settings-row-block">
+            <div>
+              <strong>Audio encoder compute units</strong>
+            </div>
+            <select
+              value={whisperOptions.audio_encoder_compute_units}
+              onChange={(event) => {
+                void onPatchWhisperOptions((current) => ({
+                  ...current,
+                  audio_encoder_compute_units: event.target
+                    .value as WhisperOptions["audio_encoder_compute_units"],
+                }));
+              }}
+            >
+              {computeUnitOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="settings-row settings-row-block">
+            <div>
+              <strong>Text decoder compute units</strong>
+            </div>
+            <select
+              value={whisperOptions.text_decoder_compute_units}
+              onChange={(event) => {
+                void onPatchWhisperOptions((current) => ({
+                  ...current,
+                  text_decoder_compute_units: event.target
+                    .value as WhisperOptions["text_decoder_compute_units"],
+                }));
+              }}
+            >
+              {computeUnitOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="settings-row">
+            <div>
+              <strong>Use prefill prompt</strong>
+            </div>
+            <input
+              type="checkbox"
+              checked={whisperOptions.use_prefill_prompt}
+              onChange={(event) => {
+                void onPatchWhisperOptions((current) => ({
+                  ...current,
+                  use_prefill_prompt: event.target.checked,
+                }));
+              }}
+            />
+          </div>
+
+          <div className="settings-row">
+            <div>
+              <strong>Use prefill cache</strong>
+            </div>
+            <input
+              type="checkbox"
+              checked={whisperOptions.use_prefill_cache}
+              onChange={(event) => {
+                void onPatchWhisperOptions((current) => ({
+                  ...current,
+                  use_prefill_cache: event.target.checked,
+                }));
+              }}
+            />
+          </div>
+
+          <div className="settings-row">
+            <div>
+              <strong>Without timestamps</strong>
+            </div>
+            <input
+              type="checkbox"
+              checked={whisperOptions.without_timestamps}
+              onChange={(event) => {
+                void onPatchWhisperOptions((current) => ({
+                  ...current,
+                  without_timestamps: event.target.checked,
+                }));
+              }}
+            />
+          </div>
+
+          <div className="settings-row">
+            <div>
+              <strong>Word timestamps</strong>
+            </div>
+            <input
+              type="checkbox"
+              checked={whisperOptions.word_timestamps}
+              onChange={(event) => {
+                void onPatchWhisperOptions((current) => ({
+                  ...current,
+                  word_timestamps: event.target.checked,
+                }));
+              }}
+            />
+          </div>
+
+          <div className="settings-row settings-row-block">
+            <div>
+              <strong>Prompt override</strong>
+              <small>Optional prompt used by WhisperKit decoders.</small>
+            </div>
+            <textarea
+              className="settings-textarea small"
+              value={whisperOptions.prompt ?? ""}
+              onChange={(event) => {
+                void onPatchWhisperOptions((current) => ({
+                  ...current,
+                  prompt: event.target.value,
+                }));
+              }}
+              placeholder="Optional decoder prompt"
+            />
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   function renderSettingsLocalModels(): JSX.Element {
     if (!settings) {
       return <div className="settings-placeholder">Settings unavailable.</div>;
@@ -3063,6 +3801,10 @@ export function App() {
               <p className="muted">
                 Whisper CLI:{" "}
                 <code>{runtimeHealth.whisper_cli_resolved || runtimeHealth.whisper_cli_path}</code>
+              </p>
+              <p className="muted">
+                WhisperKit CLI:{" "}
+                <code>{runtimeHealth.whisperkit_cli_resolved || runtimeHealth.whisperkit_cli_path}</code>
               </p>
               <p className="muted">
                 Whisper Stream:{" "}
@@ -3148,104 +3890,431 @@ export function App() {
       return <div className="settings-placeholder">Settings unavailable.</div>;
     }
 
+    const foundationAvailable = isMacOS;
+    const foundationEnabled = settings.ai.providers.foundation_apple.enabled;
+    const foundationActive = settings.ai.active_provider === "foundation_apple";
+    const geminiActive = settings.ai.active_provider === "gemini";
+    const geminiConfigured = Boolean(settings.ai.providers.gemini.api_key?.trim());
+    const remoteServices = settings.ai.remote_services ?? [];
+    const googleService = remoteServices.find((service) => service.kind === "google");
+    const hasGoogleService = Boolean(googleService);
+    const showGeminiService = hasGoogleService;
+    const showGeminiConfig = aiServiceConfigOpen === "gemini";
+    const configuredKinds = new Set(remoteServices.map((service) => service.kind));
+
+    const createRemoteServiceEntry = (kind: RemoteServiceKind): RemoteServiceConfig | null => {
+      const catalog = serviceCatalog.find((item) => item.kind === kind);
+      if (!catalog) return null;
+      return {
+        id: createRemoteServiceId(kind),
+        kind,
+        label: catalog.label,
+        enabled: true,
+        api_key: kind === "google" ? settings.ai.providers.gemini.api_key : null,
+        model: kind === "google" ? settings.ai.providers.gemini.model : catalog.defaultModel,
+        base_url: catalog.defaultBaseUrl,
+      };
+    };
+
+    const ensureGoogleService = (services: RemoteServiceConfig[]): RemoteServiceConfig[] => {
+      if (services.some((service) => service.kind === "google")) {
+        return services;
+      }
+      const googleEntry = createRemoteServiceEntry("google");
+      if (!googleEntry) return services;
+      return [...services, googleEntry];
+    };
+
+    const activateFoundation = (): void => {
+      void patchAiSettings((current) => ({
+        ...current,
+        active_provider: "foundation_apple",
+        providers: {
+          ...current.providers,
+          foundation_apple: {
+            ...current.providers.foundation_apple,
+            enabled: true,
+          },
+        },
+      }));
+    };
+
+    const activateGemini = (): void => {
+      void patchAiSettings((current) => ({
+        ...current,
+        active_provider: "gemini",
+        remote_services: ensureGoogleService(current.remote_services ?? []),
+      }));
+    };
+
+    const addRemoteService = (kind: RemoteServiceKind): void => {
+      const entry = createRemoteServiceEntry(kind);
+      if (!entry) return;
+      if (configuredKinds.has(kind)) {
+        const existing = remoteServices.find((service) => service.kind === kind);
+        if (existing) {
+          setAiServiceConfigOpen(kind === "google" ? "gemini" : existing.id);
+        }
+        return;
+      }
+
+      void patchAiSettings((current) => ({
+        ...current,
+        remote_services: [...(current.remote_services ?? []), entry],
+      }));
+      setAiServiceConfigOpen(kind === "google" ? "gemini" : entry.id);
+    };
+
+    const removeRemoteService = (id: string): void => {
+      void patchAiSettings((current) => {
+        const target = (current.remote_services ?? []).find((service) => service.id === id);
+        const nextServices = (current.remote_services ?? []).filter((service) => service.id !== id);
+        const shouldDeactivateGemini =
+          target?.kind === "google" && current.active_provider === "gemini";
+
+        return {
+          ...current,
+          active_provider: shouldDeactivateGemini
+            ? current.providers.foundation_apple.enabled && isMacOS
+              ? "foundation_apple"
+              : "none"
+            : current.active_provider,
+          remote_services: nextServices,
+        };
+      });
+      if (aiServiceConfigOpen === id) {
+        setAiServiceConfigOpen(null);
+      }
+    };
+
+    const patchRemoteService = (
+      id: string,
+      mutator: (service: RemoteServiceConfig) => RemoteServiceConfig,
+    ): void => {
+      void patchAiSettings((current) => ({
+        ...current,
+        remote_services: (current.remote_services ?? []).map((service) =>
+          service.id === id ? mutator(service) : service,
+        ),
+      }));
+    };
+
     return (
-      <div className="settings-stack">
-        <section className="settings-panel">
-          <h3>AI Services</h3>
+      <div className="settings-stack ai-services-stack">
+        <section className="settings-panel ai-services-panel">
+          <h3>Services</h3>
 
-          <label>
-            Active provider
-            <select
-              value={settings.ai.active_provider}
-              onChange={(event) => {
-                const provider = event.target.value as AppSettings["ai"]["active_provider"];
-                void patchSettings((current) => ({
-                  ...current,
-                  ai: {
-                    ...current.ai,
-                    active_provider: provider,
-                  },
-                }));
-              }}
+          <div className="ai-services-notice">
+            <p>
+              When you use remote AI services, your transcript will be sent to the service&apos;s
+              servers and won&apos;t stay only on your Mac.
+            </p>
+            <button
+              className={aiServicesAcknowledged ? "secondary-button ai-notice-button acknowledged" : "secondary-button ai-notice-button"}
+              onClick={() => setAiServicesAcknowledged(true)}
             >
-              <option value="none">None</option>
-              <option value="foundation_apple" disabled={!isMacOS}>
-                Apple Foundation Model {isMacOS ? "" : "(macOS only)"}
-              </option>
-              <option value="gemini">Gemini</option>
-            </select>
-          </label>
+              {aiServicesAcknowledged ? "Understood" : "I Understand"}
+            </button>
+          </div>
 
-          <label className="toggle-row">
-            <span>Enable Apple Foundation provider</span>
-            <input
-              type="checkbox"
-              checked={settings.ai.providers.foundation_apple.enabled}
-              disabled={!isMacOS}
-              onChange={(event) => {
-                void patchSettings((current) => ({
-                  ...current,
-                  ai: {
-                    ...current.ai,
-                    providers: {
-                      ...current.ai.providers,
-                      foundation_apple: {
-                        ...current.ai.providers.foundation_apple,
-                        enabled: event.target.checked,
-                      },
-                    },
-                  },
-                }));
-              }}
-            />
-          </label>
+          <article className={foundationActive ? "ai-service-card active" : "ai-service-card"}>
+            <div className="ai-service-row">
+              <span className="ai-service-icon foundation"></span>
+              <div className="ai-service-title">
+                <strong>Foundation Model</strong>
+                <small>{foundationAvailable ? "Apple" : "Available only on macOS"}</small>
+              </div>
+              <div className="ai-service-actions">
+                <label className="toggle-row compact">
+                  <span>Enabled</span>
+                  <input
+                    type="checkbox"
+                    checked={foundationEnabled}
+                    disabled={!foundationAvailable}
+                    onChange={(event) => {
+                      const enabled = event.target.checked;
+                      void patchAiSettings((current) => ({
+                        ...current,
+                        active_provider:
+                          !enabled && current.active_provider === "foundation_apple"
+                            ? current.providers.gemini.api_key
+                              ? "gemini"
+                              : "none"
+                            : current.active_provider,
+                        providers: {
+                          ...current.providers,
+                          foundation_apple: {
+                            ...current.providers.foundation_apple,
+                            enabled,
+                          },
+                        },
+                      }));
+                    }}
+                  />
+                </label>
+                <button
+                  className="secondary-button"
+                  disabled={!foundationAvailable || !foundationEnabled || foundationActive}
+                  onClick={activateFoundation}
+                >
+                  {foundationActive ? "Active" : "Use"}
+                </button>
+              </div>
+            </div>
+          </article>
 
-          <label>
-            Gemini API key
-            <input
-              type="password"
-              placeholder="AIza..."
-              value={settings.ai.providers.gemini.api_key ?? ""}
-              onChange={(event) => {
-                const value = event.target.value.trim();
-                void patchSettings((current) => ({
-                  ...current,
-                  ai: {
-                    ...current.ai,
-                    providers: {
-                      ...current.ai.providers,
-                      gemini: {
-                        ...current.ai.providers.gemini,
-                        api_key: value.length > 0 ? event.target.value : null,
-                      },
-                    },
-                  },
-                }));
-              }}
-            />
-          </label>
+          {showGeminiService ? (
+            <article className={geminiActive ? "ai-service-card active" : "ai-service-card"}>
+            <div className="ai-service-row">
+              <span className="ai-service-icon gemini">
+                <Sparkles size={13} />
+              </span>
+              <div className="ai-service-title">
+                <strong>{settings.ai.providers.gemini.model}</strong>
+                <small>{geminiConfigured ? "Configured to use" : "Configure to use"}</small>
+              </div>
+              <div className="ai-service-actions">
+                <button
+                  className="secondary-button"
+                  onClick={() => setAiServiceConfigOpen(showGeminiConfig ? null : "gemini")}
+                >
+                  {showGeminiConfig ? "Done" : "Configure"}
+                </button>
+                <button
+                  className="secondary-button"
+                  disabled={!geminiConfigured || geminiActive}
+                  onClick={activateGemini}
+                >
+                  {geminiActive ? "Active" : "Use"}
+                </button>
+              </div>
+            </div>
 
-          <label>
-            Gemini model
-            <input
-              value={settings.ai.providers.gemini.model}
-              onChange={(event) => {
-                void patchSettings((current) => ({
-                  ...current,
-                  ai: {
-                    ...current.ai,
-                    providers: {
-                      ...current.ai.providers,
-                      gemini: {
-                        ...current.ai.providers.gemini,
-                        model: event.target.value,
-                      },
-                    },
-                  },
-                }));
-              }}
-            />
-          </label>
+            {showGeminiConfig ? (
+              <div className="ai-service-config">
+                <label>
+                  API Key
+                  <input
+                    type="password"
+                    placeholder="AIza..."
+                    value={settings.ai.providers.gemini.api_key ?? ""}
+                    onChange={(event) => {
+                      const value = event.target.value.trim();
+                      void patchAiSettings((current) => ({
+                        ...current,
+                        providers: {
+                          ...current.providers,
+                          gemini: {
+                            ...current.providers.gemini,
+                            api_key: value.length > 0 ? event.target.value : null,
+                          },
+                        },
+                      }));
+                    }}
+                  />
+                </label>
+
+                <div className="ai-service-config-row">
+                  <label>
+                    Gemini Model
+                    <select
+                      value={settings.ai.providers.gemini.model}
+                      onChange={(event) => {
+                        void patchAiSettings((current) => ({
+                          ...current,
+                          providers: {
+                            ...current.providers,
+                            gemini: {
+                              ...current.providers.gemini,
+                              model: event.target.value,
+                            },
+                          },
+                        }));
+                      }}
+                    >
+                      {geminiModelChoices.map((model) => (
+                        <option key={model} value={model}>
+                          {model}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="ai-service-config-links">
+                    <button
+                      className="secondary-button"
+                      disabled={loadingGeminiModels}
+                      onClick={() => setGeminiModelFetchNonce((value) => value + 1)}
+                    >
+                      {loadingGeminiModels ? "Loading models..." : "Refresh models"}
+                    </button>
+                    <a
+                      className="cta-link-button ai-service-link"
+                      href="https://aistudio.google.com/apikey"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Create a Google API Key
+                    </a>
+                  </div>
+                </div>
+
+                <div className="ai-service-config-actions">
+                  <button
+                    className="secondary-button"
+                    onClick={() => {
+                      void patchAiSettings((current) => {
+                        const nextProvider =
+                          current.active_provider === "gemini"
+                            ? current.providers.foundation_apple.enabled && isMacOS
+                              ? "foundation_apple"
+                              : "none"
+                            : current.active_provider;
+
+                        return {
+                          ...current,
+                          active_provider: nextProvider,
+                          providers: {
+                            ...current.providers,
+                            gemini: {
+                              ...current.providers.gemini,
+                              api_key: null,
+                            },
+                          },
+                          remote_services: (current.remote_services ?? []).filter(
+                            (service) => service.kind !== "google",
+                          ),
+                        };
+                      });
+                      setAiServiceConfigOpen(null);
+                    }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            </article>
+          ) : null}
+
+          {remoteServices
+            .filter((service) => service.kind !== "google")
+            .map((service) => {
+            const catalog = serviceCatalog.find((item) => item.kind === service.kind);
+            const ServiceIcon = catalog?.icon ?? Settings2;
+            const isOpen = aiServiceConfigOpen === service.id;
+
+            return (
+              <article key={service.id} className="ai-service-card">
+                <div className="ai-service-row">
+                  <span className={`ai-service-icon ${catalog?.tone ?? "custom"}`}>
+                    <ServiceIcon size={13} />
+                  </span>
+                  <div className="ai-service-title">
+                    <strong>{service.label || formatProviderLabel(service.kind)}</strong>
+                    <small>{service.enabled ? "Configured" : "Disabled"}</small>
+                  </div>
+                  <div className="ai-service-actions">
+                    <label className="toggle-row compact">
+                      <span>Enabled</span>
+                      <input
+                        type="checkbox"
+                        checked={service.enabled}
+                        onChange={(event) =>
+                          patchRemoteService(service.id, (current) => ({
+                            ...current,
+                            enabled: event.target.checked,
+                          }))
+                        }
+                      />
+                    </label>
+                    <button
+                      className="secondary-button"
+                      onClick={() => setAiServiceConfigOpen(isOpen ? null : service.id)}
+                    >
+                      {isOpen ? "Done" : "Configure"}
+                    </button>
+                  </div>
+                </div>
+
+                {isOpen ? (
+                  <div className="ai-service-config">
+                    <label>
+                      API Key
+                      <input
+                        type="password"
+                        value={service.api_key ?? ""}
+                        onChange={(event) =>
+                          patchRemoteService(service.id, (current) => ({
+                            ...current,
+                            api_key: event.target.value.trim().length > 0 ? event.target.value : null,
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      Model
+                      <input
+                        value={service.model ?? ""}
+                        placeholder="Optional model name"
+                        onChange={(event) =>
+                          patchRemoteService(service.id, (current) => ({
+                            ...current,
+                            model: event.target.value.trim().length > 0 ? event.target.value : null,
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      Base URL
+                      <input
+                        value={service.base_url ?? ""}
+                        placeholder="Optional API endpoint"
+                        onChange={(event) =>
+                          patchRemoteService(service.id, (current) => ({
+                            ...current,
+                            base_url:
+                              event.target.value.trim().length > 0 ? event.target.value : null,
+                          }))
+                        }
+                      />
+                    </label>
+                    <div className="ai-service-config-actions">
+                      <button
+                        className="secondary-button"
+                        onClick={() => removeRemoteService(service.id)}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </article>
+            );
+            })}
+
+          <div className="ai-service-library">
+            <strong>Add another service</strong>
+            <div className="ai-service-grid">
+              {serviceCatalog.map((service) => {
+                const ServiceIcon = service.icon;
+                const isGoogle = service.kind === "google";
+                const alreadyAdded = isGoogle ? hasGoogleService : configuredKinds.has(service.kind);
+                return (
+                  <button
+                    key={service.kind}
+                    className={`ai-service-chip available ${service.tone}`}
+                    onClick={() => addRemoteService(service.kind)}
+                  >
+                    <span className="ai-service-chip-main">
+                      <ServiceIcon size={13} />
+                      <span>{service.label}</span>
+                    </span>
+                    {alreadyAdded ? <Check size={14} /> : <Plus size={14} />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </section>
       </div>
     );
@@ -3459,6 +4528,22 @@ export function App() {
           </label>
 
           <label>
+            WhisperKit CLI path
+            <input
+              value={settings.transcription.whisperkit_cli_path}
+              onChange={(event) => {
+                void patchSettings((current) => ({
+                  ...current,
+                  transcription: {
+                    ...current.transcription,
+                    whisperkit_cli_path: event.target.value,
+                  },
+                }));
+              }}
+            />
+          </label>
+
+          <label>
             FFmpeg path
             <input
               value={settings.transcription.ffmpeg_path}
@@ -3500,6 +4585,18 @@ export function App() {
     );
   }
 
+  function renderSettingsPane(pane: SettingsPane): JSX.Element {
+    if (pane === "transcription") return renderSettingsTranscription();
+    if (pane === "whisper_cpp") return renderSettingsWhisperCpp();
+    if (pane === "whisper_kit") return renderSettingsWhisperKit();
+    if (pane === "local_models") return renderSettingsLocalModels();
+    if (pane === "advanced") return renderSettingsAdvanced();
+    if (pane === "general") return renderSettingsGeneral();
+    if (pane === "ai_services") return renderSettingsAiServices();
+    if (pane === "prompts") return renderSettingsPrompts();
+    return <div className="settings-placeholder">Settings unavailable.</div>;
+  }
+
   function renderSettings(): JSX.Element {
     return (
       <div className="settings-layout">
@@ -3513,15 +4610,28 @@ export function App() {
             />
           </label>
           <div className="settings-nav-list">
-            {visibleSettingsPanes.map((pane) => (
-              <button
-                key={pane.key}
-                className={settingsPane === pane.key ? "settings-nav-item active" : "settings-nav-item"}
-                onClick={() => setSettingsPane(pane.key)}
-              >
-                <span>{pane.label}</span>
-                <small>{pane.description}</small>
-              </button>
+            {visibleSettingsPaneGroups.map(({ group, panes }) => (
+              <section key={group} className="settings-nav-group">
+                <p className="settings-nav-group-title">{group}</p>
+                <div className="settings-nav-group-items">
+                  {panes.map((pane) => {
+                    const PaneIcon = pane.icon;
+                    return (
+                      <button
+                        key={pane.key}
+                        className={settingsPane === pane.key ? "settings-nav-item active" : "settings-nav-item"}
+                        onClick={() => setSettingsPane(pane.key)}
+                      >
+                        <span className="settings-nav-item-main">
+                          <PaneIcon size={14} />
+                          <span>{pane.label}</span>
+                        </span>
+                        <small>{pane.description}</small>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
             ))}
             {visibleSettingsPanes.length === 0 ? (
               <div className="settings-nav-empty">No section matches your search.</div>
@@ -3530,12 +4640,7 @@ export function App() {
         </aside>
 
         <section className="settings-content">
-          {settingsPane === "transcription" ? renderSettingsTranscription() : null}
-          {settingsPane === "local_models" ? renderSettingsLocalModels() : null}
-          {settingsPane === "advanced" ? renderSettingsAdvanced() : null}
-          {settingsPane === "general" ? renderSettingsGeneral() : null}
-          {settingsPane === "ai_services" ? renderSettingsAiServices() : null}
-          {settingsPane === "prompts" ? renderSettingsPrompts() : null}
+          {renderSettingsPane(settingsPane)}
         </section>
       </div>
     );
@@ -3547,8 +4652,35 @@ export function App() {
     if (section === "history") return renderHistory();
     if (section === "deleted_history") return renderDeletedHistory();
     if (section === "realtime") return renderRealtime();
-    if (section === "settings") return renderSettings();
     return renderDetail();
+  }
+
+  if (standaloneSettingsWindow) {
+    return (
+      <main className="settings-window-shell">
+        <section className="settings-window-frame">
+          <header className="settings-window-header">
+            <h1>Settings</h1>
+          </header>
+          {renderSettings()}
+          {error ? <p className="error-banner settings-window-error">{error}</p> : null}
+        </section>
+
+        <ModelManagerSheet
+          open={showModelManager}
+          modelsDir={provisioning.modelsDir}
+          models={modelCatalog}
+          running={provisioning.running}
+          progress={provisioning.progress}
+          statusMessage={provisioning.statusMessage}
+          onDownloadModel={onDownloadModel}
+          onDownloadAll={onProvisionModels}
+          onRefresh={refreshProvisioningModels}
+          onCancel={onCancelProvisioning}
+          onClose={() => setShowModelManager(false)}
+        />
+      </main>
+    );
   }
 
   return (
@@ -3629,7 +4761,7 @@ export function App() {
             </div>
 
             <div className="sidebar-footer">
-              <button className={section === "settings" ? "sidebar-item active" : "sidebar-item"} onClick={() => setSection("settings")}>
+              <button className="sidebar-item" onClick={() => void onOpenStandaloneSettingsWindow("transcription")}>
                 <Settings2 size={16} />
                 Settings
               </button>
@@ -3656,9 +4788,7 @@ export function App() {
                       ? "Queue"
                       : section === "realtime"
                         ? "Live"
-                        : section === "settings"
-                          ? "Settings"
-                          : section === "deleted_history"
+                        : section === "deleted_history"
                             ? "Recently Deleted"
                             : "Transcriptions"}
                   </h1>

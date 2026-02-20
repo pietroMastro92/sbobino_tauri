@@ -17,6 +17,7 @@ thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
+hound.workspace = true
 sbobino-domain = { path = "../domain" }
 sbobino-application = { path = "../application" }
 

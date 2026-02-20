@@ -316,6 +316,7 @@ exit 0
                 beam_size: 1,
                 threads: 6,
                 processors: 2,
+                ..WhisperOptions::default()
             },
             Arc::new(|_line: String| {}),
             Arc::new(|_seconds: f32| {}),
