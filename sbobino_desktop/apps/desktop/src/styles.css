@@ -35,6 +35,28 @@
   box-sizing: border-box;
 }
 
+/* ── Tauri drag-region fix ──
+   Child elements in drag-region headers must not intercept pointer events,
+   otherwise the OS-level window drag never fires.
+   We disable pointer-events on all children, then re-enable them on
+   interactive elements so buttons/inputs stay clickable. */
+[data-tauri-drag-region] > * {
+  pointer-events: none;
+}
+
+[data-tauri-drag-region] button,
+[data-tauri-drag-region] input,
+[data-tauri-drag-region] select,
+[data-tauri-drag-region] textarea,
+[data-tauri-drag-region] a,
+[data-tauri-drag-region] label,
+[data-tauri-drag-region] [role="button"],
+[data-tauri-drag-region] .icon-button,
+[data-tauri-drag-region] .topbar-controls,
+[data-tauri-drag-region] .detail-toolbar-actions {
+  pointer-events: auto;
+}
+
 html,
 body,
 #root {

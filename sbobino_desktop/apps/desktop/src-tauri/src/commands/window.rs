@@ -34,7 +34,9 @@ pub async fn open_settings_window(
         settings_url.push_str(target_pane);
     }
 
-    let builder = tauri::WebviewWindowBuilder::new(
+    let main_window = app.get_webview_window("main");
+
+    let mut builder = tauri::WebviewWindowBuilder::new(
         &app,
         "settings",
         tauri::WebviewUrl::App(settings_url.into()),
@@ -47,13 +49,21 @@ pub async fn open_settings_window(
     .title_bar_style(TitleBarStyle::Overlay)
     .hidden_title(true);
 
+    // Make settings an owned child of the main window.
+    // On macOS this keeps settings above main and prevents main from being focused.
+    if let Some(ref parent) = main_window {
+        builder = builder.parent(parent).map_err(|error| {
+            CommandError::new("window", format!("failed to set parent window: {error}"))
+        })?;
+    }
+
     let settings_window = builder.build()
     .map_err(|error| {
         CommandError::new("window", format!("failed to open settings window: {error}"))
     })?;
 
-    if let Some(main_window) = app.get_webview_window("main") {
-        let _ = main_window.emit("settings_opened", ());
+    if let Some(main_win) = main_window {
+        let _ = main_win.emit("settings_opened", ());
         let app_handle = app.clone();
         settings_window.on_window_event(move |event| {
             if let tauri::WindowEvent::Destroyed = event {
