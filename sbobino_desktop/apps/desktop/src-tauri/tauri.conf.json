@@ -35,6 +35,7 @@
     "targets": "all",
     "externalBin": [
       "binaries/whisper-cli",
+      "binaries/whisperkit-cli",
       "binaries/whisper-stream",
       "binaries/ffmpeg"
     ],
@@ -45,7 +46,7 @@
   },
   "plugins": {
     "updater": {
-      "active": false,
+      "active": true,
       "dialog": false,
       "endpoints": [
         "https://github.com/pietroMastro92/sbobbino/releases/latest/download/latest.json"

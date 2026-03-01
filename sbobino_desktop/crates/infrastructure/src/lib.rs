@@ -5,7 +5,10 @@ use std::{
     collections::HashSet,
     env,
     path::{Path, PathBuf},
+    process::Stdio,
     sync::Arc,
+    thread,
+    time::{Duration, Instant},
 };
 use tracing::{info, warn};
 
@@ -24,7 +27,6 @@ use adapters::{
     noop_enhancer::NoopEnhancer,
     openai_compatible::{AuthStyle, OpenAiCompatibleEnhancer},
     whisper_cpp::WhisperCppEngine,
-    whisper_kit::WhisperKitEngine,
     whisper_stream::WhisperStreamEngine,
 };
 use repositories::{
@@ -60,12 +62,17 @@ const REQUIRED_COREML_ENCODERS: [(&str, &str); 5] = [
 
 #[derive(Debug, Clone)]
 pub struct RuntimeHealth {
+    pub host_os: String,
+    pub host_arch: String,
+    pub is_apple_silicon: bool,
+    pub preferred_engine: TranscriptionEngine,
+    pub configured_engine: TranscriptionEngine,
     pub whisper_cli_path: String,
     pub whisper_cli_resolved: String,
-    pub whisperkit_cli_path: String,
-    pub whisperkit_cli_resolved: String,
+    pub whisper_cli_available: bool,
     pub whisper_stream_path: String,
     pub whisper_stream_resolved: String,
+    pub whisper_stream_available: bool,
     pub models_dir_configured: String,
     pub models_dir_resolved: String,
     pub model_filename: String,
@@ -103,46 +110,71 @@ impl RuntimeTranscriptionFactory {
 
     pub fn build_service(&self) -> Result<Arc<TranscriptionService>, String> {
         let mut settings = self.load_settings()?;
+        let mut platform_settings_changed = false;
+
+        // Foundation Models are only supported on Apple Silicon.
+        if !is_apple_silicon_host()
+            && (settings.ai.providers.foundation_apple.enabled
+                || settings.ai.active_provider == AiProvider::FoundationApple)
+        {
+            settings.ai.providers.foundation_apple.enabled = false;
+            if settings.ai.active_provider == AiProvider::FoundationApple {
+                settings.ai.active_provider = AiProvider::None;
+            }
+            platform_settings_changed = true;
+        }
 
         let ffmpeg_path = self.resolve_binary_path(&settings.transcription.ffmpeg_path, "ffmpeg");
-        let whisper_cli_path =
-            self.resolve_binary_path(&settings.transcription.whisper_cli_path, "whisper-cli");
-        let whisperkit_cli_path = self.resolve_binary_path(
+        let whisper_cli_reference =
+            sanitize_whisper_cli_reference(&settings.transcription.whisper_cli_path);
+        if whisper_cli_reference != settings.transcription.whisper_cli_path {
+            settings.transcription.whisper_cli_path = whisper_cli_reference.clone();
+            settings.whisper_cli_path = whisper_cli_reference.clone();
+            platform_settings_changed = true;
+        }
+        let whisper_stream_reference = sanitize_whisper_stream_reference(
             &settings.transcription.whisperkit_cli_path,
-            "whisperkit-cli",
+            &whisper_cli_reference,
         );
+        if whisper_stream_reference != settings.transcription.whisperkit_cli_path {
+            settings.transcription.whisperkit_cli_path = whisper_stream_reference.clone();
+            settings.whisperkit_cli_path = whisper_stream_reference;
+            platform_settings_changed = true;
+        }
+        let whisper_cli_path = self.resolve_binary_path(&whisper_cli_reference, "whisper-cli");
         let models_dir = self.resolve_models_dir(&settings.transcription.models_dir);
+        let whisper_cli_runnable = self.binary_path_is_runnable(&whisper_cli_path);
+
+        if !whisper_cli_runnable {
+            return Err(format!(
+                "Whisper.cpp CLI is not runnable at '{}'. Configure Whisper CLI path in Settings > Local Models.",
+                whisper_cli_path
+            ));
+        }
+
+        let effective_engine = TranscriptionEngine::WhisperCpp;
+
+        if settings.transcription.engine != effective_engine {
+            warn!(
+                "Adjusting transcription engine for current runtime: configured={:?}, effective={:?}",
+                settings.transcription.engine, effective_engine
+            );
+            settings.transcription.engine = effective_engine.clone();
+            settings.transcription_engine = effective_engine.clone();
+            platform_settings_changed = true;
+        }
+
+        if platform_settings_changed {
+            settings.sync_sections_from_legacy();
+            settings.sync_legacy_from_sections();
+            self.settings_repo
+                .save_sync(&settings)
+                .map_err(|e| format!("failed to persist platform-specific settings: {e}"))?;
+        }
 
         let transcoder = Arc::new(FfmpegAdapter::new(ffmpeg_path));
         let speech_engine: Arc<dyn sbobino_application::SpeechToTextEngine> =
-            match settings.transcription.engine {
-                TranscriptionEngine::WhisperCpp => {
-                    Arc::new(WhisperCppEngine::new(whisper_cli_path, models_dir))
-                }
-                TranscriptionEngine::WhisperKit => {
-                    if self.binary_path_is_available(&whisperkit_cli_path) {
-                        Arc::new(WhisperKitEngine::new(whisperkit_cli_path, models_dir))
-                    } else if self.binary_path_is_available(&whisper_cli_path) {
-                        warn!(
-                            "WhisperKit selected but CLI is unavailable ({}). Falling back to Whisper.cpp ({})",
-                            whisperkit_cli_path, whisper_cli_path
-                        );
-                        settings.transcription.engine = TranscriptionEngine::WhisperCpp;
-                        settings.transcription_engine = TranscriptionEngine::WhisperCpp;
-                        settings.sync_sections_from_legacy();
-                        settings.sync_legacy_from_sections();
-                        self.settings_repo
-                            .save_sync(&settings)
-                            .map_err(|e| format!("failed to persist engine fallback: {e}"))?;
-                        Arc::new(WhisperCppEngine::new(whisper_cli_path, models_dir))
-                    } else {
-                        return Err(format!(
-                            "WhisperKit CLI not found at '{}', and Whisper.cpp CLI not found at '{}'. Configure CLI paths in Settings > Local Models.",
-                            whisperkit_cli_path, whisper_cli_path
-                        ));
-                    }
-                }
-            };
+            Arc::new(WhisperCppEngine::new(whisper_cli_path, models_dir));
 
         let enhancer = self
             .build_active_enhancer()
@@ -209,7 +241,7 @@ impl RuntimeTranscriptionFactory {
         optimize_prompt_override: Option<String>,
         summary_prompt_override: Option<String>,
     ) -> Result<Option<FoundationAppleEnhancer>, String> {
-        if !cfg!(target_os = "macos") {
+        if !is_apple_silicon_host() {
             return Ok(None);
         }
 
@@ -388,13 +420,14 @@ impl RuntimeTranscriptionFactory {
 
     pub fn build_whisper_stream_engine(&self) -> Result<WhisperStreamEngine, String> {
         let settings = self.load_settings()?;
-        let whisper_stream_path = self.resolve_binary_path(
-            &settings
-                .transcription
-                .whisper_cli_path
-                .replace("whisper-cli", "whisper-stream"),
-            "whisper-stream",
+        let whisper_cli_reference =
+            sanitize_whisper_cli_reference(&settings.transcription.whisper_cli_path);
+        let whisper_stream_reference = sanitize_whisper_stream_reference(
+            &settings.transcription.whisperkit_cli_path,
+            &whisper_cli_reference,
         );
+        let whisper_stream_path =
+            self.resolve_binary_path(&whisper_stream_reference, "whisper-stream");
         let models_dir = self.resolve_models_dir(&settings.transcription.models_dir);
         Ok(WhisperStreamEngine::new(whisper_stream_path, models_dir))
     }
@@ -419,19 +452,21 @@ impl RuntimeTranscriptionFactory {
         let resolved_models_dir = self.resolve_models_dir(&configured_models_dir);
         let models_dir = PathBuf::from(&resolved_models_dir);
 
-        let whisper_cli_configured = settings.transcription.whisper_cli_path.clone();
-        let whisperkit_cli_configured = settings.transcription.whisperkit_cli_path.clone();
-        let whisper_stream_configured = settings
-            .transcription
-            .whisper_cli_path
-            .replace("whisper-cli", "whisper-stream");
+        let whisper_cli_configured =
+            sanitize_whisper_cli_reference(&settings.transcription.whisper_cli_path);
+        let whisper_stream_configured = sanitize_whisper_stream_reference(
+            &settings.transcription.whisperkit_cli_path,
+            &whisper_cli_configured,
+        );
 
         let whisper_cli_resolution =
             self.resolve_binary_details(&whisper_cli_configured, "whisper-cli");
-        let whisperkit_cli_resolution =
-            self.resolve_binary_details(&whisperkit_cli_configured, "whisperkit-cli");
         let whisper_stream_resolution =
             self.resolve_binary_details(&whisper_stream_configured, "whisper-stream");
+        let whisper_cli_available =
+            self.binary_path_is_runnable(&whisper_cli_resolution.resolved_path);
+        let whisper_stream_available =
+            self.binary_path_is_runnable(&whisper_stream_resolution.resolved_path);
 
         let model_filename = settings.transcription.model.ggml_filename().to_string();
         let model_present = models_dir.join(&model_filename).exists();
@@ -443,12 +478,17 @@ impl RuntimeTranscriptionFactory {
         };
 
         Ok(RuntimeHealth {
+            host_os: env::consts::OS.to_string(),
+            host_arch: env::consts::ARCH.to_string(),
+            is_apple_silicon: is_apple_silicon_host(),
+            preferred_engine: preferred_transcription_engine(),
+            configured_engine: settings.transcription.engine.clone(),
             whisper_cli_path: whisper_cli_configured,
             whisper_cli_resolved: whisper_cli_resolution.resolved_path,
-            whisperkit_cli_path: whisperkit_cli_configured,
-            whisperkit_cli_resolved: whisperkit_cli_resolution.resolved_path,
+            whisper_cli_available,
             whisper_stream_path: whisper_stream_configured,
             whisper_stream_resolved: whisper_stream_resolution.resolved_path,
+            whisper_stream_available,
             models_dir_configured: configured_models_dir,
             models_dir_resolved: resolved_models_dir,
             model_filename,
@@ -494,13 +534,22 @@ impl RuntimeTranscriptionFactory {
     fn resolve_binary_details(&self, configured: &str, fallback: &str) -> BinaryResolution {
         let configured_trimmed = configured.trim();
 
-        if let Some(path) = self.find_binary_candidate(configured_trimmed) {
+        let configured_candidate = self.find_binary_candidate(configured_trimmed);
+        if let Some(path) = configured_candidate.as_ref() {
+            if is_runnable_binary_file(path) {
+                return BinaryResolution {
+                    resolved_path: path.to_string_lossy().to_string(),
+                };
+            }
+        }
+
+        if let Some(path) = self.find_binary_candidate(fallback) {
             return BinaryResolution {
                 resolved_path: path.to_string_lossy().to_string(),
             };
         }
 
-        if let Some(path) = self.find_binary_candidate(fallback) {
+        if let Some(path) = configured_candidate {
             return BinaryResolution {
                 resolved_path: path.to_string_lossy().to_string(),
             };
@@ -525,51 +574,173 @@ impl RuntimeTranscriptionFactory {
         let mut candidates = Vec::<PathBuf>::new();
         let has_separator = trimmed.contains('/') || trimmed.contains('\\');
         let expanded = expand_home(trimmed);
+        let expanded_path = PathBuf::from(&expanded);
 
         if has_separator {
-            let path = PathBuf::from(&expanded);
-            if path.is_absolute() {
-                candidates.push(path);
+            let Some(file_name) = expanded_path.file_name().and_then(|name| name.to_str()) else {
+                if expanded_path.is_absolute() {
+                    candidates.push(expanded_path.clone());
+                } else {
+                    candidates.push(self.data_dir.join(&expanded_path));
+                    candidates.push(expanded_path.clone());
+                }
+                let mut seen = HashSet::<PathBuf>::new();
+                return candidates
+                    .into_iter()
+                    .filter(|candidate| seen.insert(candidate.clone()))
+                    .find(|candidate| candidate.is_file());
+            };
+            let names = binary_name_variants(file_name);
+            if expanded_path.is_absolute() {
+                for name in &names {
+                    let mut candidate = expanded_path.clone();
+                    candidate.set_file_name(name);
+                    candidates.push(candidate);
+                }
             } else {
-                candidates.push(self.data_dir.join(&path));
-                candidates.push(path);
+                for name in &names {
+                    let mut local = expanded_path.clone();
+                    local.set_file_name(name);
+                    candidates.push(self.data_dir.join(&local));
+                    candidates.push(local);
+                }
             }
         } else {
+            let names = binary_name_variants(trimmed);
             // Tauri sidecar: binaries are placed next to the app executable
             if let Ok(exe) = std::env::current_exe() {
                 if let Some(exe_dir) = exe.parent() {
-                    candidates.push(exe_dir.join(trimmed));
+                    for name in &names {
+                        candidates.push(exe_dir.join(name));
+                    }
                 }
             }
-            candidates.push(self.data_dir.join("bin").join(trimmed));
-            candidates.push(self.data_dir.join(trimmed));
-            candidates.push(PathBuf::from("/opt/homebrew/bin").join(trimmed));
-            candidates.push(PathBuf::from("/usr/local/bin").join(trimmed));
-            candidates.push(PathBuf::from("/usr/bin").join(trimmed));
+            // Dev fallback: resolve sidecar wrappers directly from src-tauri/binaries
+            // so local runs work without requiring global CLI installations.
+            let dev_sidecar_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../apps/desktop/src-tauri/binaries");
+            for name in &names {
+                candidates.push(dev_sidecar_dir.join(name));
+            }
+            for name in &names {
+                candidates.push(self.data_dir.join("bin").join(name));
+                candidates.push(self.data_dir.join(name));
+                candidates.push(PathBuf::from("/opt/homebrew/bin").join(name));
+                candidates.push(PathBuf::from("/usr/local/bin").join(name));
+                candidates.push(PathBuf::from("/usr/bin").join(name));
+            }
 
             if let Some(path_entries) = env::var_os("PATH") {
                 for entry in env::split_paths(&path_entries) {
-                    candidates.push(entry.join(trimmed));
+                    for name in &names {
+                        candidates.push(entry.join(name));
+                    }
                 }
             }
         }
 
         let mut seen = HashSet::<PathBuf>::new();
-        candidates
+        let deduped = candidates
             .into_iter()
             .filter(|candidate| seen.insert(candidate.clone()))
-            .find(|candidate| candidate.is_file())
-    }
+            .collect::<Vec<_>>();
 
-    fn binary_path_is_available(&self, resolved_path: &str) -> bool {
-        let candidate = PathBuf::from(resolved_path);
-        if candidate.is_absolute() || resolved_path.contains('/') || resolved_path.contains('\\') {
-            return candidate.is_file();
+        if has_separator {
+            return deduped
+                .iter()
+                .find(|candidate| is_runnable_binary_file(candidate))
+                .cloned()
+                .or_else(|| {
+                    deduped
+                        .iter()
+                        .find(|candidate| is_executable_file(candidate))
+                        .cloned()
+                })
+                .or_else(|| deduped.into_iter().find(|candidate| candidate.is_file()));
         }
 
-        self.find_binary_candidate(resolved_path).is_some()
+        deduped
+            .iter()
+            .find(|candidate| is_runnable_binary_file(candidate))
+            .cloned()
+            .or_else(|| {
+                deduped
+                    .iter()
+                    .find(|candidate| is_executable_file(candidate))
+                    .cloned()
+            })
+            .or_else(|| deduped.into_iter().find(|candidate| candidate.is_file()))
     }
 
+    fn binary_path_is_runnable(&self, resolved_path: &str) -> bool {
+        let Some(candidate) = self.resolve_existing_binary_path(resolved_path) else {
+            return false;
+        };
+
+        is_runnable_binary_file(&candidate)
+    }
+
+    fn resolve_existing_binary_path(&self, resolved_path: &str) -> Option<PathBuf> {
+        let candidate = PathBuf::from(resolved_path);
+        if candidate.is_absolute() || resolved_path.contains('/') || resolved_path.contains('\\') {
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+
+        self.find_binary_candidate(resolved_path)
+    }
+}
+
+fn is_runnable_binary_file(candidate: &Path) -> bool {
+    let Ok(metadata) = candidate.metadata() else {
+        return false;
+    };
+
+    if !metadata.is_file() {
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o111 == 0 {
+            return false;
+        }
+    }
+
+    let mut child = match std::process::Command::new(candidate)
+        .arg("--help")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(process) => process,
+        Err(_) => return false,
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return false;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
+}
+impl RuntimeTranscriptionFactory {
     fn migrate_models_dir_if_needed(&self, settings: &mut AppSettings) -> Result<(), String> {
         let current_models_dir =
             PathBuf::from(self.resolve_models_dir(&settings.transcription.models_dir));
@@ -607,9 +778,130 @@ impl RuntimeTranscriptionFactory {
     }
 }
 
+fn is_apple_silicon_host() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        if cfg!(target_arch = "aarch64") {
+            return true;
+        }
+
+        if let Ok(output) = std::process::Command::new("sysctl")
+            .args(["-n", "hw.optional.arm64"])
+            .output()
+        {
+            if output.status.success() {
+                return String::from_utf8_lossy(&output.stdout).trim() == "1";
+            }
+        }
+        false
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+fn preferred_transcription_engine() -> TranscriptionEngine {
+    TranscriptionEngine::WhisperCpp
+}
+
+fn sanitize_whisper_cli_reference(configured: &str) -> String {
+    let trimmed = configured.trim();
+    if trimmed.is_empty() || is_legacy_whisperkit_cli_reference(trimmed) {
+        return "whisper-cli".to_string();
+    }
+    trimmed.to_string()
+}
+
+fn sanitize_whisper_stream_reference(
+    configured_stream: &str,
+    whisper_cli_reference: &str,
+) -> String {
+    let trimmed = configured_stream.trim();
+    if trimmed.is_empty() || is_legacy_whisperkit_cli_reference(trimmed) {
+        return derive_whisper_stream_reference(whisper_cli_reference);
+    }
+
+    if trimmed.contains("whisper-cli") {
+        return derive_whisper_stream_reference(trimmed);
+    }
+
+    trimmed.to_string()
+}
+
+fn is_legacy_whisperkit_cli_reference(value: &str) -> bool {
+    value.to_ascii_lowercase().contains("whisperkit-cli")
+}
+
+fn derive_whisper_stream_reference(whisper_cli_path: &str) -> String {
+    let trimmed = whisper_cli_path.trim();
+    if trimmed.is_empty() {
+        return "whisper-stream".to_string();
+    }
+
+    if trimmed.contains("whisper-cli") {
+        return trimmed.replacen("whisper-cli", "whisper-stream", 1);
+    }
+
+    "whisper-stream".to_string()
+}
+
+fn target_triple_suffix() -> &'static str {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        "aarch64-apple-darwin"
+    }
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    {
+        "x86_64-apple-darwin"
+    }
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        "x86_64-unknown-linux-gnu"
+    }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    {
+        "aarch64-unknown-linux-gnu"
+    }
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    {
+        "x86_64-pc-windows-msvc"
+    }
+    #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+    {
+        "aarch64-pc-windows-msvc"
+    }
+}
+
+fn binary_name_variants(base_name: &str) -> Vec<String> {
+    let trimmed = base_name.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    let suffix = target_triple_suffix();
+    let mut variants = vec![trimmed.to_string()];
+
+    if !trimmed.ends_with(suffix) {
+        variants.push(format!("{trimmed}-{suffix}"));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if !trimmed.ends_with(".exe") {
+            variants.push(format!("{trimmed}.exe"));
+        }
+        let suffixed = format!("{trimmed}-{suffix}");
+        if !suffixed.ends_with(".exe") {
+            variants.push(format!("{suffixed}.exe"));
+        }
+    }
+
+    variants
+}
+
 #[derive(Clone)]
 pub struct InfrastructureBundle {
-    pub transcription_service: Arc<TranscriptionService>,
     pub artifact_service: Arc<ArtifactService>,
     pub settings_service: Arc<SettingsService>,
     pub runtime_factory: Arc<RuntimeTranscriptionFactory>,
@@ -617,12 +909,10 @@ pub struct InfrastructureBundle {
 
 pub fn bootstrap(data_dir: &Path) -> Result<InfrastructureBundle, String> {
     let runtime_factory = Arc::new(RuntimeTranscriptionFactory::new(data_dir)?);
-    let transcription_service = runtime_factory.build_service()?;
     let artifact_service = runtime_factory.artifact_service();
     let settings_service = runtime_factory.settings_service();
 
     Ok(InfrastructureBundle {
-        transcription_service,
         artifact_service,
         settings_service,
         runtime_factory,
@@ -700,6 +990,26 @@ fn legacy_models_dir() -> Option<PathBuf> {
             .join("sbobino")
             .join("models")
     })
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(metadata) = path.metadata() {
+            return metadata.permissions().mode() & 0o111 != 0;
+        }
+        false
+    }
+
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 fn expand_home(path: &str) -> String {

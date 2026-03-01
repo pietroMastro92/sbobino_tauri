@@ -12,6 +12,7 @@ export type LanguageCode =
 export type SpeechModel = "tiny" | "base" | "small" | "medium" | "large_turbo";
 export type TranscriptionEngine = "whisper_cpp" | "whisper_kit";
 export type ArtifactKind = "file" | "realtime";
+export type AppearanceMode = "system" | "light" | "dark";
 
 export type AiProvider = "none" | "foundation_apple" | "gemini";
 export type RemoteServiceKind =
@@ -37,12 +38,15 @@ export type PromptTask = "optimize" | "summary" | "faq";
 export type GeneralSettings = {
   auto_update_enabled: boolean;
   auto_update_repo: string;
+  appearance_mode: AppearanceMode;
 };
 
 export type WhisperOptions = {
   translate_to_english: boolean;
   no_context: boolean;
   split_on_word: boolean;
+  tinydiarize: boolean;
+  diarize: boolean;
   temperature: number;
   temperature_increment_on_fallback: number;
   temperature_fallback_count: number;
@@ -184,6 +188,7 @@ export type TranscriptionDelta = {
   job_id: string;
   text: string;
   sequence: number;
+  mode?: "append" | "replace";
 };
 
 export type TranscriptArtifact = {
@@ -199,6 +204,27 @@ export type TranscriptArtifact = {
   metadata: Record<string, string>;
   created_at: string;
   updated_at: string;
+};
+
+export type TimelineV2Word = {
+  text: string;
+  start_seconds?: number;
+  end_seconds?: number;
+  confidence?: number;
+};
+
+export type TimelineV2Segment = {
+  text: string;
+  start_seconds?: number;
+  end_seconds?: number;
+  speaker_id?: string;
+  speaker_label?: string;
+  words?: TimelineV2Word[];
+};
+
+export type TimelineV2 = {
+  version: number;
+  segments: TimelineV2Segment[];
 };
 
 export type StartTranscriptionPayload = {
@@ -245,12 +271,17 @@ export type ProvisioningModelCatalogEntry = {
 };
 
 export type RuntimeHealth = {
+  host_os: string;
+  host_arch: string;
+  is_apple_silicon: boolean;
+  preferred_engine: TranscriptionEngine;
+  configured_engine: TranscriptionEngine;
   whisper_cli_path: string;
   whisper_cli_resolved: string;
-  whisperkit_cli_path: string;
-  whisperkit_cli_resolved: string;
+  whisper_cli_available: boolean;
   whisper_stream_path: string;
   whisper_stream_resolved: string;
+  whisper_stream_available: boolean;
   models_dir_configured: string;
   models_dir_resolved: string;
   model_filename: string;
@@ -258,6 +289,26 @@ export type RuntimeHealth = {
   coreml_encoder_present: boolean;
   missing_models: string[];
   missing_encoders: string[];
+};
+
+export type TranscriptionStartPreflight = {
+  allowed: boolean;
+  reason_code: string;
+  message: string;
+  engine: TranscriptionEngine;
+  model_filename: string;
+  model_path: string;
+  whisper_cli_resolved: string;
+  whisper_stream_resolved: string;
+};
+
+export type EnsureRuntimeResponse = {
+  ready: boolean;
+  engine: TranscriptionEngine;
+  did_setup: boolean;
+  message: string;
+  whisper_cli_resolved: string;
+  whisper_stream_resolved: string;
 };
 
 export type UpdateCheckResponse = {

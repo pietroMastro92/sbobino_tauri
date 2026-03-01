@@ -27,6 +27,12 @@ pub struct UpdateArtifactPayload {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct UpdateArtifactTimelinePayload {
+    pub id: String,
+    pub timeline_v2: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ChatArtifactPayload {
     pub id: String,
     pub prompt: String,
@@ -239,6 +245,18 @@ pub async fn update_artifact(
             &payload.summary,
             &payload.faqs,
         )
+        .await
+        .map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub async fn update_artifact_timeline(
+    state: State<'_, AppState>,
+    payload: UpdateArtifactTimelinePayload,
+) -> Result<Option<TranscriptArtifact>, CommandError> {
+    state
+        .artifact_service
+        .update_timeline_v2(&payload.id, &payload.timeline_v2)
         .await
         .map_err(CommandError::from)
 }

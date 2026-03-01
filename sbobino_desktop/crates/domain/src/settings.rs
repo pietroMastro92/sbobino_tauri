@@ -57,8 +57,8 @@ impl SpeechModel {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TranscriptionEngine {
-    WhisperKit,
     #[default]
+    #[serde(alias = "whisper_kit")]
     WhisperCpp,
 }
 
@@ -69,6 +69,15 @@ pub enum AiProvider {
     None,
     FoundationApple,
     Gemini,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AppearanceMode {
+    #[default]
+    System,
+    Light,
+    Dark,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -126,6 +135,7 @@ pub struct PromptTemplate {
 pub struct GeneralSettings {
     pub auto_update_enabled: bool,
     pub auto_update_repo: String,
+    pub appearance_mode: AppearanceMode,
 }
 
 impl Default for GeneralSettings {
@@ -133,6 +143,7 @@ impl Default for GeneralSettings {
         Self {
             auto_update_enabled: true,
             auto_update_repo: "pietroMastro92/sbobbino".to_string(),
+            appearance_mode: AppearanceMode::System,
         }
     }
 }
@@ -145,6 +156,9 @@ pub struct WhisperOptions {
     // whisper.cpp-focused controls
     pub no_context: bool,
     pub split_on_word: bool,
+    // Speaker diarization controls (whisper.cpp)
+    pub tinydiarize: bool,
+    pub diarize: bool,
     // Shared thresholds / decoding controls
     pub temperature: f32,
     pub temperature_increment_on_fallback: f32,
@@ -158,7 +172,7 @@ pub struct WhisperOptions {
     pub beam_size: u8,
     pub threads: u8,
     pub processors: u8,
-    // WhisperKit-focused controls
+    // Legacy controls retained for settings compatibility
     pub use_prefill_prompt: bool,
     pub use_prefill_cache: bool,
     pub without_timestamps: bool,
@@ -180,6 +194,8 @@ impl Default for WhisperOptions {
             translate_to_english: false,
             no_context: false,
             split_on_word: false,
+            tinydiarize: false,
+            diarize: false,
             temperature: 0.0,
             temperature_increment_on_fallback: 0.2,
             temperature_fallback_count: 5,
@@ -212,6 +228,7 @@ pub struct TranscriptionSettings {
     pub model: SpeechModel,
     pub language: LanguageCode,
     pub whisper_cli_path: String,
+    #[serde(alias = "whisper_stream_path")]
     pub whisperkit_cli_path: String,
     pub ffmpeg_path: String,
     pub models_dir: String,
@@ -226,7 +243,7 @@ impl Default for TranscriptionSettings {
             model: SpeechModel::Base,
             language: LanguageCode::Auto,
             whisper_cli_path: "whisper-cli".to_string(),
-            whisperkit_cli_path: "whisperkit-cli".to_string(),
+            whisperkit_cli_path: "whisper-stream".to_string(),
             ffmpeg_path: "ffmpeg".to_string(),
             models_dir: "models".to_string(),
             enable_ai_post_processing: false,
@@ -343,6 +360,7 @@ pub struct AppSettings {
     pub gemini_model: String,
     pub gemini_api_key: Option<String>,
     pub whisper_cli_path: String,
+    #[serde(alias = "whisper_stream_path")]
     pub whisperkit_cli_path: String,
     pub ffmpeg_path: String,
     pub models_dir: String,

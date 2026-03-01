@@ -22,6 +22,147 @@ impl ArtifactKind {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct TimedWord {
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_seconds: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_seconds: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct TimedSegment {
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_seconds: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_seconds: Option<f32>,
+    // Hook for future diarization support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_id: Option<String>,
+    // Hook for future diarization support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub words: Vec<TimedWord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct TranscriptionOutput {
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub segments: Vec<TimedSegment>,
+}
+
+impl TranscriptionOutput {
+    pub fn from_text(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            segments: Vec::new(),
+        }
+    }
+
+    pub fn timeline_v2_metadata_json(&self) -> String {
+        timeline_v2_json_from_segments(&self.segments)
+    }
+}
+
+fn timeline_v2_json_from_segments(segments: &[TimedSegment]) -> String {
+    let mut output = String::from("{\"version\":2,\"segments\":[");
+
+    for (segment_index, segment) in segments.iter().enumerate() {
+        if segment_index > 0 {
+            output.push(',');
+        }
+
+        output.push('{');
+        output.push_str("\"text\":");
+        push_json_string(&mut output, &segment.text);
+
+        if let Some(start) = segment.start_seconds.filter(|value| value.is_finite()) {
+            output.push_str(",\"start_seconds\":");
+            output.push_str(&format_json_number(start));
+        }
+        if let Some(end) = segment.end_seconds.filter(|value| value.is_finite()) {
+            output.push_str(",\"end_seconds\":");
+            output.push_str(&format_json_number(end));
+        }
+        if let Some(speaker_id) = segment.speaker_id.as_deref() {
+            output.push_str(",\"speaker_id\":");
+            push_json_string(&mut output, speaker_id);
+        }
+        if let Some(speaker_label) = segment.speaker_label.as_deref() {
+            output.push_str(",\"speaker_label\":");
+            push_json_string(&mut output, speaker_label);
+        }
+
+        output.push_str(",\"words\":[");
+        for (word_index, word) in segment.words.iter().enumerate() {
+            if word_index > 0 {
+                output.push(',');
+            }
+
+            output.push('{');
+            output.push_str("\"text\":");
+            push_json_string(&mut output, &word.text);
+
+            if let Some(start) = word.start_seconds.filter(|value| value.is_finite()) {
+                output.push_str(",\"start_seconds\":");
+                output.push_str(&format_json_number(start));
+            }
+            if let Some(end) = word.end_seconds.filter(|value| value.is_finite()) {
+                output.push_str(",\"end_seconds\":");
+                output.push_str(&format_json_number(end));
+            }
+            if let Some(confidence) = word.confidence.filter(|value| value.is_finite()) {
+                output.push_str(",\"confidence\":");
+                output.push_str(&format_json_number(confidence));
+            }
+
+            output.push('}');
+        }
+        output.push_str("]}");
+    }
+
+    output.push_str("]}");
+    output
+}
+
+fn push_json_string(output: &mut String, value: &str) {
+    output.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => output.push_str("\\\""),
+            '\\' => output.push_str("\\\\"),
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            '\t' => output.push_str("\\t"),
+            '\u{0008}' => output.push_str("\\b"),
+            '\u{000C}' => output.push_str("\\f"),
+            ch if ch <= '\u{001F}' => {
+                let escaped = format!("\\u{:04X}", ch as u32);
+                output.push_str(&escaped);
+            }
+            _ => output.push(ch),
+        }
+    }
+    output.push('"');
+}
+
+fn format_json_number(value: f32) -> String {
+    let mut rendered = format!("{value:.6}");
+    while rendered.contains('.') && rendered.ends_with('0') {
+        rendered.pop();
+    }
+    if rendered.ends_with('.') {
+        rendered.push('0');
+    }
+    rendered
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscriptArtifact {
     pub id: String,

@@ -1,18 +1,47 @@
+use std::net::TcpListener;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use async_trait::async_trait;
+use futures_util::StreamExt;
+use reqwest::multipart;
+use serde::Deserialize;
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 use tokio::process::Command;
-use tokio::time::{timeout, Duration};
+use tokio::time::{timeout, Duration, Instant};
+use tracing::warn;
 
 use sbobino_application::{ApplicationError, SpeechToTextEngine};
-use sbobino_domain::WhisperOptions;
+use sbobino_domain::{TimedSegment, TranscriptionOutput, WhisperOptions};
 
 #[derive(Debug, Clone)]
 pub struct WhisperKitEngine {
     binary_path: String,
     models_dir: String,
+}
+
+const DELTA_REPLACE_PREFIX: &str = "\u{001F}REPLACE:";
+const SERVER_STARTUP_ATTEMPTS: usize = 1200;
+const SERVER_STARTUP_DELAY: Duration = Duration::from_millis(250);
+const SERVER_TRANSCRIBE_TIMEOUT: Duration = Duration::from_secs(900);
+
+#[derive(Debug, Deserialize, Default)]
+struct WhisperKitSseEvent {
+    #[serde(default)]
+    r#type: String,
+    #[serde(default)]
+    delta: String,
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    progress: Option<f32>,
+    #[serde(default)]
+    current_time: Option<f32>,
+    #[serde(default)]
+    total_time: Option<f32>,
 }
 
 impl WhisperKitEngine {
@@ -76,6 +105,23 @@ impl WhisperKitEngine {
         }
     }
 
+    fn format_cli_float(value: f32, fallback: f32) -> String {
+        let sanitized = if value.is_finite() { value } else { fallback };
+        let normalized = if sanitized.abs() < f32::EPSILON {
+            0.0
+        } else {
+            sanitized
+        };
+        let mut rendered = format!("{normalized:.6}");
+        while rendered.contains('.') && rendered.ends_with('0') {
+            rendered.pop();
+        }
+        if rendered.ends_with('.') {
+            rendered.push('0');
+        }
+        rendered
+    }
+
     fn wav_duration_seconds(wav_path: &Path) -> Option<f32> {
         let reader = hound::WavReader::open(wav_path).ok()?;
         let spec = reader.spec();
@@ -130,6 +176,113 @@ impl WhisperKitEngine {
             .find_map(|token| token.strip_suffix('%'))
             .and_then(|value| value.trim().parse::<f32>().ok())
             .map(|value| value.clamp(0.0, 100.0))
+    }
+
+    fn parse_timecode_seconds(value: &str) -> Option<f32> {
+        let parts: Vec<&str> = value.trim().split(':').collect();
+        if parts.len() == 3 {
+            let hh = parts[0].parse::<f32>().ok()?;
+            let mm = parts[1].parse::<f32>().ok()?;
+            let ss = parts[2].parse::<f32>().ok()?;
+            Some((hh * 3600.0) + (mm * 60.0) + ss)
+        } else if parts.len() == 2 {
+            let mm = parts[0].parse::<f32>().ok()?;
+            let ss = parts[1].parse::<f32>().ok()?;
+            Some((mm * 60.0) + ss)
+        } else {
+            None
+        }
+    }
+
+    fn parse_timed_segment_line(raw_line: &str) -> Option<TimedSegment> {
+        let cleaned = raw_line.trim();
+        if cleaned.is_empty() {
+            return None;
+        }
+
+        let mut start_seconds = None;
+        let mut end_seconds = None;
+        let text = if cleaned.starts_with('[') {
+            match cleaned.find(']') {
+                Some(end_index) => {
+                    let marker = cleaned[1..end_index].trim();
+                    if let Some((start, end)) = marker.split_once("-->") {
+                        start_seconds = Self::parse_timecode_seconds(start.trim());
+                        end_seconds = Self::parse_timecode_seconds(end.trim());
+                    }
+                    cleaned[end_index + 1..].trim()
+                }
+                None => cleaned,
+            }
+        } else {
+            cleaned
+        };
+
+        if text.is_empty() {
+            return None;
+        }
+
+        Some(TimedSegment {
+            text: text.to_string(),
+            start_seconds,
+            end_seconds,
+            speaker_id: None,
+            speaker_label: None,
+            words: Vec::new(),
+        })
+    }
+
+    fn output_from_text(transcript: String) -> TranscriptionOutput {
+        let segments = transcript
+            .lines()
+            .filter_map(Self::parse_timed_segment_line)
+            .collect::<Vec<_>>();
+
+        TranscriptionOutput {
+            text: transcript,
+            segments,
+        }
+    }
+
+    fn reserve_ephemeral_port() -> Result<u16, ApplicationError> {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|e| {
+            ApplicationError::SpeechToText(format!(
+                "failed to reserve local WhisperKit server port: {e}"
+            ))
+        })?;
+        let port = listener.local_addr().map_err(|e| {
+            ApplicationError::SpeechToText(format!(
+                "failed to read local WhisperKit server port: {e}"
+            ))
+        })?;
+        Ok(port.port())
+    }
+
+    fn sse_event_boundary(buffer: &str) -> Option<(usize, usize)> {
+        let lf = buffer.find("\n\n").map(|idx| (idx, 2));
+        let crlf = buffer.find("\r\n\r\n").map(|idx| (idx, 4));
+        match (lf, crlf) {
+            (Some(left), Some(right)) => Some(if left.0 <= right.0 { left } else { right }),
+            (Some(left), None) => Some(left),
+            (None, Some(right)) => Some(right),
+            (None, None) => None,
+        }
+    }
+
+    fn extract_sse_payload(raw_event: &str) -> Option<String> {
+        let mut data_lines = Vec::<String>::new();
+        for line in raw_event.lines() {
+            let normalized = line.trim_end_matches('\r');
+            if let Some(value) = normalized.strip_prefix("data:") {
+                data_lines.push(value.trim_start().to_string());
+            }
+        }
+
+        if data_lines.is_empty() {
+            None
+        } else {
+            Some(data_lines.join("\n"))
+        }
     }
 
     fn process_stream_line(
@@ -281,60 +434,48 @@ impl WhisperKitEngine {
         }
     }
 
-    async fn transcribe_with_cli(
-        &self,
-        input_wav: &Path,
-        model_filename: &str,
+    fn apply_whisperkit_options(
+        command: &mut Command,
         language_code: &str,
         options: &WhisperOptions,
-        emit_partial: Arc<dyn Fn(String) + Send + Sync>,
-        emit_progress_seconds: Arc<dyn Fn(f32) + Send + Sync>,
-    ) -> Result<String, ApplicationError> {
-        let model_name = Self::resolve_model_name(model_filename)?;
-        tokio::fs::create_dir_all(&self.models_dir)
-            .await
-            .map_err(|e| {
-                ApplicationError::SpeechToText(format!(
-                    "failed to ensure WhisperKit models directory '{}': {e}",
-                    self.models_dir
-                ))
-            })?;
-
-        let total_audio_seconds = Self::wav_duration_seconds(input_wav);
-        let mut command = Command::new(&self.binary_path);
+    ) {
         command
-            .kill_on_drop(true)
-            .arg("transcribe")
-            .arg("--audio-path")
-            .arg(input_wav)
-            .arg("--model")
-            .arg(model_name)
-            .arg("--download-model-path")
-            .arg(&self.models_dir)
-            .arg("--download-tokenizer-path")
-            .arg(&self.models_dir)
             .arg("--task")
             .arg(if options.translate_to_english {
                 "translate"
             } else {
                 "transcribe"
             })
-            .arg("--temperature")
-            .arg(options.temperature.to_string())
-            .arg("--temperature-increment-on-fallback")
-            .arg(options.temperature_increment_on_fallback.to_string())
-            .arg("--temperature-fallback-count")
-            .arg(options.temperature_fallback_count.to_string())
-            .arg("--best-of")
-            .arg(options.best_of.to_string())
-            .arg("--logprob-threshold")
-            .arg(options.logprob_threshold.to_string())
-            .arg("--first-token-log-prob-threshold")
-            .arg(options.first_token_logprob_threshold.to_string())
-            .arg("--no-speech-threshold")
-            .arg(options.no_speech_threshold.to_string())
-            .arg("--concurrent-worker-count")
-            .arg(options.concurrent_worker_count.to_string())
+            // Use --key=value form for numeric args so negative values are parsed correctly.
+            .arg(format!(
+                "--temperature={}",
+                Self::format_cli_float(options.temperature, 0.0)
+            ))
+            .arg(format!(
+                "--temperature-increment-on-fallback={}",
+                Self::format_cli_float(options.temperature_increment_on_fallback, 0.2)
+            ))
+            .arg(format!(
+                "--temperature-fallback-count={}",
+                options.temperature_fallback_count
+            ))
+            .arg(format!("--best-of={}", options.best_of))
+            .arg(format!(
+                "--logprob-threshold={}",
+                Self::format_cli_float(options.logprob_threshold, -1.0)
+            ))
+            .arg(format!(
+                "--first-token-log-prob-threshold={}",
+                Self::format_cli_float(options.first_token_logprob_threshold, -1.5)
+            ))
+            .arg(format!(
+                "--no-speech-threshold={}",
+                Self::format_cli_float(options.no_speech_threshold, 0.6)
+            ))
+            .arg(format!(
+                "--concurrent-worker-count={}",
+                options.concurrent_worker_count
+            ))
             .arg("--chunking-strategy")
             .arg(Self::map_chunking_strategy(&options.chunking_strategy))
             .arg("--audio-encoder-compute-units")
@@ -342,10 +483,7 @@ impl WhisperKitEngine {
                 &options.audio_encoder_compute_units,
             ))
             .arg("--text-decoder-compute-units")
-            .arg(Self::map_compute_units(&options.text_decoder_compute_units))
-            .arg("--verbose")
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
+            .arg(Self::map_compute_units(&options.text_decoder_compute_units));
 
         if !language_code.trim().is_empty() && language_code != "auto" {
             command.arg("--language").arg(language_code);
@@ -371,6 +509,388 @@ impl WhisperKitEngine {
         {
             command.arg("--prompt").arg(prompt);
         }
+    }
+
+    async fn transcribe_with_server(
+        &self,
+        input_wav: &Path,
+        model_filename: &str,
+        language_code: &str,
+        options: &WhisperOptions,
+        emit_partial: Arc<dyn Fn(String) + Send + Sync>,
+        emit_progress_seconds: Arc<dyn Fn(f32) + Send + Sync>,
+    ) -> Result<TranscriptionOutput, ApplicationError> {
+        let model_name = Self::resolve_model_name(model_filename)?;
+        tokio::fs::create_dir_all(&self.models_dir)
+            .await
+            .map_err(|e| {
+                ApplicationError::SpeechToText(format!(
+                    "failed to ensure WhisperKit models directory '{}': {e}",
+                    self.models_dir
+                ))
+            })?;
+
+        let total_audio_seconds = Self::wav_duration_seconds(input_wav);
+        let port = Self::reserve_ephemeral_port()?;
+        let host = "127.0.0.1";
+        let base_url = format!("http://{host}:{port}");
+
+        let mut command = Command::new(&self.binary_path);
+        command
+            .kill_on_drop(true)
+            .arg("serve")
+            .arg("--model")
+            .arg(model_name)
+            .arg("--download-model-path")
+            .arg(&self.models_dir)
+            .arg("--download-tokenizer-path")
+            .arg(&self.models_dir)
+            .arg("--host")
+            .arg(host)
+            .arg("--port")
+            .arg(port.to_string())
+            .arg("--verbose")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        Self::apply_whisperkit_options(&mut command, language_code, options);
+
+        let mut server = command.spawn().map_err(|e| {
+            ApplicationError::SpeechToText(format!(
+                "whisperkit-cli server failed to start at '{}': {e}. Configure WhisperKit CLI path in Settings > Local Models.",
+                self.binary_path
+            ))
+        })?;
+
+        let stdout = server.stdout.take().ok_or_else(|| {
+            ApplicationError::SpeechToText("missing whisperkit-cli server stdout pipe".to_string())
+        })?;
+        let stderr = server.stderr.take().ok_or_else(|| {
+            ApplicationError::SpeechToText("missing whisperkit-cli server stderr pipe".to_string())
+        })?;
+
+        let stdout_progress = emit_progress_seconds.clone();
+        let stdout_task = tokio::spawn(async move {
+            Self::consume_stream(stdout, true, total_audio_seconds, stdout_progress).await
+        });
+
+        let stderr_progress = emit_progress_seconds.clone();
+        let stderr_task = tokio::spawn(async move {
+            Self::consume_stream(stderr, false, None, stderr_progress).await
+        });
+
+        let saw_real_progress = Arc::new(AtomicBool::new(false));
+        let synthetic_progress_stop = Arc::new(AtomicBool::new(false));
+        let synthetic_progress_task = total_audio_seconds.map(|total| {
+            let emit = emit_progress_seconds.clone();
+            let saw_real_progress = saw_real_progress.clone();
+            let synthetic_progress_stop = synthetic_progress_stop.clone();
+            tokio::spawn(async move {
+                let started_at = Instant::now();
+                // Conservative ETA: slightly faster than realtime but never too aggressive.
+                let estimated_runtime = (total * 0.85).max(12.0);
+
+                loop {
+                    if synthetic_progress_stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    if synthetic_progress_stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+
+                    if saw_real_progress.load(Ordering::Relaxed) {
+                        continue;
+                    }
+
+                    let elapsed = started_at.elapsed().as_secs_f32();
+                    let ratio = (elapsed / estimated_runtime).clamp(0.0, 0.97);
+                    emit((total * ratio).clamp(0.0, total));
+                }
+            })
+        });
+
+        let result = async {
+            let client = reqwest::Client::builder().build().map_err(|e| {
+                ApplicationError::SpeechToText(format!(
+                    "failed to initialize WhisperKit streaming client: {e}"
+                ))
+            })?;
+
+            let mut ready = false;
+            for _ in 0..SERVER_STARTUP_ATTEMPTS {
+                if let Some(status) = server.try_wait().map_err(|e| {
+                    ApplicationError::SpeechToText(format!(
+                        "failed while checking whisperkit-cli server state: {e}"
+                    ))
+                })? {
+                    if !status.success() {
+                        return Err(ApplicationError::SpeechToText(
+                            "whisperkit-cli server exited before becoming ready".to_string(),
+                        ));
+                    }
+                }
+
+                match timeout(
+                    Duration::from_secs(1),
+                    tokio::net::TcpStream::connect((host, port)),
+                )
+                .await
+                {
+                    Ok(Ok(_)) => {
+                        ready = true;
+                        break;
+                    }
+                    Ok(Err(_)) | Err(_) => tokio::time::sleep(SERVER_STARTUP_DELAY).await,
+                }
+            }
+
+            if !ready {
+                return Err(ApplicationError::SpeechToText(
+                    "whisperkit-cli server did not become ready in time".to_string(),
+                ));
+            }
+
+            let audio_bytes = tokio::fs::read(input_wav).await.map_err(|e| {
+                ApplicationError::SpeechToText(format!(
+                    "failed to read temporary wav for WhisperKit streaming: {e}"
+                ))
+            })?;
+
+            let mut form = multipart::Form::new()
+                .part(
+                    "file",
+                    multipart::Part::bytes(audio_bytes)
+                        .file_name("audio.wav")
+                        .mime_str("audio/wav")
+                        .map_err(|e| {
+                            ApplicationError::SpeechToText(format!(
+                                "failed to prepare WhisperKit upload part: {e}"
+                            ))
+                        })?,
+                )
+                .text("model", model_name.to_string())
+                .text("stream", "true".to_string());
+
+            if !language_code.trim().is_empty() && language_code != "auto" {
+                form = form.text("language", language_code.to_string());
+            }
+            if options.translate_to_english {
+                form = form.text("task", "translate".to_string());
+            }
+
+            let response = timeout(
+                SERVER_TRANSCRIBE_TIMEOUT,
+                client
+                    .post(format!("{base_url}/v1/audio/transcriptions"))
+                    .multipart(form)
+                    .send(),
+            )
+            .await
+            .map_err(|_| {
+                ApplicationError::SpeechToText(
+                    "whisperkit-cli streaming request timed out after 900s".to_string(),
+                )
+            })?
+            .map_err(|e| {
+                ApplicationError::SpeechToText(format!(
+                    "failed to call whisperkit-cli streaming endpoint: {e}"
+                ))
+            })?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                let details = body.trim();
+                return Err(ApplicationError::SpeechToText(format!(
+                    "whisperkit-cli streaming endpoint failed ({}): {}",
+                    status,
+                    if details.is_empty() {
+                        "empty response body".to_string()
+                    } else {
+                        details.to_string()
+                    }
+                )));
+            }
+
+            let mut transcript_snapshot = String::new();
+            let mut final_text: Option<String> = None;
+            let mut pending = String::new();
+            let mut stream = response.bytes_stream();
+            let mut done = false;
+
+            while !done {
+                let Some(next_chunk) = stream.next().await else {
+                    break;
+                };
+                let chunk = next_chunk.map_err(|e| {
+                    ApplicationError::SpeechToText(format!(
+                        "failed to read whisperkit-cli streaming response: {e}"
+                    ))
+                })?;
+                pending.push_str(&String::from_utf8_lossy(&chunk));
+
+                while let Some((event_end, delimiter_len)) = Self::sse_event_boundary(&pending) {
+                    let raw_event = pending[..event_end].to_string();
+                    pending.drain(..event_end + delimiter_len);
+
+                    let Some(payload) = Self::extract_sse_payload(&raw_event) else {
+                        continue;
+                    };
+
+                    if payload.trim() == "[DONE]" {
+                        done = true;
+                        break;
+                    }
+
+                    let parsed = serde_json::from_str::<WhisperKitSseEvent>(&payload)
+                        .unwrap_or_else(|_| WhisperKitSseEvent {
+                            text: payload,
+                            ..WhisperKitSseEvent::default()
+                        });
+
+                    if let Some(progress) = parsed.progress {
+                        if let Some(total) = total_audio_seconds {
+                            saw_real_progress.store(true, Ordering::Relaxed);
+                            emit_progress_seconds(
+                                (progress.clamp(0.0, 1.0) * total).clamp(0.0, total),
+                            );
+                        }
+                    } else if let (Some(current), Some(total)) =
+                        (parsed.current_time, parsed.total_time)
+                    {
+                        if total > 0.0 {
+                            saw_real_progress.store(true, Ordering::Relaxed);
+                            emit_progress_seconds(current.clamp(0.0, total));
+                        }
+                    }
+
+                    match parsed.r#type.as_str() {
+                        "transcript.text.delta" => {
+                            if !parsed.delta.is_empty() {
+                                transcript_snapshot.push_str(&parsed.delta);
+                            } else if !parsed.text.is_empty() {
+                                transcript_snapshot = parsed.text;
+                            }
+
+                            let normalized = transcript_snapshot.trim().to_string();
+                            if !normalized.is_empty() {
+                                emit_partial(format!("{DELTA_REPLACE_PREFIX}{normalized}"));
+                            }
+                        }
+                        "transcript.text.done" => {
+                            let candidate = if !parsed.text.trim().is_empty() {
+                                parsed.text.trim().to_string()
+                            } else {
+                                transcript_snapshot.trim().to_string()
+                            };
+                            if !candidate.is_empty() {
+                                emit_partial(format!("{DELTA_REPLACE_PREFIX}{candidate}"));
+                                final_text = Some(candidate);
+                            }
+                        }
+                        _ => {
+                            if !parsed.text.trim().is_empty() {
+                                transcript_snapshot = parsed.text.trim().to_string();
+                                emit_partial(format!(
+                                    "{DELTA_REPLACE_PREFIX}{}",
+                                    transcript_snapshot
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+
+            final_text
+                .or_else(|| {
+                    let fallback = transcript_snapshot.trim().to_string();
+                    if fallback.is_empty() {
+                        None
+                    } else {
+                        Some(fallback)
+                    }
+                })
+                .ok_or_else(|| {
+                    ApplicationError::SpeechToText(
+                        "whisperkit-cli streaming produced empty output".to_string(),
+                    )
+                })
+        }
+        .await;
+
+        synthetic_progress_stop.store(true, Ordering::Relaxed);
+        if let Some(task) = synthetic_progress_task {
+            let _ = task.await;
+        }
+
+        let _ = server.start_kill();
+        let _ = server.wait().await;
+
+        let stdout_lines = stdout_task.await.map_err(|e| {
+            ApplicationError::SpeechToText(format!("server stdout reader task failed: {e}"))
+        })??;
+        let stderr_lines = stderr_task.await.map_err(|e| {
+            ApplicationError::SpeechToText(format!("server stderr reader task failed: {e}"))
+        })??;
+
+        match result {
+            Ok(transcript) => Ok(Self::output_from_text(transcript)),
+            Err(error) => {
+                let stderr_output = stderr_lines.join("\n").trim().to_string();
+                let stdout_output = stdout_lines.join("\n").trim().to_string();
+                let details = if !stderr_output.is_empty() {
+                    stderr_output
+                } else {
+                    stdout_output
+                };
+                if details.is_empty() {
+                    Err(error)
+                } else {
+                    Err(ApplicationError::SpeechToText(format!(
+                        "{error}; {details}"
+                    )))
+                }
+            }
+        }
+    }
+
+    async fn transcribe_with_cli(
+        &self,
+        input_wav: &Path,
+        model_filename: &str,
+        language_code: &str,
+        options: &WhisperOptions,
+        emit_partial: Arc<dyn Fn(String) + Send + Sync>,
+        emit_progress_seconds: Arc<dyn Fn(f32) + Send + Sync>,
+    ) -> Result<TranscriptionOutput, ApplicationError> {
+        let model_name = Self::resolve_model_name(model_filename)?;
+        tokio::fs::create_dir_all(&self.models_dir)
+            .await
+            .map_err(|e| {
+                ApplicationError::SpeechToText(format!(
+                    "failed to ensure WhisperKit models directory '{}': {e}",
+                    self.models_dir
+                ))
+            })?;
+
+        let total_audio_seconds = Self::wav_duration_seconds(input_wav);
+        let mut command = Command::new(&self.binary_path);
+        command
+            .kill_on_drop(true)
+            .arg("transcribe")
+            .arg("--audio-path")
+            .arg(input_wav)
+            .arg("--model")
+            .arg(model_name)
+            .arg("--download-model-path")
+            .arg(&self.models_dir)
+            .arg("--download-tokenizer-path")
+            .arg(&self.models_dir)
+            .arg("--verbose")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        Self::apply_whisperkit_options(&mut command, language_code, options);
 
         let mut child = command.spawn().map_err(|e| {
             ApplicationError::SpeechToText(format!(
@@ -445,7 +965,7 @@ impl WhisperKitEngine {
             }
         }
 
-        Ok(transcript)
+        Ok(Self::output_from_text(transcript))
     }
 }
 
@@ -457,17 +977,34 @@ impl SpeechToTextEngine for WhisperKitEngine {
         model_filename: &str,
         language_code: &str,
         options: &WhisperOptions,
+        _total_audio_seconds: Option<f32>,
         emit_partial: Arc<dyn Fn(String) + Send + Sync>,
         emit_progress_seconds: Arc<dyn Fn(f32) + Send + Sync>,
-    ) -> Result<String, ApplicationError> {
-        self.transcribe_with_cli(
-            input_wav,
-            model_filename,
-            language_code,
-            options,
-            emit_partial,
-            emit_progress_seconds,
-        )
-        .await
+    ) -> Result<TranscriptionOutput, ApplicationError> {
+        match self
+            .transcribe_with_server(
+                input_wav,
+                model_filename,
+                language_code,
+                options,
+                emit_partial.clone(),
+                emit_progress_seconds.clone(),
+            )
+            .await
+        {
+            Ok(transcript) => Ok(transcript),
+            Err(server_error) => {
+                warn!("WhisperKit streaming mode failed, falling back to CLI mode: {server_error}");
+                self.transcribe_with_cli(
+                    input_wav,
+                    model_filename,
+                    language_code,
+                    options,
+                    emit_partial,
+                    emit_progress_seconds,
+                )
+                .await
+            }
+        }
     }
 }

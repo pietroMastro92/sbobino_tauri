@@ -9,7 +9,7 @@ use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 
 use sbobino_application::{ApplicationError, SpeechToTextEngine};
-use sbobino_domain::WhisperOptions;
+use sbobino_domain::{TimedSegment, TimedWord, TranscriptionOutput, WhisperOptions};
 
 #[derive(Debug, Clone)]
 pub struct WhisperCppEngine {
@@ -19,12 +19,12 @@ pub struct WhisperCppEngine {
 
 #[derive(Default)]
 struct TranscriptCollector {
-    lines: Vec<String>,
+    segments: Vec<TimedSegment>,
 }
 
-struct ParsedCliLine {
-    text: String,
-    end_seconds: Option<f32>,
+enum ParsedCliEvent {
+    Segment(TimedSegment),
+    ProgressPercent(f32),
 }
 
 impl WhisperCppEngine {
@@ -70,12 +70,40 @@ impl WhisperCppEngine {
         }
     }
 
-    fn parse_cli_line(raw_line: &str) -> Option<ParsedCliLine> {
+    fn parse_progress_percent(text: &str) -> Option<f32> {
+        let percent_index = text.find('%')?;
+        let before_percent = &text[..percent_index];
+        let mut candidate: Option<&str> = None;
+        for token in before_percent.split(|ch: char| ch.is_whitespace() || ch == '=' || ch == ':') {
+            let trimmed = token.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed
+                .chars()
+                .all(|ch| ch.is_ascii_digit() || ch == '.' || ch == ',')
+            {
+                candidate = Some(trimmed);
+            }
+        }
+
+        let value = candidate?.replace(',', ".");
+        value
+            .parse::<f32>()
+            .ok()
+            .filter(|parsed| parsed.is_finite())
+            .map(|parsed| parsed.clamp(0.0, 100.0))
+    }
+
+    fn parse_cli_line(raw_line: &str) -> Option<ParsedCliEvent> {
         let cleaned = raw_line
             .replace("\u{001b}[2K", "")
             .replace("\u{001b}[0m", "")
             .replace("[2K]", "")
             .replace("[BLANK_AUDIO]", "")
+            .split('\r')
+            .last()
+            .unwrap_or("")
             .trim()
             .to_string();
 
@@ -83,7 +111,7 @@ impl WhisperCppEngine {
             return None;
         }
 
-        const NOISE_PREFIXES: [&str; 10] = [
+        const NOISE_PREFIXES: [&str; 9] = [
             "init:",
             "main:",
             "whisper_",
@@ -93,58 +121,125 @@ impl WhisperCppEngine {
             "sampling_",
             "encode",
             "decode",
-            "progress",
         ];
 
         if NOISE_PREFIXES
             .iter()
             .any(|prefix| cleaned.starts_with(prefix))
         {
+            if let Some(progress_percent) = Self::parse_progress_percent(&cleaned) {
+                return Some(ParsedCliEvent::ProgressPercent(progress_percent));
+            }
             return None;
         }
 
-        let mut end_seconds = None;
-
-        let without_timestamp = if cleaned.starts_with('[') {
-            match cleaned.find(']') {
-                Some(end_index) => {
-                    let bracket_content = cleaned[1..end_index].trim();
-                    if bracket_content.contains("-->") {
-                        if let Some((_, end_value)) = bracket_content.split_once("-->") {
-                            end_seconds = Self::parse_timecode_seconds(end_value.trim());
-                        }
-                        cleaned[end_index + 1..].trim().to_string()
-                    } else {
-                        cleaned
-                    }
-                }
-                None => cleaned,
+        if !cleaned.starts_with('[') {
+            if let Some(progress_percent) = Self::parse_progress_percent(&cleaned) {
+                return Some(ParsedCliEvent::ProgressPercent(progress_percent));
             }
-        } else {
-            cleaned
-        };
+            return None;
+        }
+
+        let end_index = cleaned.find(']')?;
+        let bracket_content = cleaned[1..end_index].trim();
+        let (start_value, end_value) = bracket_content.split_once("-->")?;
+        let start_seconds = Self::parse_timecode_seconds(start_value.trim());
+        let end_seconds = Self::parse_timecode_seconds(end_value.trim());
+
+        let without_timestamp = cleaned[end_index + 1..].trim().to_string();
 
         let normalized = without_timestamp.trim().to_string();
         if normalized.is_empty() {
             return None;
         }
 
-        Some(ParsedCliLine {
+        let words = Self::build_word_candidates(&normalized, start_seconds, end_seconds);
+        let segment = TimedSegment {
             text: normalized,
+            start_seconds,
             end_seconds,
-        })
+            speaker_id: None,
+            speaker_label: None,
+            words,
+        };
+
+        Some(ParsedCliEvent::Segment(segment))
     }
 
-    fn collect_line(
-        collector: &Arc<Mutex<TranscriptCollector>>,
-        emit_partial: &Arc<dyn Fn(String) + Send + Sync>,
-        line: String,
-    ) {
-        if let Ok(mut state) = collector.lock() {
-            state.lines.push(line.clone());
+    fn build_word_candidates(
+        text: &str,
+        start_seconds: Option<f32>,
+        end_seconds: Option<f32>,
+    ) -> Vec<TimedWord> {
+        let (Some(start), Some(end)) = (
+            start_seconds.filter(|value| value.is_finite()),
+            end_seconds.filter(|value| value.is_finite()),
+        ) else {
+            return Vec::new();
+        };
+
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Vec::new();
         }
 
-        emit_partial(line);
+        if trimmed.split_whitespace().count() != 1 {
+            return Vec::new();
+        }
+
+        vec![TimedWord {
+            text: trimmed.to_string(),
+            start_seconds: Some(start),
+            end_seconds: Some(end),
+            confidence: None,
+        }]
+    }
+
+    fn collect_segment(
+        collector: &Arc<Mutex<TranscriptCollector>>,
+        emit_partial: &Arc<dyn Fn(String) + Send + Sync>,
+        segment: TimedSegment,
+    ) {
+        if let Ok(mut state) = collector.lock() {
+            state.segments.push(segment.clone());
+        }
+
+        emit_partial(segment.text);
+    }
+
+    fn join_segment_text(segments: &[TimedSegment]) -> String {
+        segments
+            .iter()
+            .map(|segment| segment.text.trim())
+            .filter(|segment| !segment.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn segments_from_transcript_text(transcript: &str) -> Vec<TimedSegment> {
+        transcript
+            .lines()
+            .filter_map(|line| {
+                match Self::parse_cli_line(line) {
+                    Some(ParsedCliEvent::Segment(segment)) => Some(segment),
+                    _ => {
+                        let trimmed = line.trim();
+                        if trimmed.is_empty() {
+                            None
+                        } else {
+                            Some(TimedSegment {
+                                text: trimmed.to_string(),
+                                start_seconds: None,
+                                end_seconds: None,
+                                speaker_id: None,
+                                speaker_label: None,
+                                words: Vec::new(),
+                            })
+                        }
+                    }
+                }
+            })
+            .collect::<Vec<_>>()
     }
 
     async fn consume_stream<R>(
@@ -152,6 +247,7 @@ impl WhisperCppEngine {
         collector: Arc<Mutex<TranscriptCollector>>,
         emit_partial: Arc<dyn Fn(String) + Send + Sync>,
         emit_progress_seconds: Arc<dyn Fn(f32) + Send + Sync>,
+        total_audio_seconds: Option<f32>,
     ) -> Result<Vec<String>, ApplicationError>
     where
         R: AsyncRead + Unpin,
@@ -164,10 +260,20 @@ impl WhisperCppEngine {
         while let Ok(Some(raw)) = lines.next_line().await {
             raw_lines.push(raw.clone());
             if let Some(parsed_line) = Self::parse_cli_line(&raw) {
-                if let Some(end_seconds) = parsed_line.end_seconds {
-                    emit_progress_seconds(end_seconds);
+                match parsed_line {
+                    ParsedCliEvent::Segment(segment) => {
+                        if let Some(end_seconds) = segment.end_seconds {
+                            emit_progress_seconds(end_seconds);
+                        }
+                        Self::collect_segment(&collector, &emit_partial, segment);
+                    }
+                    ParsedCliEvent::ProgressPercent(progress_percent) => {
+                        if let Some(total_seconds) = total_audio_seconds.filter(|v| *v > 0.0) {
+                            let estimated_seconds = (progress_percent / 100.0) * total_seconds;
+                            emit_progress_seconds(estimated_seconds);
+                        }
+                    }
                 }
-                Self::collect_line(&collector, &emit_partial, parsed_line.text);
             }
         }
 
@@ -195,9 +301,10 @@ impl WhisperCppEngine {
         model_path: &Path,
         language_code: &str,
         options: &WhisperOptions,
+        total_audio_seconds: Option<f32>,
         emit_partial: Arc<dyn Fn(String) + Send + Sync>,
         emit_progress_seconds: Arc<dyn Fn(f32) + Send + Sync>,
-    ) -> Result<String, ApplicationError> {
+    ) -> Result<TranscriptionOutput, ApplicationError> {
         let output_base = std::env::temp_dir().join(format!(
             "sbobino-whisper-{}-{}",
             std::process::id(),
@@ -276,6 +383,12 @@ impl WhisperCppEngine {
         if options.split_on_word {
             command.arg("-sow");
         }
+        if options.tinydiarize {
+            command.arg("-tdrz");
+        }
+        if options.diarize {
+            command.arg("-di");
+        }
         if options.beam_size > 1 {
             command.arg("-bs").arg(options.beam_size.to_string());
         } else if options.best_of > 1 {
@@ -284,6 +397,7 @@ impl WhisperCppEngine {
 
         command
             .arg("-otxt")
+            .arg("-pp")
             .arg("-of")
             .arg(&output_base)
             .stdout(std::process::Stdio::piped())
@@ -308,15 +422,31 @@ impl WhisperCppEngine {
         let stdout_emit = emit_partial.clone();
         let stdout_progress = emit_progress_seconds.clone();
         let stdout_collector = collected.clone();
+        let stdout_total_seconds = total_audio_seconds;
         let stdout_task = tokio::spawn(async move {
-            Self::consume_stream(stdout, stdout_collector, stdout_emit, stdout_progress).await
+            Self::consume_stream(
+                stdout,
+                stdout_collector,
+                stdout_emit,
+                stdout_progress,
+                stdout_total_seconds,
+            )
+            .await
         });
 
         let stderr_emit = emit_partial.clone();
         let stderr_progress = emit_progress_seconds.clone();
         let stderr_collector = collected.clone();
+        let stderr_total_seconds = total_audio_seconds;
         let stderr_task = tokio::spawn(async move {
-            Self::consume_stream(stderr, stderr_collector, stderr_emit, stderr_progress).await
+            Self::consume_stream(
+                stderr,
+                stderr_collector,
+                stderr_emit,
+                stderr_progress,
+                stderr_total_seconds,
+            )
+            .await
         });
 
         let status = match timeout(Duration::from_secs(900), child.wait()).await {
@@ -341,8 +471,8 @@ impl WhisperCppEngine {
         })??;
         let stderr_output = stderr_lines.join("\n");
 
-        let transcript_lines = if let Ok(state) = collected.lock() {
-            state.lines.clone()
+        let segments = if let Ok(state) = collected.lock() {
+            state.segments.clone()
         } else {
             Vec::new()
         };
@@ -366,8 +496,7 @@ impl WhisperCppEngine {
             Err(_) => None,
         };
 
-        let transcript =
-            transcript_from_file.unwrap_or_else(|| transcript_lines.join("\n").trim().to_string());
+        let transcript = transcript_from_file.unwrap_or_else(|| Self::join_segment_text(&segments));
 
         let _ = fs::remove_file(&output_txt_path).await;
 
@@ -377,7 +506,16 @@ impl WhisperCppEngine {
             ));
         }
 
-        Ok(transcript)
+        let segments = if segments.is_empty() {
+            Self::segments_from_transcript_text(&transcript)
+        } else {
+            segments
+        };
+
+        Ok(TranscriptionOutput {
+            text: transcript,
+            segments,
+        })
     }
 }
 
@@ -389,15 +527,17 @@ impl SpeechToTextEngine for WhisperCppEngine {
         model_filename: &str,
         language_code: &str,
         options: &WhisperOptions,
+        total_audio_seconds: Option<f32>,
         emit_partial: Arc<dyn Fn(String) + Send + Sync>,
         emit_progress_seconds: Arc<dyn Fn(f32) + Send + Sync>,
-    ) -> Result<String, ApplicationError> {
+    ) -> Result<TranscriptionOutput, ApplicationError> {
         let model_path = self.validate_model_exists(model_filename)?;
         self.transcribe_with_cli(
             input_wav,
             &model_path,
             language_code,
             options,
+            total_audio_seconds,
             emit_partial,
             emit_progress_seconds,
         )

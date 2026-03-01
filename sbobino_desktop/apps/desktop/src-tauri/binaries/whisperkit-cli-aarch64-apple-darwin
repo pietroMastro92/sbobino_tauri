@@ -1,0 +1,26 @@
+#!/bin/sh
+set -eu
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+SELF_PATH="$SCRIPT_DIR/$(basename -- "$0")"
+for candidate in \
+  "$SCRIPT_DIR/whisperkit-cli" \
+  "/opt/homebrew/bin/whisperkit-cli" \
+  "/usr/local/bin/whisperkit-cli" \
+  "whisperkit-cli"
+do
+  if [ "${candidate#*/}" != "$candidate" ]; then
+    if [ -x "$candidate" ]; then
+      CANDIDATE_PATH="$(CDPATH= cd -- "$(dirname -- "$candidate")" && pwd)/$(basename -- "$candidate")"
+      if [ "$CANDIDATE_PATH" = "$SELF_PATH" ]; then
+        continue
+      fi
+      exec "$candidate" "$@"
+    fi
+  else
+    if command -v "$candidate" >/dev/null 2>&1; then
+      exec "$candidate" "$@"
+    fi
+  fi
+done
+echo "whisperkit-cli not found. Install with: brew install whisperkit-cli" >&2
+exit 127

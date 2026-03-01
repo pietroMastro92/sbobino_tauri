@@ -10,4 +10,5 @@ pub use error::ApplicationError;
 pub use ports::{
     ArtifactRepository, AudioTranscoder, SettingsRepository, SpeechToTextEngine, TranscriptEnhancer,
 };
+pub use sbobino_domain::{TimedSegment, TimedWord, TranscriptionOutput};
 pub use services::{ArtifactService, SettingsService, TranscriptionService};

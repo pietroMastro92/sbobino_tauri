@@ -10,7 +10,9 @@ use tokio::fs;
 use tokio_util::sync::CancellationToken;
 use tracing::{instrument, warn};
 
-use sbobino_domain::{ArtifactKind, JobProgress, JobStage, TranscriptArtifact};
+use sbobino_domain::{
+    ArtifactKind, JobProgress, JobStage, TranscriptArtifact, TranscriptionOutput,
+};
 
 use crate::{
     dto::{RunTranscriptionRequest, SummaryFaq},
@@ -142,7 +144,7 @@ impl TranscriptionService {
                 }) as Arc<dyn Fn(f32) + Send + Sync>
             };
 
-            let raw_transcript = self
+            let transcription_output = self
                 .run_cancellable(
                     &cancellation_token,
                     self.speech_engine.transcribe(
@@ -150,11 +152,18 @@ impl TranscriptionService {
                         request.model.ggml_filename(),
                         request.language.as_whisper_code(),
                         &request.whisper_options,
+                        total_audio_seconds,
                         emit_delta.clone(),
                         progress_callback,
                     ),
                 )
                 .await?;
+            let raw_transcript = Self::select_raw_transcript(&transcription_output);
+            if raw_transcript.is_empty() {
+                return Err(ApplicationError::SpeechToText(
+                    "speech-to-text engine produced empty output".to_string(),
+                ));
+            }
 
             if let Some(total) = total_audio_seconds {
                 self.emit(
@@ -233,6 +242,10 @@ impl TranscriptionService {
             metadata.insert(
                 "language".to_string(),
                 request.language.as_whisper_code().to_string(),
+            );
+            metadata.insert(
+                "timeline_v2".to_string(),
+                transcription_output.timeline_v2_metadata_json(),
             );
 
             let artifact = TranscriptArtifact::new(
@@ -360,6 +373,23 @@ impl TranscriptionService {
             current_seconds,
             total_seconds,
         });
+    }
+
+    fn select_raw_transcript(transcription_output: &TranscriptionOutput) -> String {
+        let direct = transcription_output.text.trim();
+        if !direct.is_empty() {
+            return direct.to_string();
+        }
+
+        transcription_output
+            .segments
+            .iter()
+            .map(|segment| segment.text.trim())
+            .filter(|segment| !segment.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_string()
     }
 
     fn wav_duration_seconds(&self, wav_path: &Path) -> Option<f32> {

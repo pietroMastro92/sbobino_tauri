@@ -56,6 +56,16 @@ impl ArtifactService {
             .await
     }
 
+    pub async fn update_timeline_v2(
+        &self,
+        id: &str,
+        timeline_v2_json: &str,
+    ) -> Result<Option<TranscriptArtifact>, ApplicationError> {
+        self.artifacts
+            .update_timeline_v2(id, timeline_v2_json)
+            .await
+    }
+
     pub async fn rename(
         &self,
         id: &str,

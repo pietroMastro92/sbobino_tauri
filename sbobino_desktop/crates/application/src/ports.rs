@@ -2,7 +2,9 @@ use std::path::Path;
 
 use async_trait::async_trait;
 
-use sbobino_domain::{AppSettings, ArtifactKind, TranscriptArtifact, WhisperOptions};
+use sbobino_domain::{
+    AppSettings, ArtifactKind, TranscriptArtifact, TranscriptionOutput, WhisperOptions,
+};
 
 use crate::{dto::SummaryFaq, ApplicationError};
 
@@ -19,9 +21,10 @@ pub trait SpeechToTextEngine: Send + Sync {
         model_filename: &str,
         language_code: &str,
         options: &WhisperOptions,
+        total_audio_seconds: Option<f32>,
         emit_partial: std::sync::Arc<dyn Fn(String) + Send + Sync>,
         emit_progress_seconds: std::sync::Arc<dyn Fn(f32) + Send + Sync>,
-    ) -> Result<String, ApplicationError>;
+    ) -> Result<TranscriptionOutput, ApplicationError>;
 }
 
 #[async_trait]
@@ -62,6 +65,11 @@ pub trait ArtifactRepository: Send + Sync {
         optimized_transcript: &str,
         summary: &str,
         faqs: &str,
+    ) -> Result<Option<TranscriptArtifact>, ApplicationError>;
+    async fn update_timeline_v2(
+        &self,
+        id: &str,
+        timeline_v2_json: &str,
     ) -> Result<Option<TranscriptArtifact>, ApplicationError>;
     async fn rename(
         &self,

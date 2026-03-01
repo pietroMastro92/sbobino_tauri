@@ -4,6 +4,7 @@ import type {
   AiSettings,
   AppSettings,
   ArtifactKind,
+  EnsureRuntimeResponse,
   JobProgress,
   PromptTask,
   PromptTemplate,
@@ -15,6 +16,7 @@ import type {
   RuntimeHealth,
   StartTranscriptionPayload,
   TestPromptResponse,
+  TranscriptionStartPreflight,
   TranscriptionDelta,
   TranscriptArtifact,
   UpdateAiProvidersPayload,
@@ -142,6 +144,13 @@ export async function updateArtifact(payload: {
   return invoke<TranscriptArtifact | null>("update_artifact", { payload });
 }
 
+export async function updateArtifactTimeline(payload: {
+  id: string;
+  timeline_v2: string;
+}): Promise<TranscriptArtifact | null> {
+  return invoke<TranscriptArtifact | null>("update_artifact_timeline", { payload });
+}
+
 export async function renameArtifact(payload: {
   id: string;
   new_title: string;
@@ -255,6 +264,16 @@ export async function provisioningCancel(): Promise<void> {
 
 export async function fetchRuntimeHealth(): Promise<RuntimeHealth> {
   return invoke<RuntimeHealth>("get_transcription_runtime_health");
+}
+
+export async function ensureTranscriptionRuntime(): Promise<EnsureRuntimeResponse> {
+  return invoke<EnsureRuntimeResponse>("ensure_transcription_runtime");
+}
+
+export async function fetchTranscriptionStartPreflight(payload: {
+  model: StartTranscriptionPayload["model"];
+}): Promise<TranscriptionStartPreflight> {
+  return invoke<TranscriptionStartPreflight>("get_transcription_start_preflight", { payload });
 }
 
 export async function readAudioFile(path: string): Promise<number[]> {

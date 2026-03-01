@@ -14,7 +14,7 @@ use sbobino_application::{
 };
 use sbobino_domain::{
     ArtifactKind, JobProgress, JobStage, LanguageCode, SpeechModel, TranscriptArtifact,
-    WhisperOptions,
+    TranscriptionOutput, WhisperOptions,
 };
 
 #[derive(Default)]
@@ -43,10 +43,11 @@ impl SpeechToTextEngine for MockSpeechEngine {
         _model_filename: &str,
         _language_code: &str,
         _options: &WhisperOptions,
+        _total_audio_seconds: Option<f32>,
         _emit_partial: Arc<dyn Fn(String) + Send + Sync>,
         _emit_progress_seconds: Arc<dyn Fn(f32) + Send + Sync>,
-    ) -> Result<String, ApplicationError> {
-        Ok(self.transcript.clone())
+    ) -> Result<TranscriptionOutput, ApplicationError> {
+        Ok(TranscriptionOutput::from_text(self.transcript.clone()))
     }
 }
 
@@ -187,6 +188,23 @@ impl ArtifactRepository for InMemoryArtifactRepository {
         artifact.optimized_transcript = optimized_transcript.to_string();
         artifact.summary = summary.to_string();
         artifact.faqs = faqs.to_string();
+        artifact.touch();
+        Ok(Some(artifact.clone()))
+    }
+
+    async fn update_timeline_v2(
+        &self,
+        id: &str,
+        timeline_v2_json: &str,
+    ) -> Result<Option<TranscriptArtifact>, ApplicationError> {
+        let mut artifacts = self.artifacts.lock().expect("artifact repo lock poisoned");
+        let Some(artifact) = artifacts.iter_mut().find(|artifact| artifact.id == id) else {
+            return Ok(None);
+        };
+
+        artifact
+            .metadata
+            .insert("timeline_v2".to_string(), timeline_v2_json.to_string());
         artifact.touch();
         Ok(Some(artifact.clone()))
     }

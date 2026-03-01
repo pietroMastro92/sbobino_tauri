@@ -1,6 +1,15 @@
-import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { confirm as confirmDialog, open, save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { check as checkAppUpdate, type Update as TauriUpdate } from "@tauri-apps/plugin-updater";
 import {
   ArrowLeft,
   AudioLines,
@@ -45,7 +54,9 @@ import {
   checkUpdates,
   deleteArtifacts,
   emptyDeletedArtifacts,
+  ensureTranscriptionRuntime,
   exportArtifact,
+  fetchTranscriptionStartPreflight,
   fetchRuntimeHealth,
   fetchSettingsSnapshot,
   getArtifact,
@@ -83,9 +94,11 @@ import {
   subscribeSettingsUpdated,
   testPromptTemplate,
   updateArtifact,
+  updateArtifactTimeline,
 } from "./lib/tauri";
 import { useAppStore } from "./state/useAppStore";
 import type {
+  AppearanceMode,
   AppSettings,
   ArtifactKind,
   JobProgress,
@@ -99,6 +112,7 @@ import type {
   RemoteServiceKind,
   RuntimeHealth,
   SpeechModel,
+  TimelineV2,
   TranscriptionEngine,
   TranscriptArtifact,
   UpdateCheckResponse,
@@ -140,12 +154,20 @@ type SettingsPane =
   | "general"
   | "transcription"
   | "whisper_cpp"
-  | "whisper_kit"
   | "local_models"
   | "ai_services"
   | "prompts"
   | "advanced";
 type ChatMessage = { role: "user" | "assistant"; text: string };
+
+type DetailSegment = {
+  sourceIndex: number;
+  time: string;
+  line: string;
+  speakerLabel: string | null;
+  startSeconds: number | null;
+  endSeconds: number | null;
+};
 
 type PromptTestState = {
   input: string;
@@ -173,14 +195,32 @@ const modelOptions: Array<{ value: SpeechModel; label: string }> = [
   { value: "large_turbo", label: "Large Turbo" },
 ];
 
-const isAppleSilicon = navigator.userAgent.toLowerCase().includes("mac") && !navigator.userAgent.includes("Intel");
+function guessAppleSiliconFromUA(): boolean {
+  const ua = (navigator.userAgent ?? "").toLowerCase();
+  const platform = (navigator.platform ?? "").toLowerCase();
+  const isMac = ua.includes("macintosh") || platform.includes("mac");
 
-const transcriptionEngineOptions: Array<{ value: TranscriptionEngine; label: string }> = [
+  const userAgentData = (navigator as Navigator & {
+    userAgentData?: { architecture?: string; platform?: string };
+  }).userAgentData;
+  const uaArch = userAgentData?.architecture?.toLowerCase() ?? "";
+  const uaPlatform = userAgentData?.platform?.toLowerCase() ?? "";
+
+  if (uaPlatform.includes("mac") && uaArch.includes("arm")) {
+    return true;
+  }
+  if (!isMac) {
+    return false;
+  }
+
+  // Safari on Apple Silicon often reports "Intel" in UA, so default to true on macOS
+  // and let backend runtime-health override with authoritative host architecture.
+  return true;
+}
+
+const allTranscriptionEngineOptions: Array<{ value: TranscriptionEngine; label: string }> = [
   { value: "whisper_cpp", label: "Whisper C++" },
 ];
-if (isAppleSilicon) {
-  transcriptionEngineOptions.unshift({ value: "whisper_kit", label: "WhisperKit" });
-}
 
 const chunkingOptions: Array<{ value: WhisperOptions["chunking_strategy"]; label: string }> = [
   { value: "vad", label: "Voice Activity Detection" },
@@ -306,10 +346,10 @@ const serviceCatalog: ServiceCatalogItem[] = [
 ];
 
 const defaultPromptTestInput = "This is an example of some transcribed text.";
-function getDefaultWhisperOptions(): WhisperOptions {
+function getDefaultWhisperOptions(useAppleSiliconDefaults = guessAppleSiliconFromUA()): WhisperOptions {
   // On Intel Macs: use more CPU threads, greedy beam search, and CPU-only compute units
   // (no Neural Engine or CoreML acceleration available)
-  const threads = isAppleSilicon
+  const threads = useAppleSiliconDefaults
     ? 4
     : Math.max(4, Math.min(8, Math.floor((navigator.hardwareConcurrency ?? 8) / 2)));
 
@@ -317,6 +357,8 @@ function getDefaultWhisperOptions(): WhisperOptions {
     translate_to_english: false,
     no_context: false,
     split_on_word: false,
+    tinydiarize: false,
+    diarize: false,
     temperature: 0,
     temperature_increment_on_fallback: 0.2,
     temperature_fallback_count: 5,
@@ -325,8 +367,8 @@ function getDefaultWhisperOptions(): WhisperOptions {
     first_token_logprob_threshold: -1.5,
     no_speech_threshold: 0.6,
     word_threshold: 0.01,
-    best_of: isAppleSilicon ? 5 : 1,
-    beam_size: isAppleSilicon ? 1 : 5,
+    best_of: useAppleSiliconDefaults ? 5 : 1,
+    beam_size: useAppleSiliconDefaults ? 1 : 5,
     threads,
     processors: 1,
     use_prefill_prompt: true,
@@ -336,8 +378,8 @@ function getDefaultWhisperOptions(): WhisperOptions {
     prompt: null,
     concurrent_worker_count: 4,
     chunking_strategy: "vad",
-    audio_encoder_compute_units: isAppleSilicon ? "cpu_and_neural_engine" : "cpu_only",
-    text_decoder_compute_units: isAppleSilicon ? "cpu_and_neural_engine" : "cpu_only",
+    audio_encoder_compute_units: useAppleSiliconDefaults ? "cpu_and_neural_engine" : "cpu_only",
+    text_decoder_compute_units: useAppleSiliconDefaults ? "cpu_and_neural_engine" : "cpu_only",
   };
 }
 
@@ -363,13 +405,6 @@ const _settingsPaneDefinitions: SettingsPaneDefinition[] = [
     description: "Default engine, model and language",
     group: "Transcription",
     icon: Mic,
-  },
-  {
-    key: "whisper_kit",
-    label: "WhisperKit",
-    description: "Apple-native inference settings",
-    group: "Transcription",
-    icon: AudioLines,
   },
   {
     key: "whisper_cpp",
@@ -408,10 +443,6 @@ const _settingsPaneDefinitions: SettingsPaneDefinition[] = [
   },
 ];
 
-const settingsPaneDefinitions = _settingsPaneDefinitions.filter(
-  (pane) => isAppleSilicon || pane.key !== "whisper_kit"
-);
-
 const AI_SERVICE_NONE = "__none";
 const AI_SERVICE_FOUNDATION = "__foundation";
 
@@ -426,6 +457,22 @@ function formatDate(value: string): string {
     return value;
   }
   return date.toLocaleString();
+}
+
+async function withTimeout<T>(promise: Promise<T>, ms: number, timeoutMessage: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(timeoutMessage)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== null) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 function dayGroupLabel(value: string): string {
@@ -451,18 +498,181 @@ function previewSnippet(value: string, maxLength = 170): string {
   return `${normalized.slice(0, maxLength).trimEnd()}...`;
 }
 
-function buildSegments(text: string): Array<{ time: string; line: string }> {
-  const lines = text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
+function parseFiniteSeconds(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value >= 0 ? value : 0;
+  }
+  return null;
+}
 
-  return lines.map((line, index) => {
-    const seconds = index * 4;
-    const mm = String(Math.floor(seconds / 60)).padStart(2, "0");
-    const ss = String(seconds % 60).padStart(2, "0");
-    return { time: `${mm}:${ss}`, line };
-  });
+function parseNonEmptyText(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function formatTimelineTimestamp(seconds: number): string {
+  const totalSeconds = Math.max(0, Math.floor(seconds));
+  const mm = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
+  const ss = String(totalSeconds % 60).padStart(2, "0");
+  return `${mm}:${ss}`;
+}
+
+function parseTimelineV2Segments(timelineV2Json: string | null | undefined): DetailSegment[] {
+  const raw = timelineV2Json?.trim();
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as TimelineV2 | null;
+    const segments = parsed?.segments;
+    if (!Array.isArray(segments)) {
+      return [];
+    }
+
+    return segments.flatMap((segment, sourceIndex) => {
+      if (!segment || typeof segment !== "object") {
+        return [];
+      }
+
+      const text = parseNonEmptyText((segment as { text?: unknown }).text);
+      if (!text) {
+        return [];
+      }
+
+      const startSeconds = parseFiniteSeconds((segment as { start_seconds?: unknown }).start_seconds);
+      const endSeconds = parseFiniteSeconds((segment as { end_seconds?: unknown }).end_seconds);
+      let firstWordStart: number | null = null;
+      let lastWordEnd: number | null = null;
+      const words = (segment as { words?: unknown }).words;
+      if (Array.isArray(words)) {
+        for (const word of words) {
+          if (!word || typeof word !== "object") {
+            continue;
+          }
+          const wordStart = parseFiniteSeconds((word as { start_seconds?: unknown }).start_seconds);
+          if (firstWordStart === null && wordStart !== null) {
+            firstWordStart = wordStart;
+          }
+          const wordEnd = parseFiniteSeconds((word as { end_seconds?: unknown }).end_seconds);
+          if (wordEnd !== null) {
+            lastWordEnd = wordEnd;
+          }
+        }
+      }
+
+      const resolvedStartSeconds = startSeconds ?? firstWordStart;
+      const resolvedEndSeconds = endSeconds ?? lastWordEnd;
+      const anchorSeconds = resolvedStartSeconds ?? resolvedEndSeconds;
+      if (anchorSeconds === null) {
+        return [];
+      }
+
+      const speakerLabel =
+        parseNonEmptyText((segment as { speaker_label?: unknown }).speaker_label)
+        ?? parseNonEmptyText((segment as { speaker_id?: unknown }).speaker_id);
+
+      return [{
+        sourceIndex,
+        time: formatTimelineTimestamp(anchorSeconds),
+        line: text,
+        speakerLabel,
+        startSeconds: resolvedStartSeconds,
+        endSeconds: resolvedEndSeconds,
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function parseTimelineV2Document(
+  timelineV2Json: string | null | undefined,
+): { version: number; segments: Array<Record<string, unknown>> } | null {
+  const raw = timelineV2Json?.trim();
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw) as { version?: unknown; segments?: unknown };
+    if (!Array.isArray(parsed?.segments)) {
+      return null;
+    }
+    return {
+      version:
+        typeof parsed.version === "number" && Number.isFinite(parsed.version)
+          ? parsed.version
+          : 2,
+      segments: parsed.segments
+        .map((segment) => (segment && typeof segment === "object" ? { ...(segment as Record<string, unknown>) } : null))
+        .filter((segment): segment is Record<string, unknown> => Boolean(segment)),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeSpeakerId(label: string): string {
+  const candidate = label
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return candidate.length > 0 ? candidate : "speaker";
+}
+
+function readSegmentSpeakerLabel(segment: Record<string, unknown>): string | null {
+  const label = parseNonEmptyText(segment.speaker_label);
+  if (label) {
+    return label;
+  }
+  return parseNonEmptyText(segment.speaker_id);
+}
+
+function readSegmentStartSeconds(segment: Record<string, unknown>): number | null {
+  const start = parseFiniteSeconds(segment.start_seconds);
+  if (start !== null) {
+    return start;
+  }
+  const words = segment.words;
+  if (!Array.isArray(words)) {
+    return null;
+  }
+  for (const word of words) {
+    if (!word || typeof word !== "object") {
+      continue;
+    }
+    const wordStart = parseFiniteSeconds((word as { start_seconds?: unknown }).start_seconds);
+    if (wordStart !== null) {
+      return wordStart;
+    }
+  }
+  return null;
+}
+
+function readSegmentEndSeconds(segment: Record<string, unknown>): number | null {
+  const end = parseFiniteSeconds(segment.end_seconds);
+  if (end !== null) {
+    return end;
+  }
+  const words = segment.words;
+  if (!Array.isArray(words)) {
+    return null;
+  }
+  for (let index = words.length - 1; index >= 0; index -= 1) {
+    const word = words[index];
+    if (!word || typeof word !== "object") {
+      continue;
+    }
+    const wordEnd = parseFiniteSeconds((word as { end_seconds?: unknown }).end_seconds);
+    if (wordEnd !== null) {
+      return wordEnd;
+    }
+  }
+  return null;
 }
 
 function pushOrReplaceQueueItem(items: JobProgress[], incoming: JobProgress): JobProgress[] {
@@ -603,6 +813,7 @@ function normalizeSettings(settings: AppSettings): AppSettings {
     ...settings,
     general: {
       ...settings.general,
+      appearance_mode: settings.general?.appearance_mode ?? "system",
     },
     transcription: {
       ...settings.transcription,
@@ -660,6 +871,8 @@ function sanitizeWhisperOptions(options: WhisperOptions): WhisperOptions {
     translate_to_english: options.translate_to_english,
     no_context: options.no_context,
     split_on_word: options.split_on_word,
+    tinydiarize: Boolean(options.tinydiarize),
+    diarize: Boolean(options.diarize),
     temperature: clamp(options.temperature, 0, 1),
     temperature_increment_on_fallback: clamp(options.temperature_increment_on_fallback, 0, 2),
     temperature_fallback_count: Math.round(clamp(options.temperature_fallback_count, 0, 20)),
@@ -734,11 +947,12 @@ type DetailToolbarProps = {
   hasArtifact: boolean;
   hasActiveJob: boolean;
   transcriptionProgress: number;
-  onShowSidebar: () => void;
+  onToggleSidebar: () => void;
   onBack: () => void;
   onSelectMode: (mode: "transcript" | "summary" | "chat") => void;
   onOpenExport: () => void;
   onShowDetailsPanel: () => void;
+  onHideDetailsPanel: () => void;
   onCancel: () => void;
 };
 
@@ -750,31 +964,37 @@ function DetailToolbar({
   hasArtifact,
   hasActiveJob,
   transcriptionProgress,
-  onShowSidebar,
+  onToggleSidebar,
   onBack,
   onSelectMode,
   onOpenExport,
   onShowDetailsPanel,
+  onHideDetailsPanel,
   onCancel,
 }: DetailToolbarProps): JSX.Element {
   return (
-    <header className={`detail-toolbar ${!leftSidebarOpen ? "sidebar-closed" : ""}`} data-tauri-drag-region>
+    <header
+      className={`detail-toolbar ${!leftSidebarOpen ? "sidebar-closed" : ""}`}
+      data-tauri-drag-region
+    >
       <div className="detail-toolbar-left" data-tauri-drag-region>
-        <button className="icon-button" onClick={() => onShowSidebar()} title={leftSidebarOpen ? "Hide sidebar" : "Show sidebar"}>
+        <button className="icon-button" onClick={onToggleSidebar} title={leftSidebarOpen ? "Hide sidebar" : "Show sidebar"}>
           {leftSidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
         </button>
         <button className="icon-button" onClick={onBack} title="Back to history">
           <ArrowLeft size={16} />
         </button>
-        <strong className="detail-title">{title}</strong>
+        <strong className="detail-title" data-tauri-drag-region>{title}</strong>
       </div>
 
-      <DetailCenterModeControl
-        detailMode={detailMode}
-        summaryDisabled={!hasArtifact}
-        chatDisabled={!hasArtifact}
-        onSelect={onSelectMode}
-      />
+      <div>
+        <DetailCenterModeControl
+          detailMode={detailMode}
+          summaryDisabled={!hasArtifact}
+          chatDisabled={!hasArtifact}
+          onSelect={onSelectMode}
+        />
+      </div>
 
       <div className="detail-toolbar-right">
         {hasArtifact ? (
@@ -816,7 +1036,7 @@ function DetailInspectorHeader({
   onHideDetailsPanel,
 }: DetailInspectorHeaderProps): JSX.Element {
   return (
-    <header className="inspector-header" data-tauri-drag-region>
+    <header className="inspector-header">
       <div className="segmented-control inspector-view-toggle">
         <button
           className={inspectorMode === "details" ? "seg active" : "seg"}
@@ -882,17 +1102,6 @@ type AppProps = {
 };
 
 export function App({ standaloneSettingsWindow = false }: AppProps) {
-  // Synchronize OS theme to the DOM so Tauri windows consistently style glassmorphism
-  useEffect(() => {
-    const updateTheme = (e: MediaQueryListEvent | MediaQueryList) => {
-      document.documentElement.dataset.theme = e.matches ? "dark" : "light";
-    };
-    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    updateTheme(mediaQuery);
-    mediaQuery.addEventListener("change", updateTheme);
-    return () => mediaQuery.removeEventListener("change", updateTheme);
-  }, []);
-
   const {
     settings,
     selectedFile,
@@ -912,6 +1121,47 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     removeArtifacts,
   } = useAppStore();
 
+  const preferredAppearanceMode = settings?.general?.appearance_mode ?? "system";
+
+  // Apply user-selected appearance mode (system/light/dark) consistently for all windows.
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const applyTheme = () => {
+      const nextTheme =
+        preferredAppearanceMode === "system"
+          ? (mediaQuery.matches ? "dark" : "light")
+          : preferredAppearanceMode;
+      document.documentElement.dataset.theme = nextTheme;
+
+      // Keep native macOS titlebar appearance aligned with the app theme.
+      // This avoids light titlebar bleed when the app is forced to dark mode (and vice-versa).
+      void (async () => {
+        const hasTauriRuntime = Boolean(
+          (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__,
+        );
+        if (!hasTauriRuntime) return;
+        try {
+          const { getCurrentWindow } = await import("@tauri-apps/api/window");
+          await getCurrentWindow().setTheme(
+            preferredAppearanceMode === "system" ? null : nextTheme,
+          );
+        } catch {
+          // Ignore when not running in Tauri desktop runtime.
+        }
+      })();
+    };
+
+    applyTheme();
+
+    if (preferredAppearanceMode !== "system") {
+      return;
+    }
+
+    const onThemeChange = () => applyTheme();
+    mediaQuery.addEventListener("change", onThemeChange);
+    return () => mediaQuery.removeEventListener("change", onThemeChange);
+  }, [preferredAppearanceMode]);
+
   const [section, setSection] = useState<Section>("home");
   const [settingsPane, setSettingsPane] = useState<SettingsPane>("transcription");
   const [settingsQuery, setSettingsQuery] = useState("");
@@ -928,9 +1178,10 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   const [deletedSearch, setDeletedSearch] = useState("");
   const [historyKind, setHistoryKind] = useState<"all" | ArtifactKind>("all");
   const [deletedArtifacts, setDeletedArtifacts] = useState<TranscriptArtifact[]>([]);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedArtifactIds, setSelectedArtifactIds] = useState<string[]>([]);
 
   const [isStarting, setIsStarting] = useState(false);
-  const [isModalLocked, setIsModalLocked] = useState(false);
   const [isSavingArtifact, setIsSavingArtifact] = useState(false);
 
   const [openArtifacts, setOpenArtifacts] = useState<TranscriptArtifact[]>([]);
@@ -973,10 +1224,22 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   const [isAskingChat, setIsAskingChat] = useState(false);
   const [activeJobPreviewText, setActiveJobPreviewText] = useState("");
   const [activeJobTitle, setActiveJobTitle] = useState("");
+  const [selectedSegmentSourceIndex, setSelectedSegmentSourceIndex] = useState<number | null>(null);
+  const [speakerDraft, setSpeakerDraft] = useState("");
+  const [isAssigningSpeaker, setIsAssigningSpeaker] = useState(false);
+  const [propagateSpeakerAssignment, setPropagateSpeakerAssignment] = useState(false);
+  const [segmentContextMenu, setSegmentContextMenu] = useState<{
+    x: number;
+    y: number;
+    sourceIndex: number;
+  } | null>(null);
 
   const [queueItems, setQueueItems] = useState<JobProgress[]>([]);
   const [modelCatalog, setModelCatalog] = useState<ProvisioningModelCatalogEntry[]>([]);
   const [runtimeHealth, setRuntimeHealth] = useState<RuntimeHealth | null>(null);
+  const platformIsAppleSilicon = runtimeHealth?.is_apple_silicon ?? guessAppleSiliconFromUA();
+  const transcriptionEngineOptions = useMemo(() => allTranscriptionEngineOptions, []);
+  const settingsPaneDefinitions = useMemo(() => _settingsPaneDefinitions, []);
 
   const [realtimeState, setRealtimeState] = useState<"idle" | "running" | "paused">("idle");
   const [realtimeMessage, setRealtimeMessage] = useState("Realtime idle");
@@ -1001,7 +1264,12 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   });
 
   const [updateInfo, setUpdateInfo] = useState<UpdateCheckResponse | null>(null);
+  const [nativeUpdate, setNativeUpdate] = useState<TauriUpdate | null>(null);
+  const [updateSource, setUpdateSource] = useState<"native" | "github" | null>(null);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
+  const [installingUpdate, setInstallingUpdate] = useState(false);
+  const [updateDownloadPercent, setUpdateDownloadPercent] = useState<number | null>(null);
+  const [updateStatusMessage, setUpdateStatusMessage] = useState<string | null>(null);
   const [aiServicesAcknowledged, setAiServicesAcknowledged] = useState(false);
   const [aiServiceConfigOpen, setAiServiceConfigOpen] = useState<string | null>(null);
   const [geminiModelChoices, setGeminiModelChoices] = useState<string[]>(fallbackGeminiModelOptions);
@@ -1035,12 +1303,41 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
   const activeJobIdRef = useRef<string | null>(activeJobId);
   const activeJobDeltaSequenceRef = useRef<number>(-1);
+  const activeJobPreviewTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const detailMainRef = useRef<HTMLElement | null>(null);
+  const peopleSpeakerInputRef = useRef<HTMLInputElement | null>(null);
+  const failedJobMessagesRef = useRef<Map<string, string>>(new Map());
+  const startupWatchdogRef = useRef<number | null>(null);
   const settingsSaveSequenceRef = useRef(0);
-  const isMacOS = useMemo(() => navigator.userAgent.toLowerCase().includes("mac"), []);
+  const clearStartupWatchdog = useCallback(() => {
+    if (startupWatchdogRef.current !== null) {
+      window.clearTimeout(startupWatchdogRef.current);
+      startupWatchdogRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     activeJobIdRef.current = activeJobId;
   }, [activeJobId]);
+
+  useEffect(() => {
+    if (!activeJobId) {
+      return;
+    }
+    const textarea = activeJobPreviewTextareaRef.current;
+    if (!textarea) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      textarea.scrollTop = textarea.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeJobId, activeJobPreviewText]);
+
+  useEffect(() => {
+    setSelectedSegmentSourceIndex(null);
+    setSpeakerDraft("");
+  }, [activeArtifactId]);
 
   useEffect(() => {
     window.localStorage.setItem("sbobino.layout.leftSidebarOpen", String(leftSidebarOpen));
@@ -1066,7 +1363,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         const deletedArtifactsSnapshot = await listDeletedArtifacts({ limit: 200 });
         setDeletedArtifacts(deletedArtifactsSnapshot);
       } catch (deletedError) {
-        setError(`Could not load Recently Deleted: ${String(deletedError)}`);
+        setError(`Could not load Recently Deleted: ${formatAppError(deletedError)}`);
       }
     })();
   }, [section, setError]);
@@ -1102,27 +1399,32 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           if (!disposed) {
             setRuntimeHealth(initialRuntimeHealth);
           }
+
+          if (
+            !initialRuntimeHealth.whisper_cli_available ||
+            !initialRuntimeHealth.whisper_stream_available
+          ) {
+            try {
+              const ensured = await ensureTranscriptionRuntime();
+              if (!disposed && ensured.did_setup) {
+                const refreshed = await fetchRuntimeHealth();
+                if (!disposed) {
+                  setRuntimeHealth(refreshed);
+                }
+              }
+            } catch {
+              // non-blocking: runtime setup is retried on transcription start
+            }
+          }
         } catch {
           // keep app booting even if health probe fails
         }
 
         if (initialSettings.general.auto_update_enabled) {
-          setCheckingUpdates(true);
-          try {
-            const update = await checkUpdates();
-            if (!disposed) {
-              setUpdateInfo(update);
-            }
-          } catch {
-            // ignore initial update check errors
-          } finally {
-            if (!disposed) {
-              setCheckingUpdates(false);
-            }
-          }
+          await refreshUpdates(true, () => disposed);
         }
       } catch (bootstrapError) {
-        setError(`Bootstrap failed: ${String(bootstrapError)}`);
+        setError(`Bootstrap failed: ${formatAppError(bootstrapError)}`);
       }
     })();
 
@@ -1145,7 +1447,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     if (matchedPane) {
       setSettingsPane(matchedPane.key);
     }
-  }, [standaloneSettingsWindow]);
+  }, [settingsPaneDefinitions, standaloneSettingsWindow]);
 
   useEffect(() => {
     if (!settings) {
@@ -1167,7 +1469,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     const hasGoogleService = (settings.ai.remote_services ?? []).some(
       (service) => service.kind === "google",
     );
-    if (isAppleSilicon && settings.ai.providers.foundation_apple.enabled) {
+    if (platformIsAppleSilicon && settings.ai.providers.foundation_apple.enabled) {
       void patchAiSettings((current) => ({
         ...current,
         active_provider: "foundation_apple",
@@ -1184,12 +1486,32 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       }));
     }
   }, [
-    isAppleSilicon,
+    platformIsAppleSilicon,
     settings?.ai.active_provider,
     settings?.ai.remote_services,
     settings?.ai.providers.foundation_apple.enabled,
     settings?.ai.providers.gemini.api_key,
   ]);
+
+  useEffect(() => {
+    if (!settings || transcriptionEngineOptions.length !== 1) {
+      return;
+    }
+
+    const enforced = transcriptionEngineOptions[0].value;
+    if (settings.transcription.engine === enforced) {
+      return;
+    }
+
+    void patchSettings((current) => ({
+      ...current,
+      transcription: {
+        ...current.transcription,
+        engine: enforced,
+      },
+      transcription_engine: enforced,
+    }));
+  }, [settings, transcriptionEngineOptions]);
 
   useEffect(() => {
     const googleServiceId =
@@ -1258,7 +1580,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     return () => {
       unlisten?.();
     };
-  }, [standaloneSettingsWindow]);
+  }, [settingsPaneDefinitions, standaloneSettingsWindow]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -1323,26 +1645,31 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     let unsubRealtimeSaved: (() => void) | undefined;
     let unsubProvisioningProgress: (() => void) | undefined;
     let unsubProvisioningStatus: (() => void) | undefined;
-    let unsubSettingsOpened: (() => void) | undefined;
-    let unsubSettingsClosed: (() => void) | undefined;
 
     void (async () => {
       const uProgress = await subscribeJobProgress((event) => {
         setQueueItems((previous) => pushOrReplaceQueueItem(previous, event));
         if (event.job_id === activeJobIdRef.current) {
+          clearStartupWatchdog();
           setProgress(event);
-          if (event.stage === "cancelled") {
+          if (event.stage === "cancelled" || event.stage === "failed") {
+            clearStartupWatchdog();
             clearActiveJob();
             activeJobIdRef.current = null;
             setActiveJobPreviewText("");
             setActiveJobTitle("");
             activeJobDeltaSequenceRef.current = -1;
+            if (event.stage === "failed") {
+              setError(event.message || "Transcription failed.");
+              setSection("home");
+            }
           }
         }
       });
       if (unmounted) { uProgress(); } else { unsubProgress = uProgress; }
 
       const uCompleted = await subscribeJobCompleted((artifact) => {
+        failedJobMessagesRef.current.delete(artifact.job_id);
         prependArtifact(artifact);
         setQueueItems((previous) => previous.filter((entry) => entry.job_id !== artifact.job_id));
         setActiveJobPreviewText("");
@@ -1350,6 +1677,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         activeJobDeltaSequenceRef.current = -1;
 
         if (artifact.job_id === activeJobIdRef.current) {
+          clearStartupWatchdog();
           clearActiveJob();
           activeJobIdRef.current = null;
           hydrateDetail(artifact);
@@ -1360,6 +1688,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       if (unmounted) { uCompleted(); } else { unsubCompleted = uCompleted; }
 
       const uFailed = await subscribeJobFailed((payload) => {
+        failedJobMessagesRef.current.set(payload.job_id, payload.message);
         setQueueItems((previous) =>
           previous.map((entry) =>
             entry.job_id === payload.job_id
@@ -1374,12 +1703,15 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         );
 
         if (payload.job_id === activeJobIdRef.current) {
+          clearStartupWatchdog();
+          failedJobMessagesRef.current.delete(payload.job_id);
           clearActiveJob();
           activeJobIdRef.current = null;
           setActiveJobPreviewText("");
           setActiveJobTitle("");
           activeJobDeltaSequenceRef.current = -1;
           setError(payload.message);
+          setSection("home");
         }
       });
       if (unmounted) { uFailed(); } else { unsubFailed = uFailed; }
@@ -1394,8 +1726,15 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         activeJobDeltaSequenceRef.current = delta.sequence;
 
         setActiveJobPreviewText((previous) => {
-          const nextLine = delta.text.trim();
-          if (!nextLine) return previous;
+          const next = delta.text ?? "";
+          if (!next.trim()) return previous;
+
+          // Some engines emit snapshot-style updates, others append finalized lines.
+          if (delta.mode === "replace") {
+            return next;
+          }
+
+          const nextLine = next.trim();
           if (!previous) return nextLine;
           if (previous.endsWith(nextLine)) return previous;
           return `${previous}\n${nextLine}`;
@@ -1458,15 +1797,6 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       });
       if (unmounted) { uProvisioningStatus(); } else { unsubProvisioningStatus = uProvisioningStatus; }
 
-      const uSettingsOpened = await listen("settings_opened", () => {
-        setIsModalLocked(true);
-      });
-      if (unmounted) { uSettingsOpened(); } else { unsubSettingsOpened = uSettingsOpened; }
-
-      const uSettingsClosed = await listen("settings_closed", () => {
-        setIsModalLocked(false);
-      });
-      if (unmounted) { uSettingsClosed(); } else { unsubSettingsClosed = uSettingsClosed; }
     })();
 
     return () => {
@@ -1480,10 +1810,9 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       unsubRealtimeSaved?.();
       unsubProvisioningProgress?.();
       unsubProvisioningStatus?.();
-      unsubSettingsOpened?.();
-      unsubSettingsClosed?.();
+      clearStartupWatchdog();
     };
-  }, [clearActiveJob, prependArtifact, setError, setProgress]);
+  }, [clearActiveJob, clearStartupWatchdog, prependArtifact, setError, setProgress]);
 
   useEffect(() => {
     if (!settings) return;
@@ -1578,6 +1907,21 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     return groups;
   }, [artifacts]);
 
+  const selectedArtifactIdSet = useMemo(
+    () => new Set(selectedArtifactIds),
+    [selectedArtifactIds],
+  );
+
+  const homeVisibleArtifactIds = useMemo(
+    () => groupedRecentArtifacts.flatMap((group) => group.items.map((artifact) => artifact.id)),
+    [groupedRecentArtifacts],
+  );
+
+  const historyVisibleArtifactIds = useMemo(
+    () => groupedHistoryArtifacts.flatMap((group) => group.items.map((artifact) => artifact.id)),
+    [groupedHistoryArtifacts],
+  );
+
   const canStartFileTranscription = useMemo(() => {
     if (!settings || !selectedFile || isStarting || Boolean(activeJobId)) {
       return false;
@@ -1597,10 +1941,109 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     [provisioning.ready, realtimeState, settings],
   );
 
+  useEffect(() => {
+    if (section === "home" || section === "history") {
+      return;
+    }
+    setSelectionMode(false);
+    setSelectedArtifactIds([]);
+  }, [section]);
+
+  useEffect(() => {
+    const artifactIds = new Set(artifacts.map((artifact) => artifact.id));
+    setSelectedArtifactIds((previous) => previous.filter((id) => artifactIds.has(id)));
+  }, [artifacts]);
+
   const detailSegments = useMemo(
-    () => buildSegments(draftTranscript || activeArtifact?.raw_transcript || ""),
-    [activeArtifact?.raw_transcript, draftTranscript],
+    () => parseTimelineV2Segments(activeArtifact?.metadata?.timeline_v2),
+    [activeArtifact?.metadata?.timeline_v2],
   );
+
+  const selectedDetailSegment = useMemo(
+    () =>
+      selectedSegmentSourceIndex === null
+        ? null
+        : detailSegments.find((segment) => segment.sourceIndex === selectedSegmentSourceIndex) ?? null,
+    [detailSegments, selectedSegmentSourceIndex],
+  );
+
+  const contextMenuSegment = useMemo(
+    () =>
+      segmentContextMenu === null
+        ? null
+        : detailSegments.find((segment) => segment.sourceIndex === segmentContextMenu.sourceIndex) ?? null,
+    [detailSegments, segmentContextMenu],
+  );
+
+  const knownSpeakerLabels = useMemo(() => {
+    return Array.from(
+      new Set(
+        detailSegments
+          .map((segment) => segment.speakerLabel?.trim())
+          .filter((label): label is string => Boolean(label && label.length > 0)),
+      ),
+    ).sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
+  }, [detailSegments]);
+
+  useEffect(() => {
+    if (selectedSegmentSourceIndex === null) {
+      return;
+    }
+    const exists = detailSegments.some((segment) => segment.sourceIndex === selectedSegmentSourceIndex);
+    if (!exists) {
+      setSelectedSegmentSourceIndex(null);
+      setSpeakerDraft("");
+    }
+  }, [detailSegments, selectedSegmentSourceIndex]);
+
+  useEffect(() => {
+    if (selectedSegmentSourceIndex === null) {
+      setSpeakerDraft("");
+      return;
+    }
+    const selected = detailSegments.find((segment) => segment.sourceIndex === selectedSegmentSourceIndex);
+    setSpeakerDraft(selected?.speakerLabel ?? "");
+  }, [detailSegments, selectedSegmentSourceIndex]);
+
+  useEffect(() => {
+    if (segmentContextMenu === null) {
+      return;
+    }
+    const exists = detailSegments.some((segment) => segment.sourceIndex === segmentContextMenu.sourceIndex);
+    if (!exists) {
+      setSegmentContextMenu(null);
+    }
+  }, [detailSegments, segmentContextMenu]);
+
+  useEffect(() => {
+    setSegmentContextMenu(null);
+  }, [activeArtifactId, detailMode, section]);
+
+  useEffect(() => {
+    if (!segmentContextMenu) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest(".segment-context-menu")) {
+        return;
+      }
+      setSegmentContextMenu(null);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSegmentContextMenu(null);
+      }
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [segmentContextMenu]);
 
   const detailAudioInputPath = useMemo(
     () =>
@@ -1632,11 +2075,15 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     if (audioDurationSeconds > 0) {
       return Math.round(audioDurationSeconds);
     }
-    if (detailSegments.length > 0) {
-      return detailSegments.length * 4;
+    const timelineDuration = detailSegments.reduce((maxSeconds, segment) => {
+      const candidate = segment.endSeconds ?? segment.startSeconds ?? 0;
+      return Math.max(maxSeconds, candidate);
+    }, 0);
+    if (timelineDuration > 0) {
+      return Math.round(timelineDuration);
     }
     return 0;
-  }, [audioDurationSeconds, detailSegments.length]);
+  }, [audioDurationSeconds, detailSegments]);
 
   const transcriptWordCount = useMemo(
     () => draftTranscript.split(/\s+/).filter(Boolean).length,
@@ -1681,7 +2128,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         pane.description.toLowerCase().includes(query)
       );
     });
-  }, [settingsQuery]);
+  }, [settingsPaneDefinitions, settingsQuery]);
 
   const visibleSettingsPaneGroups = useMemo(() => {
     const groups = new Map<SettingsPaneDefinition["group"], SettingsPaneDefinition[]>();
@@ -1728,7 +2175,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       { value: AI_SERVICE_NONE, label: "No AI provider" },
     ];
 
-    if (isAppleSilicon) {
+    if (platformIsAppleSilicon) {
       options.push({
         value: AI_SERVICE_FOUNDATION,
         label: "Foundation Model",
@@ -1750,7 +2197,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     return options;
   }, [
     enabledRemoteServices,
-    isMacOS,
+    platformIsAppleSilicon,
     settings?.ai.providers.foundation_apple.enabled,
     settings?.ai.providers.gemini.model,
   ]);
@@ -1853,7 +2300,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       const next = await fetchSettingsSnapshot();
       setSettings(normalizeSettings(next));
     } catch (error) {
-      setError(`Could not reload settings: ${String(error)}`);
+      setError(`Could not reload settings: ${formatAppError(error)}`);
     }
   }
 
@@ -1862,7 +2309,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       const status = await provisioningStatus();
       setProvisioningState(status);
     } catch (statusError) {
-      setError(`Could not read provisioning status: ${String(statusError)}`);
+      setError(`Could not read provisioning status: ${formatAppError(statusError)}`);
     }
   }
 
@@ -1871,7 +2318,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       const health = await fetchRuntimeHealth();
       setRuntimeHealth(health);
     } catch (healthError) {
-      setError(`Could not read transcription runtime health: ${String(healthError)}`);
+      setError(`Could not read transcription runtime health: ${formatAppError(healthError)}`);
     }
   }
 
@@ -1881,7 +2328,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       setModelCatalog(models);
       setRuntimeHealth(health);
     } catch (modelsError) {
-      setError(`Could not read models catalog: ${String(modelsError)}`);
+      setError(`Could not read models catalog: ${formatAppError(modelsError)}`);
     }
   }
 
@@ -2018,7 +2465,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       transcription: {
         ...current.transcription,
         whisper_options: sanitizeWhisperOptions(
-          mutator(current.transcription.whisper_options ?? getDefaultWhisperOptions()),
+          mutator(current.transcription.whisper_options ?? getDefaultWhisperOptions(platformIsAppleSilicon)),
         ),
       },
     }));
@@ -2028,21 +2475,84 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     const targetFile = fileToProcess && typeof fileToProcess === "string" ? fileToProcess : selectedFile;
     if (!settings || !targetFile) return;
 
+    clearStartupWatchdog();
     setIsStarting(true);
     setError(null);
     try {
-      const { job_id } = await startTranscription({
-        input_path: targetFile,
-        language: settings.transcription.language,
-        model: settings.transcription.model,
-        enable_ai: settings.transcription.enable_ai_post_processing,
-        whisper_options: sanitizeWhisperOptions(
-          settings.transcription.whisper_options ?? getDefaultWhisperOptions(),
-        ),
-      });
+      const runtimeStatus = await withTimeout(
+        ensureTranscriptionRuntime(),
+        20_000,
+        "Runtime setup timed out.",
+      );
+      if (!runtimeStatus.ready) {
+        setError(runtimeStatus.message || "Transcription runtime is not ready.");
+        setSection("home");
+        return;
+      }
+      if (runtimeStatus.did_setup) {
+        void refreshRuntimeHealth();
+      }
 
-      setJobStarted(job_id);
+      let preflight: { allowed: boolean; message: string } | null = null;
+      try {
+        preflight = await withTimeout(
+          fetchTranscriptionStartPreflight({
+            model: settings.transcription.model,
+          }),
+          8_000,
+          "Preflight timed out.",
+        );
+      } catch (preflightError) {
+        console.warn("Transcription preflight failed, continuing with backend start:", preflightError);
+      }
+      if (preflight && !preflight.allowed) {
+        setError(preflight.message || "Transcription cannot start on this machine.");
+        setSection("home");
+        return;
+      }
+
+      const startResult = await withTimeout(
+        startTranscription({
+          input_path: targetFile,
+          language: settings.transcription.language,
+          model: settings.transcription.model,
+          enable_ai: settings.transcription.enable_ai_post_processing,
+          whisper_options: sanitizeWhisperOptions(
+            settings.transcription.whisper_options ?? getDefaultWhisperOptions(platformIsAppleSilicon),
+          ),
+        }),
+        12_000,
+        "Start request timed out while waiting for backend response.",
+      );
+
+      const { job_id } = startResult;
+
+      if (failedJobMessagesRef.current.has(job_id)) {
+        const earlyFailure =
+          failedJobMessagesRef.current.get(job_id) ?? "Transcription failed.";
+        failedJobMessagesRef.current.delete(job_id);
+        clearActiveJob();
+        activeJobIdRef.current = null;
+        setActiveJobPreviewText("");
+        setActiveJobTitle("");
+        activeJobDeltaSequenceRef.current = -1;
+        setSection("home");
+        setError(earlyFailure);
+        return;
+      }
+
       activeJobIdRef.current = job_id;
+      setJobStarted(job_id);
+      setQueueItems((previous) =>
+        pushOrReplaceQueueItem(previous, {
+          job_id,
+          stage: "queued",
+          message: "Queued transcription job.",
+          percentage: 0,
+          current_seconds: 0,
+          total_seconds: null,
+        }),
+      );
       setActiveJobTitle(fileLabel(targetFile));
       setActiveJobPreviewText("");
       activeJobDeltaSequenceRef.current = -1;
@@ -2051,8 +2561,26 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       setSection("detail");
       setDetailMode("transcript");
       setInspectorMode("details");
+
+      startupWatchdogRef.current = window.setTimeout(() => {
+        if (activeJobIdRef.current !== job_id) {
+          return;
+        }
+        clearActiveJob();
+        activeJobIdRef.current = null;
+        setActiveJobPreviewText("");
+        setActiveJobTitle("");
+        activeJobDeltaSequenceRef.current = -1;
+        setSection("home");
+        setError(
+          "Transcription is not starting correctly. Check Whisper CLI/Whisper Stream paths in Settings > Local Models.",
+        );
+      }, 8_000);
     } catch (startError) {
-      setError(`Failed to start transcription: ${String(startError)}`);
+      const friendlyError = formatAppError(startError);
+      setError(`Failed to start transcription: ${friendlyError}`);
+      clearStartupWatchdog();
+      setSection("home");
     } finally {
       setIsStarting(false);
     }
@@ -2064,7 +2592,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     try {
       await cancelTranscription(activeJobId);
     } catch (cancelError) {
-      setError(`Failed to cancel transcription: ${String(cancelError)}`);
+      setError(`Failed to cancel transcription: ${formatAppError(cancelError)}`);
     }
   }
 
@@ -2080,7 +2608,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       setSection("detail");
       setError(null);
     } catch (artifactError) {
-      setError(`Failed to open transcript: ${String(artifactError)}`);
+      setError(`Failed to open transcript: ${formatAppError(artifactError)}`);
     }
   }
 
@@ -2088,11 +2616,12 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     try {
       await openSettingsWindow(pane);
     } catch (windowError) {
-      setError(`Failed to open settings window: ${String(windowError)}`);
+      setError(`Failed to open settings window: ${formatAppError(windowError)}`);
     }
   }
 
   function onFocusQueueJob(item: JobProgress): void {
+    clearStartupWatchdog();
     const switchingJob = activeJobIdRef.current !== item.job_id;
     setJobStarted(item.job_id);
     setProgress(item);
@@ -2152,10 +2681,221 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
       setError(null);
     } catch (saveError) {
-      setError(`Failed to save changes: ${String(saveError)}`);
+      setError(`Failed to save changes: ${formatAppError(saveError)}`);
     } finally {
       setIsSavingArtifact(false);
     }
+  }
+
+  async function onAssignSpeakerToSegment(
+    sourceIndex: number,
+    speakerLabel: string | null,
+    propagateToNeighbors: boolean,
+  ): Promise<void> {
+    if (!activeArtifact) {
+      setError("No transcript selected.");
+      return;
+    }
+
+    const parsedTimeline = parseTimelineV2Document(activeArtifact.metadata?.timeline_v2);
+    if (!parsedTimeline) {
+      setError("Segment timeline metadata is missing or invalid.");
+      return;
+    }
+    if (sourceIndex < 0 || sourceIndex >= parsedTimeline.segments.length) {
+      setError("Selected segment is out of range.");
+      return;
+    }
+
+    const normalizedSpeakerLabel = speakerLabel?.trim() ?? "";
+    const shouldSetSpeaker = normalizedSpeakerLabel.length > 0;
+    const speakerId = shouldSetSpeaker ? normalizeSpeakerId(normalizedSpeakerLabel) : null;
+
+    const nextSegments = parsedTimeline.segments.map((segment) => ({ ...segment }));
+    const assignSpeaker = (index: number) => {
+      const target = { ...nextSegments[index] };
+      if (shouldSetSpeaker) {
+        target.speaker_label = normalizedSpeakerLabel;
+        target.speaker_id = speakerId;
+      } else {
+        delete target.speaker_label;
+        delete target.speaker_id;
+      }
+      nextSegments[index] = target;
+    };
+
+    assignSpeaker(sourceIndex);
+
+    if (shouldSetSpeaker && propagateToNeighbors) {
+      const maxGapSeconds = 8;
+
+      for (let index = sourceIndex - 1; index >= 0; index -= 1) {
+        const segment = nextSegments[index];
+        if (readSegmentSpeakerLabel(segment)) {
+          break;
+        }
+
+        const currentEnd = readSegmentEndSeconds(segment);
+        const nextStart = readSegmentStartSeconds(nextSegments[index + 1]);
+        if (
+          currentEnd !== null
+          && nextStart !== null
+          && nextStart - currentEnd > maxGapSeconds
+        ) {
+          break;
+        }
+
+        assignSpeaker(index);
+      }
+
+      for (let index = sourceIndex + 1; index < nextSegments.length; index += 1) {
+        const segment = nextSegments[index];
+        if (readSegmentSpeakerLabel(segment)) {
+          break;
+        }
+
+        const previousEnd = readSegmentEndSeconds(nextSegments[index - 1]);
+        const currentStart = readSegmentStartSeconds(segment);
+        if (
+          previousEnd !== null
+          && currentStart !== null
+          && currentStart - previousEnd > maxGapSeconds
+        ) {
+          break;
+        }
+
+        assignSpeaker(index);
+      }
+    }
+
+    const nextTimeline = {
+      ...parsedTimeline,
+      segments: nextSegments,
+    };
+
+    setIsAssigningSpeaker(true);
+    try {
+      const updated = await updateArtifactTimeline({
+        id: activeArtifact.id,
+        timeline_v2: JSON.stringify(nextTimeline),
+      });
+      if (!updated) {
+        setError("Transcript not found while assigning speaker.");
+        return;
+      }
+      upsertArtifact(updated);
+      hydrateDetail(updated);
+      setError(null);
+    } catch (assignError) {
+      setError(`Failed to assign speaker: ${formatAppError(assignError)}`);
+    } finally {
+      setIsAssigningSpeaker(false);
+    }
+  }
+
+  async function onAssignSpeakerToSelectedSegment(): Promise<void> {
+    if (selectedSegmentSourceIndex === null) {
+      setError("Select a segment first.");
+      return;
+    }
+    const speakerLabel = speakerDraft.trim();
+    if (!speakerLabel) {
+      setError("Speaker name cannot be empty.");
+      return;
+    }
+    await onAssignSpeakerToSegment(
+      selectedSegmentSourceIndex,
+      speakerLabel,
+      propagateSpeakerAssignment,
+    );
+  }
+
+  async function onClearSpeakerForSegment(sourceIndex: number): Promise<void> {
+    await onAssignSpeakerToSegment(sourceIndex, null, false);
+  }
+
+  function focusSpeakerInputForSegment(sourceIndex: number): void {
+    setSelectedSegmentSourceIndex(sourceIndex);
+    setDetailMode("segments");
+    setInspectorMode("details");
+    setRightSidebarOpen(true);
+    setSegmentContextMenu(null);
+    const focusInput = () => {
+      if (!peopleSpeakerInputRef.current) {
+        return false;
+      }
+      peopleSpeakerInputRef.current.focus();
+      peopleSpeakerInputRef.current.select();
+      return true;
+    };
+    window.requestAnimationFrame(() => {
+      if (!focusInput()) {
+        window.requestAnimationFrame(() => {
+          focusInput();
+        });
+      }
+    });
+  }
+
+  function openSegmentContextMenu(
+    event: ReactMouseEvent<HTMLElement>,
+    sourceIndex: number,
+  ): void {
+    event.preventDefault();
+    event.stopPropagation();
+    setSelectedSegmentSourceIndex(sourceIndex);
+
+    const containerBounds = detailMainRef.current?.getBoundingClientRect();
+    if (!containerBounds) {
+      setSegmentContextMenu(null);
+      return;
+    }
+
+    const menuWidth = 252;
+    const menuHeight = 320;
+    const margin = 10;
+    const rawX = event.clientX - containerBounds.left;
+    const rawY = event.clientY - containerBounds.top;
+    const x = Math.min(
+      Math.max(rawX, margin),
+      Math.max(margin, containerBounds.width - menuWidth - margin),
+    );
+    const y = Math.min(
+      Math.max(rawY, margin),
+      Math.max(margin, containerBounds.height - menuHeight - margin),
+    );
+    setSegmentContextMenu({ x, y, sourceIndex });
+  }
+
+  function onAddSpeakerFromContextMenu(): void {
+    if (!segmentContextMenu) {
+      return;
+    }
+    focusSpeakerInputForSegment(segmentContextMenu.sourceIndex);
+  }
+
+  function onAssignKnownSpeakerFromContextMenu(speakerLabel: string): void {
+    if (!segmentContextMenu) {
+      return;
+    }
+    setSelectedSegmentSourceIndex(segmentContextMenu.sourceIndex);
+    setSpeakerDraft(speakerLabel);
+    setSegmentContextMenu(null);
+    void onAssignSpeakerToSegment(
+      segmentContextMenu.sourceIndex,
+      speakerLabel,
+      false,
+    );
+  }
+
+  function onClearSpeakerFromContextMenu(): void {
+    if (!segmentContextMenu) {
+      return;
+    }
+    setSelectedSegmentSourceIndex(segmentContextMenu.sourceIndex);
+    setSpeakerDraft("");
+    setSegmentContextMenu(null);
+    void onClearSpeakerForSegment(segmentContextMenu.sourceIndex);
   }
 
   function onRenameArtifact(artifact: TranscriptArtifact): void {
@@ -2199,7 +2939,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       setError(null);
       closeRenameDialog();
     } catch (renameError) {
-      setError(`Rename failed: ${String(renameError)}`);
+      setError(`Rename failed: ${formatAppError(renameError)}`);
     } finally {
       setIsRenamingArtifact(false);
     }
@@ -2243,12 +2983,50 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
       setError(null);
     } catch (deleteError) {
-      setError(`Delete failed: ${String(deleteError)}`);
+      setError(`Delete failed: ${formatAppError(deleteError)}`);
     }
   }
 
   async function onDeleteArtifact(artifact: TranscriptArtifact): Promise<void> {
     await onDeleteArtifactsWithConsent([artifact.id]);
+  }
+
+  function toggleSelectionMode(): void {
+    setSelectionMode((previous) => {
+      if (previous) {
+        setSelectedArtifactIds([]);
+      }
+      return !previous;
+    });
+  }
+
+  function toggleArtifactSelection(id: string): void {
+    setSelectedArtifactIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return Array.from(next);
+    });
+  }
+
+  function clearArtifactSelection(): void {
+    setSelectedArtifactIds([]);
+  }
+
+  function selectAllVisibleArtifacts(): void {
+    const visibleIds = section === "history" ? historyVisibleArtifactIds : homeVisibleArtifactIds;
+    setSelectedArtifactIds(Array.from(new Set(visibleIds)));
+  }
+
+  async function onDeleteSelectedArtifacts(): Promise<void> {
+    if (selectedArtifactIds.length === 0) {
+      return;
+    }
+    await onDeleteArtifactsWithConsent(selectedArtifactIds);
+    setSelectedArtifactIds([]);
   }
 
   async function onRestoreArtifactsWithConsent(ids: string[]): Promise<void> {
@@ -2273,7 +3051,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       await Promise.all([refreshActiveArtifacts(), refreshDeletedArtifactsList()]);
       setError(null);
     } catch (restoreError) {
-      setError(`Restore failed: ${String(restoreError)}`);
+      setError(`Restore failed: ${formatAppError(restoreError)}`);
     }
   }
 
@@ -2300,7 +3078,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       await refreshDeletedArtifactsList();
       setError(null);
     } catch (deleteError) {
-      setError(`Permanent delete failed: ${String(deleteError)}`);
+      setError(`Permanent delete failed: ${formatAppError(deleteError)}`);
     }
   }
 
@@ -2321,7 +3099,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       await refreshDeletedArtifactsList();
       setError(null);
     } catch (emptyError) {
-      setError(`Empty trash failed: ${String(emptyError)}`);
+      setError(`Empty trash failed: ${formatAppError(emptyError)}`);
     }
   }
 
@@ -2402,7 +3180,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       setSection("realtime");
       setError(null);
     } catch (startError) {
-      setError(`Realtime start failed: ${String(startError)}`);
+      setError(`Realtime start failed: ${formatAppError(startError)}`);
     }
   }
 
@@ -2410,7 +3188,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     try {
       await pauseRealtime();
     } catch (pauseError) {
-      setError(`Realtime pause failed: ${String(pauseError)}`);
+      setError(`Realtime pause failed: ${formatAppError(pauseError)}`);
     }
   }
 
@@ -2418,7 +3196,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     try {
       await resumeRealtime();
     } catch (resumeError) {
-      setError(`Realtime resume failed: ${String(resumeError)}`);
+      setError(`Realtime resume failed: ${formatAppError(resumeError)}`);
     }
   }
 
@@ -2435,7 +3213,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       setRealtimeFinalLines([]);
       setError(null);
     } catch (stopError) {
-      setError(`Realtime stop failed: ${String(stopError)}`);
+      setError(`Realtime stop failed: ${formatAppError(stopError)}`);
     } finally {
       setIsStoppingRealtime(false);
     }
@@ -2525,7 +3303,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         ...previous,
         running: false,
       }));
-      setError(`Provisioning failed: ${String(provisionError)}`);
+      setError(`Provisioning failed: ${formatAppError(provisionError)}`);
     }
   }
 
@@ -2542,7 +3320,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         ...previous,
         running: false,
       }));
-      setError(`Model download failed: ${String(downloadError)}`);
+      setError(`Model download failed: ${formatAppError(downloadError)}`);
     }
   }
 
@@ -2555,19 +3333,135 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         statusMessage: "Provisioning cancelled",
       }));
     } catch (cancelError) {
-      setError(`Provisioning cancel failed: ${String(cancelError)}`);
+      setError(`Provisioning cancel failed: ${formatAppError(cancelError)}`);
+    }
+  }
+
+  async function refreshUpdates(
+    silent = false,
+    shouldCancel?: () => boolean,
+  ): Promise<void> {
+    if (shouldCancel?.()) {
+      return;
+    }
+    setCheckingUpdates(true);
+    setUpdateStatusMessage(null);
+    setUpdateDownloadPercent(null);
+    setNativeUpdate(null);
+    const isDevRuntime = import.meta.env.DEV;
+    if (!isDevRuntime) {
+      try {
+        const native = await checkAppUpdate();
+        if (shouldCancel?.()) {
+          return;
+        }
+        if (native) {
+          setNativeUpdate(native);
+          setUpdateSource("native");
+          setUpdateInfo({
+            has_update: true,
+            current_version: native.currentVersion,
+            latest_version: native.version,
+            download_url: null,
+          });
+          try {
+            const fallback = await checkUpdates();
+            if (shouldCancel?.()) {
+              return;
+            }
+            if (fallback.download_url) {
+              setUpdateInfo((previous) =>
+                previous
+                  ? {
+                      ...previous,
+                      download_url: fallback.download_url,
+                    }
+                  : previous,
+              );
+            }
+          } catch {
+            // optional GitHub download fallback is best-effort
+          }
+          return;
+        }
+      } catch {
+        // fallback to GitHub release polling
+      }
+    }
+
+    try {
+      const update = await checkUpdates();
+      if (shouldCancel?.()) {
+        return;
+      }
+      setUpdateInfo(update);
+      setUpdateSource("github");
+    } catch (updateError) {
+      if (!silent) {
+        setError(`Update check failed: ${formatAppError(updateError)}`);
+      }
+    } finally {
+      if (!shouldCancel?.()) {
+        setCheckingUpdates(false);
+      }
     }
   }
 
   async function onRefreshUpdates(): Promise<void> {
-    setCheckingUpdates(true);
+    await refreshUpdates(false);
+  }
+
+  async function onInstallUpdate(): Promise<void> {
+    if (!nativeUpdate) {
+      return;
+    }
+
+    setInstallingUpdate(true);
+    setUpdateStatusMessage("Downloading update...");
+    setUpdateDownloadPercent(0);
     try {
-      const update = await checkUpdates();
-      setUpdateInfo(update);
-    } catch (updateError) {
-      setError(`Update check failed: ${String(updateError)}`);
+      let expectedBytes = 0;
+      let downloadedBytes = 0;
+      await nativeUpdate.downloadAndInstall((event) => {
+        if (event.event === "Started") {
+          expectedBytes = event.data.contentLength ?? 0;
+          downloadedBytes = 0;
+          setUpdateStatusMessage("Downloading update...");
+          return;
+        }
+        if (event.event === "Progress") {
+          downloadedBytes += event.data.chunkLength;
+          if (expectedBytes > 0) {
+            const percent = Math.max(
+              0,
+              Math.min(100, Math.round((downloadedBytes / expectedBytes) * 100)),
+            );
+            setUpdateDownloadPercent(percent);
+          }
+          return;
+        }
+        if (event.event === "Finished") {
+          setUpdateDownloadPercent(100);
+          setUpdateStatusMessage("Installing update...");
+        }
+      });
+
+      setUpdateStatusMessage("Update installed. Restart the app to apply it.");
+      setUpdateInfo((previous) =>
+        previous
+          ? {
+              ...previous,
+              has_update: false,
+              current_version: previous.latest_version ?? previous.current_version,
+            }
+          : previous,
+      );
+      setNativeUpdate(null);
+    } catch (installError) {
+      setError(`Update install failed: ${formatAppError(installError)}`);
+      setUpdateStatusMessage(null);
     } finally {
-      setCheckingUpdates(false);
+      setInstallingUpdate(false);
     }
   }
 
@@ -2592,7 +3486,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     } catch (error) {
       setPromptTest((current) => ({
         ...current,
-        output: `Prompt test failed: ${String(error)}`,
+        output: `Prompt test failed: ${formatAppError(error)}`,
         running: false,
       }));
     }
@@ -2624,7 +3518,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       await resetPromptTemplates();
       await refreshSettingsFromDisk();
     } catch (error) {
-      setError(`Could not reset prompts: ${String(error)}`);
+      setError(`Could not reset prompts: ${formatAppError(error)}`);
     }
   }
 
@@ -2684,6 +3578,36 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         </div>
 
         <section className="panel-card">
+          <div className="history-selection-toolbar">
+            <button className="secondary-button" onClick={toggleSelectionMode}>
+              {selectionMode ? "Done" : "Select"}
+            </button>
+            {selectionMode ? (
+              <>
+                <button
+                  className="secondary-button"
+                  onClick={selectAllVisibleArtifacts}
+                  disabled={homeVisibleArtifactIds.length === 0}
+                >
+                  Select all
+                </button>
+                <button
+                  className="secondary-button"
+                  onClick={clearArtifactSelection}
+                  disabled={selectedArtifactIds.length === 0}
+                >
+                  Clear
+                </button>
+                <button
+                  className="secondary-button history-action-danger"
+                  onClick={() => void onDeleteSelectedArtifacts()}
+                  disabled={selectedArtifactIds.length === 0}
+                >
+                  Delete selected ({selectedArtifactIds.length})
+                </button>
+              </>
+            ) : null}
+          </div>
           {groupedRecentArtifacts.length === 0 ? (
             <div className="center-empty compact">
               <h3>No transcripts yet</h3>
@@ -2696,32 +3620,61 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                   <h3 className="history-group-label">{group.label}</h3>
                   <div className="history-list">
                     {group.items.map((artifact) => (
-                      <article key={artifact.id} className="history-item home-history-item">
-                        <button className="home-history-main" onClick={() => void onOpenArtifact(artifact.id)}>
+                      <article
+                        key={artifact.id}
+                        className={`history-item home-history-item${selectedArtifactIdSet.has(artifact.id) ? " selected" : ""}`}
+                      >
+                        <button
+                          className="home-history-main"
+                          onClick={() => {
+                            if (selectionMode) {
+                              toggleArtifactSelection(artifact.id);
+                              return;
+                            }
+                            void onOpenArtifact(artifact.id);
+                          }}
+                        >
                           <span className="history-audio-dot">
                             <AudioLines size={12} />
                           </span>
                           <div className="home-history-copy">
                             <div className="home-history-head">
-                              <strong>{artifact.title}</strong>
+                              <strong>
+                                <HighlightMatch text={artifact.title} search={search} />
+                              </strong>
                               <span className="history-inline-time">{formatHomeTime(artifact.updated_at)}</span>
                             </div>
                             <p className="history-preview">
-                              {previewSnippet(artifact.optimized_transcript || artifact.raw_transcript, 210)}
+                              <HighlightMatch
+                                text={previewSnippet(artifact.optimized_transcript || artifact.raw_transcript, 210)}
+                                search={search}
+                              />
                             </p>
                           </div>
                         </button>
-                        <button
-                          className="icon-button danger-icon-button home-history-delete"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            void onDeleteArtifact(artifact);
-                          }}
-                          title="Move to trash"
-                          aria-label={`Move ${artifact.title} to trash`}
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                        <div className="home-history-actions">
+                          {selectionMode ? (
+                            <label className="home-history-select" title="Select transcription">
+                              <input
+                                type="checkbox"
+                                checked={selectedArtifactIdSet.has(artifact.id)}
+                                onChange={() => toggleArtifactSelection(artifact.id)}
+                              />
+                            </label>
+                          ) : (
+                            <button
+                              className="icon-button danger-icon-button home-history-delete"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void onDeleteArtifact(artifact);
+                              }}
+                              title="Move to trash"
+                              aria-label={`Move ${artifact.title} to trash`}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          )}
+                        </div>
                       </article>
                     ))}
                   </div>
@@ -2802,6 +3755,36 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   function renderHistory(): JSX.Element {
     return (
       <div className="view-body history-view">
+        <div className="history-selection-toolbar">
+          <button className="secondary-button" onClick={toggleSelectionMode}>
+            {selectionMode ? "Done" : "Select"}
+          </button>
+          {selectionMode ? (
+            <>
+              <button
+                className="secondary-button"
+                onClick={selectAllVisibleArtifacts}
+                disabled={historyVisibleArtifactIds.length === 0}
+              >
+                Select all
+              </button>
+              <button
+                className="secondary-button"
+                onClick={clearArtifactSelection}
+                disabled={selectedArtifactIds.length === 0}
+              >
+                Clear
+              </button>
+              <button
+                className="secondary-button history-action-danger"
+                onClick={() => void onDeleteSelectedArtifacts()}
+                disabled={selectedArtifactIds.length === 0}
+              >
+                Delete selected ({selectedArtifactIds.length})
+              </button>
+            </>
+          ) : null}
+        </div>
         {groupedHistoryArtifacts.length === 0 ? (
           <div className="center-empty">
             <div className="center-empty-icon"><Clock3 size={28} /></div>
@@ -2814,31 +3797,60 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                 <h3 className="history-group-label">{group.label}</h3>
                 <div className="history-list">
                   {group.items.map((artifact) => (
-                    <article key={artifact.id} className="history-item">
-                      <button className="history-main history-main-rich" onClick={() => void onOpenArtifact(artifact.id)}>
+                    <article
+                      key={artifact.id}
+                      className={`history-item${selectedArtifactIdSet.has(artifact.id) ? " selected" : ""}`}
+                    >
+                      <button
+                        className="history-main history-main-rich"
+                        onClick={() => {
+                          if (selectionMode) {
+                            toggleArtifactSelection(artifact.id);
+                            return;
+                          }
+                          void onOpenArtifact(artifact.id);
+                        }}
+                      >
                         <span className="history-audio-dot">
                           <AudioLines size={12} />
                         </span>
                         <div className="history-main-copy">
                           <div className="home-history-head">
-                            <strong>{artifact.title}</strong>
+                            <strong>
+                              <HighlightMatch text={artifact.title} search={search} />
+                            </strong>
                             <span className="history-inline-time">{formatHomeTime(artifact.updated_at)}</span>
                           </div>
                           <p className="history-preview">
-                            {previewSnippet(artifact.optimized_transcript || artifact.raw_transcript, 220)}
+                            <HighlightMatch
+                              text={previewSnippet(artifact.optimized_transcript || artifact.raw_transcript, 220)}
+                              search={search}
+                            />
                           </p>
                         </div>
                       </button>
                       <div className="history-actions">
-                        <span className="kind-chip">{artifact.kind === "realtime" ? "Live" : "File"}</span>
-                        <button className="secondary-button history-action-button" onClick={() => void onRenameArtifact(artifact)}>
-                          <Pencil size={14} />
-                          Rename
-                        </button>
-                        <button className="secondary-button history-action-button history-action-danger" onClick={() => void onDeleteArtifact(artifact)}>
-                          <Trash2 size={14} />
-                          Move to Trash
-                        </button>
+                        {selectionMode ? (
+                          <label className="home-history-select" title="Select transcription">
+                            <input
+                              type="checkbox"
+                              checked={selectedArtifactIdSet.has(artifact.id)}
+                              onChange={() => toggleArtifactSelection(artifact.id)}
+                            />
+                          </label>
+                        ) : (
+                          <>
+                            <span className="kind-chip">{artifact.kind === "realtime" ? "Live" : "File"}</span>
+                            <button className="secondary-button history-action-button" onClick={() => void onRenameArtifact(artifact)}>
+                              <Pencil size={14} />
+                              Rename
+                            </button>
+                            <button className="secondary-button history-action-button history-action-danger" onClick={() => void onDeleteArtifact(artifact)}>
+                              <Trash2 size={14} />
+                              Move to Trash
+                            </button>
+                          </>
+                        )}
                       </div>
                     </article>
                   ))}
@@ -2866,8 +3878,15 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
               <article key={artifact.id} className="history-item deleted-history-item">
                 <div className="history-main">
                   <div>
-                    <strong>{artifact.title}</strong>
-                    <p>{previewSnippet(artifact.optimized_transcript || artifact.raw_transcript, 220)}</p>
+                    <strong>
+                      <HighlightMatch text={artifact.title} search={search} />
+                    </strong>
+                    <p>
+                      <HighlightMatch
+                        text={previewSnippet(artifact.optimized_transcript || artifact.raw_transcript, 220)}
+                        search={search}
+                      />
+                    </p>
                   </div>
                   <small>{formatDate(artifact.updated_at)}</small>
                 </div>
@@ -2900,6 +3919,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       if (activeJobId) {
         return (
           <textarea
+            ref={activeJobPreviewTextareaRef}
             className="detail-editor"
             value={activeJobPreviewText}
             readOnly
@@ -2985,7 +4005,27 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         <div className="segments-view">
           {detailSegments.length === 0 ? <p className="muted">No segments yet</p> : null}
           {detailSegments.map((segment, index) => (
-            <article className="segment-row" key={`${segment.time}-${index}`}>
+            <article
+              className={`segment-row ${
+                selectedSegmentSourceIndex === segment.sourceIndex ? "selected" : ""
+              } ${segmentContextMenu?.sourceIndex === segment.sourceIndex ? "context-open" : ""}`}
+              key={`${segment.time}-${index}`}
+              onClick={() => setSelectedSegmentSourceIndex(segment.sourceIndex)}
+              onContextMenu={(event) => openSegmentContextMenu(event, segment.sourceIndex)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  setSelectedSegmentSourceIndex(segment.sourceIndex);
+                }
+              }}
+            >
+              {segment.speakerLabel ? (
+                <div style={{ marginBottom: "8px" }}>
+                  <span className="kind-chip">{segment.speakerLabel}</span>
+                </div>
+              ) : null}
               <p style={{ fontSize: `${fontSize}px` }}>{segment.line}</p>
               <small>{segment.time}</small>
             </article>
@@ -3074,8 +4114,64 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
         <div className="inspector-block">
           <h4>People</h4>
-          <div className="pill">Unknown</div>
-          <input className="inspector-input" placeholder="Add a speaker..." disabled />
+          <div className="pill">{selectedDetailSegment?.speakerLabel ?? "Unknown"}</div>
+          <div className="speaker-edit-row">
+            <input
+              ref={peopleSpeakerInputRef}
+              className="inspector-input"
+              placeholder={
+                detailMode === "segments"
+                  ? "Add a speaker..."
+                  : "Open Segments and select a segment"
+              }
+              list="speaker-suggestions"
+              value={speakerDraft}
+              disabled={detailMode !== "segments" || !activeArtifact || selectedSegmentSourceIndex === null}
+              onChange={(event) => setSpeakerDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void onAssignSpeakerToSelectedSegment();
+                }
+              }}
+            />
+            <button
+              className="secondary-button speaker-assign-button"
+              disabled={
+                isAssigningSpeaker
+                || detailMode !== "segments"
+                || !activeArtifact
+                || selectedSegmentSourceIndex === null
+                || !speakerDraft.trim()
+              }
+              onClick={() => void onAssignSpeakerToSelectedSegment()}
+            >
+              {isAssigningSpeaker ? "..." : "Assign"}
+            </button>
+          </div>
+          <label className="toggle-row compact">
+            <span>Propagate to adjacent unlabeled segments</span>
+            <input
+              type="checkbox"
+              checked={propagateSpeakerAssignment}
+              disabled={detailMode !== "segments"}
+              onChange={(event) => setPropagateSpeakerAssignment(event.target.checked)}
+            />
+          </label>
+          {knownSpeakerLabels.length > 0 ? (
+            <datalist id="speaker-suggestions">
+              {knownSpeakerLabels.map((speaker) => (
+                <option key={speaker} value={speaker} />
+              ))}
+            </datalist>
+          ) : null}
+          <small className="muted">
+            {detailMode === "segments"
+              ? selectedSegmentSourceIndex === null
+                ? "Select a segment to assign a speaker manually."
+                : "Speaker label is saved into segment metadata. Right-click a segment for quick actions."
+              : "Speaker assignment is available in Segments mode. Diarization controls are in Settings > Whisper C++."}
+          </small>
         </div>
 
         <div className="inspector-block">
@@ -3357,7 +4453,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   function renderDetail(): JSX.Element {
     return (
       <div className={rightSidebarOpen ? "detail-layout" : "detail-layout right-collapsed"}>
-        <section className="detail-main">
+        <section className="detail-main" ref={detailMainRef}>
           <DetailToolbar
             leftSidebarOpen={leftSidebarOpen}
             rightSidebarOpen={rightSidebarOpen}
@@ -3366,7 +4462,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             hasArtifact={Boolean(activeArtifact)}
             hasActiveJob={Boolean(activeJobId)}
             transcriptionProgress={activeTranscriptionPercentage}
-            onShowSidebar={() => setLeftSidebarOpen(true)}
+            onToggleSidebar={() => setLeftSidebarOpen((open) => !open)}
             onBack={() => setSection("history")}
             onSelectMode={(mode) => {
               if (mode === "transcript") {
@@ -3380,10 +4476,57 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             }}
             onOpenExport={() => setShowExportSheet(true)}
             onShowDetailsPanel={() => setRightSidebarOpen(true)}
+            onHideDetailsPanel={() => setRightSidebarOpen(false)}
             onCancel={() => void onCancel()}
           />
 
           <div className="detail-body">{renderDetailMain()}</div>
+
+          {segmentContextMenu ? (
+            <div
+              className="segment-context-menu"
+              role="menu"
+              style={{ left: segmentContextMenu.x, top: segmentContextMenu.y }}
+              onContextMenu={(event) => event.preventDefault()}
+            >
+              <button
+                type="button"
+                className="segment-context-item"
+                role="menuitem"
+                onClick={onAddSpeakerFromContextMenu}
+              >
+                Add Speaker...
+              </button>
+              <div className="segment-context-separator" />
+              <p className="segment-context-title">Assign Known Speaker</p>
+              {knownSpeakerLabels.length > 0 ? (
+                knownSpeakerLabels.map((speakerLabel) => (
+                  <button
+                    key={speakerLabel}
+                    type="button"
+                    className="segment-context-item"
+                    role="menuitem"
+                    disabled={isAssigningSpeaker}
+                    onClick={() => onAssignKnownSpeakerFromContextMenu(speakerLabel)}
+                  >
+                    {speakerLabel}
+                  </button>
+                ))
+              ) : (
+                <p className="segment-context-empty">No known speaker labels yet</p>
+              )}
+              <div className="segment-context-separator" />
+              <button
+                type="button"
+                className="segment-context-item danger"
+                role="menuitem"
+                disabled={isAssigningSpeaker || !contextMenuSegment?.speakerLabel}
+                onClick={onClearSpeakerFromContextMenu}
+              >
+                Clear Speaker
+              </button>
+            </div>
+          ) : null}
 
           <AudioPlayer
             inputPath={detailAudioInputPath}
@@ -3403,6 +4546,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             {renderInspector()}
           </aside>
         ) : null}
+
       </div>
     );
   }
@@ -3470,7 +4614,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           <div className="settings-row">
             <div>
               <strong>Enable auto update checks</strong>
-              <small>Checks GitHub releases in the background.</small>
+              <small>Checks Tauri updater and release feed in the background.</small>
             </div>
             <input
               type="checkbox"
@@ -3506,6 +4650,30 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             />
           </div>
 
+          <div className="settings-row settings-row-block">
+            <div>
+              <strong>Appearance</strong>
+              <small>Choose app theme behavior.</small>
+            </div>
+            <select
+              value={settings.general.appearance_mode ?? "system"}
+              onChange={(event) => {
+                const value = event.target.value as AppearanceMode;
+                void patchSettings((current) => ({
+                  ...current,
+                  general: {
+                    ...current.general,
+                    appearance_mode: value,
+                  },
+                }));
+              }}
+            >
+              <option value="system">System</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </div>
+
           <div className="settings-actions-row">
             <button className="secondary-button" onClick={() => void onRefreshUpdates()} disabled={checkingUpdates}>
               {checkingUpdates ? "Checking..." : "Check Updates"}
@@ -3513,16 +4681,24 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             {updateInfo ? (
               <small>
                 {updateInfo.has_update
-                  ? `Update ${updateInfo.latest_version} available`
+                  ? `Update ${updateInfo.latest_version} available${updateSource === "native" ? " (in-app install)" : ""}`
                   : `Up to date (${updateInfo.current_version})`}
               </small>
             ) : null}
           </div>
+          {updateInfo?.has_update && nativeUpdate ? (
+            <button className="cta-link-button" onClick={() => void onInstallUpdate()} disabled={installingUpdate}>
+              {installingUpdate
+                ? `Installing${updateDownloadPercent !== null ? ` (${updateDownloadPercent}%)` : "..."}`
+                : "Download & Install"}
+            </button>
+          ) : null}
           {updateInfo?.has_update && updateInfo.download_url ? (
             <a className="cta-link-button" href={updateInfo.download_url} target="_blank" rel="noreferrer">
-              Download Update
+              {nativeUpdate ? "Manual Download" : "Download Update"}
             </a>
           ) : null}
+          {updateStatusMessage ? <small>{updateStatusMessage}</small> : null}
         </section>
       </div>
     );
@@ -3538,16 +4714,17 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         <section className="settings-panel">
           <header>
             <h3>Transcription Defaults</h3>
-            <p>Used for every new transcription job across engines.</p>
+            <p>Used for every new transcription job.</p>
           </header>
 
           <div className="settings-row settings-row-block">
             <div>
               <strong>Transcription engine</strong>
-              <small>Select the backend used for local transcription runs.</small>
+              <small>This app uses Whisper.cpp for local transcription.</small>
             </div>
             <select
               value={settings.transcription.engine}
+              disabled={transcriptionEngineOptions.length <= 1}
               onChange={(event) => {
                 void onChangeTranscriptionEngine(event.target.value as TranscriptionEngine);
               }}
@@ -3619,7 +4796,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       return <div className="settings-placeholder">Settings unavailable.</div>;
     }
 
-    const whisperOptions = settings.transcription.whisper_options ?? getDefaultWhisperOptions();
+    const whisperOptions = settings.transcription.whisper_options ?? getDefaultWhisperOptions(platformIsAppleSilicon);
 
     return (
       <div className="settings-stack">
@@ -3675,6 +4852,40 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                 void onPatchWhisperOptions((current) => ({
                   ...current,
                   split_on_word: event.target.checked,
+                }));
+              }}
+            />
+          </div>
+
+          <div className="settings-row">
+            <div>
+              <strong>Speaker diarization (tinydiarize)</strong>
+              <small>Enable whisper.cpp tiny diarization (`-tdrz`) to infer speaker turns.</small>
+            </div>
+            <input
+              type="checkbox"
+              checked={whisperOptions.tinydiarize}
+              onChange={(event) => {
+                void onPatchWhisperOptions((current) => ({
+                  ...current,
+                  tinydiarize: event.target.checked,
+                }));
+              }}
+            />
+          </div>
+
+          <div className="settings-row">
+            <div>
+              <strong>Stereo diarization</strong>
+              <small>Enable whisper.cpp stereo diarization (`-di`) for stereo channel separation.</small>
+            </div>
+            <input
+              type="checkbox"
+              checked={whisperOptions.diarize}
+              onChange={(event) => {
+                void onPatchWhisperOptions((current) => ({
+                  ...current,
+                  diarize: event.target.checked,
                 }));
               }}
             />
@@ -3846,7 +5057,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       return <div className="settings-placeholder">Settings unavailable.</div>;
     }
 
-    const whisperOptions = settings.transcription.whisper_options ?? getDefaultWhisperOptions();
+    const whisperOptions = settings.transcription.whisper_options ?? getDefaultWhisperOptions(platformIsAppleSilicon);
 
     return (
       <div className="settings-stack">
@@ -3896,7 +5107,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             />
           </div>
 
-          {isAppleSilicon && (
+          {platformIsAppleSilicon && (
             <div className="settings-row settings-row-block">
               <div>
                 <strong>Audio encoder compute units</strong>
@@ -3921,7 +5132,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             </div>
           )}
 
-          {isAppleSilicon && (
+          {platformIsAppleSilicon && (
             <div className="settings-row settings-row-block">
               <div>
                 <strong>Text decoder compute units</strong>
@@ -4059,18 +5270,44 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
               <h4>Transcription Runtime Health</h4>
               <div className="settings-health-rows">
                 <div className="settings-health-row">
-                  <span className="settings-health-label">Whisper CLI</span>
-                  <code className="settings-health-value">{runtimeHealth.whisper_cli_resolved || runtimeHealth.whisper_cli_path}</code>
+                  <span className="settings-health-label">Platform</span>
+                  <span className="settings-health-value-inline">
+                    <code>{runtimeHealth.host_os}</code>
+                    <code>{runtimeHealth.host_arch}</code>
+                  </span>
                 </div>
-                {isAppleSilicon && (
-                  <div className="settings-health-row">
-                    <span className="settings-health-label">WhisperKit CLI</span>
-                    <code className="settings-health-value">{runtimeHealth.whisperkit_cli_resolved || runtimeHealth.whisperkit_cli_path}</code>
-                  </div>
-                )}
+                <div className="settings-health-row">
+                  <span className="settings-health-label">Engine policy</span>
+                  <span className="settings-health-value-inline">
+                    <code>{runtimeHealth.preferred_engine}</code>
+                    {runtimeHealth.configured_engine === runtimeHealth.preferred_engine ? (
+                      <span className="kind-chip">Aligned</span>
+                    ) : (
+                      <span className="missing-chip">Will auto-fix on start</span>
+                    )}
+                  </span>
+                </div>
+                <div className="settings-health-row">
+                  <span className="settings-health-label">Whisper CLI</span>
+                  <span className="settings-health-value-inline">
+                    <code className="settings-health-value">{runtimeHealth.whisper_cli_resolved || runtimeHealth.whisper_cli_path}</code>
+                    {runtimeHealth.whisper_cli_available ? (
+                      <span className="kind-chip">Runnable</span>
+                    ) : (
+                      <span className="missing-chip">Unavailable</span>
+                    )}
+                  </span>
+                </div>
                 <div className="settings-health-row">
                   <span className="settings-health-label">Whisper Stream</span>
-                  <code className="settings-health-value">{runtimeHealth.whisper_stream_resolved || runtimeHealth.whisper_stream_path}</code>
+                  <span className="settings-health-value-inline">
+                    <code className="settings-health-value">{runtimeHealth.whisper_stream_resolved || runtimeHealth.whisper_stream_path}</code>
+                    {runtimeHealth.whisper_stream_available ? (
+                      <span className="kind-chip">Runnable</span>
+                    ) : (
+                      <span className="missing-chip">Unavailable</span>
+                    )}
+                  </span>
                 </div>
                 <div className="settings-health-row">
                   <span className="settings-health-label">Active model</span>
@@ -4083,7 +5320,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                     )}
                   </span>
                 </div>
-                {isAppleSilicon && (
+                {platformIsAppleSilicon && (
                   <div className="settings-health-row">
                     <span className="settings-health-label">CoreML encoder</span>
                     {runtimeHealth.coreml_encoder_present ? (
@@ -4108,17 +5345,17 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                   <span className={model.installed ? "kind-chip" : "missing-chip"}>
                     {model.installed ? "Installed" : "Missing"}
                   </span>
-                  {isAppleSilicon && (
+                  {platformIsAppleSilicon && (
                     <span className={model.coreml_installed ? "kind-chip" : "missing-chip"}>
                       {model.coreml_installed ? "CoreML Ready" : "CoreML Missing"}
                     </span>
                   )}
                   <button
                     className="secondary-button"
-                    disabled={provisioning.running || (model.installed && (!isAppleSilicon || model.coreml_installed))}
+                    disabled={provisioning.running || (model.installed && (!platformIsAppleSilicon || model.coreml_installed))}
                     onClick={() => void onDownloadModel(model.key)}
                   >
-                    {model.installed && (!isAppleSilicon || model.coreml_installed) ? "Installed" : "Download"}
+                    {model.installed && (!platformIsAppleSilicon || model.coreml_installed) ? "Installed" : "Download"}
                   </button>
                 </div>
               </div>
@@ -4150,7 +5387,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       return <div className="settings-placeholder">Settings unavailable.</div>;
     }
 
-    const foundationAvailable = isAppleSilicon;
+    const foundationAvailable = platformIsAppleSilicon;
     const foundationEnabled = settings.ai.providers.foundation_apple.enabled;
     const foundationActive = settings.ai.active_provider === "foundation_apple";
     const geminiActive =
@@ -4238,7 +5475,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         return {
           ...current,
           active_provider: shouldDeactivateGemini
-            ? current.providers.foundation_apple.enabled && isAppleSilicon
+            ? current.providers.foundation_apple.enabled && platformIsAppleSilicon
               ? "foundation_apple"
               : "none"
             : current.active_provider,
@@ -4445,7 +5682,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                       void patchAiSettings((current) => {
                         const nextProvider =
                           current.active_provider === "gemini"
-                            ? current.providers.foundation_apple.enabled && isAppleSilicon
+                            ? current.providers.foundation_apple.enabled && platformIsAppleSilicon
                               ? "foundation_apple"
                               : "none"
                             : current.active_provider;
@@ -4522,7 +5759,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                             ));
                             const disablingActive = !enabled && current.active_remote_service_id === service.id;
                             const nextProvider = disablingActive
-                              ? current.providers.foundation_apple.enabled && isAppleSilicon
+                              ? current.providers.foundation_apple.enabled && platformIsAppleSilicon
                                 ? "foundation_apple"
                                 : "none"
                               : current.active_provider;
@@ -4850,23 +6087,21 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             />
           </label>
 
-          {isAppleSilicon ? (
-            <label>
-              WhisperKit CLI path
-              <input
-                value={settings.transcription.whisperkit_cli_path}
-                onChange={(event) => {
-                  void patchSettings((current) => ({
-                    ...current,
-                    transcription: {
-                      ...current.transcription,
-                      whisperkit_cli_path: event.target.value,
-                    },
-                  }));
-                }}
-              />
-            </label>
-          ) : null}
+          <label>
+            Whisper Stream path
+            <input
+              value={settings.transcription.whisperkit_cli_path}
+              onChange={(event) => {
+                void patchSettings((current) => ({
+                  ...current,
+                  transcription: {
+                    ...current.transcription,
+                    whisperkit_cli_path: event.target.value,
+                  },
+                }));
+              }}
+            />
+          </label>
 
           <label>
             FFmpeg path
@@ -4913,7 +6148,6 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   function renderSettingsPane(pane: SettingsPane): JSX.Element {
     if (pane === "transcription") return renderSettingsTranscription();
     if (pane === "whisper_cpp") return renderSettingsWhisperCpp();
-    if (pane === "whisper_kit") return renderSettingsWhisperKit();
     if (pane === "local_models") return renderSettingsLocalModels();
     if (pane === "advanced") return renderSettingsAdvanced();
     if (pane === "general") return renderSettingsGeneral();
@@ -4984,9 +6218,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     return (
       <main className="settings-window-shell">
         <section className="settings-window-frame">
-          <header className="settings-window-header" data-tauri-drag-region>
-            <div className="drag-layer" data-tauri-drag-region style={{ width: "100%", height: "100%" }} />
-          </header>
+          <header className="settings-window-header" data-tauri-drag-region />
           {renderSettings()}
           {error ? <p className="error-banner settings-window-error">{error}</p> : null}
         </section>
@@ -5010,17 +6242,6 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
   return (
     <main className="app-shell">
-      {isModalLocked && (
-        <div style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          zIndex: 999999,
-          background: "transparent"
-        }} />
-      )}
       <section className={leftSidebarOpen ? "window-frame" : "window-frame left-collapsed"}>
         {leftSidebarOpen ? (
           <aside className="left-sidebar">
@@ -5109,7 +6330,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                   {leftSidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
                 </button>
                 {section === "home" ? null : (
-                  <h1>
+                  <h1 data-tauri-drag-region>
                     {section === "queue"
                       ? "Queue"
                       : section === "realtime"

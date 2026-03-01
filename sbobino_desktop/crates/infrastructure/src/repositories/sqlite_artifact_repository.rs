@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
@@ -371,6 +372,106 @@ impl ArtifactRepository for SqliteArtifactRepository {
                     params![id, optimized_transcript, summary, faqs, Utc::now().to_rfc3339()],
                 )
                 .map_err(|e| ApplicationError::Persistence(format!("failed to update artifact: {e}")))?;
+
+            if updated_rows == 0 {
+                return Ok(None);
+            }
+
+            let mut stmt = conn
+                .prepare(
+                    r#"
+                    SELECT id, job_id, title, kind, input_path, raw_transcript, optimized_transcript,
+                           summary, faqs, metadata_json, created_at, updated_at
+                    FROM transcript_artifacts
+                    WHERE id = ?1 AND is_deleted = 0
+                    LIMIT 1
+                    "#,
+                )
+                .map_err(|e| ApplicationError::Persistence(format!("failed to prepare query: {e}")))?;
+
+            let mut rows = stmt
+                .query(params![id])
+                .map_err(|e| ApplicationError::Persistence(format!("failed to run query: {e}")))?;
+
+            let Some(row) = rows
+                .next()
+                .map_err(|e| ApplicationError::Persistence(format!("failed to read row: {e}")))?
+            else {
+                return Ok(None);
+            };
+
+            let artifact = Self::row_to_artifact(row)
+                .map_err(|e| ApplicationError::Persistence(format!("failed to parse artifact row: {e}")))?;
+
+            Ok(Some(artifact))
+        })
+        .await
+        .map_err(|e| ApplicationError::Persistence(format!("storage task join error: {e}")))?
+    }
+
+    async fn update_timeline_v2(
+        &self,
+        id: &str,
+        timeline_v2_json: &str,
+    ) -> Result<Option<TranscriptArtifact>, ApplicationError> {
+        let db_path = self.db_path.clone();
+        let id = id.to_string();
+        let timeline_v2_json = timeline_v2_json.trim().to_string();
+
+        tokio::task::spawn_blocking(move || {
+            let conn = Connection::open(db_path).map_err(|e| {
+                ApplicationError::Persistence(format!("failed to open sqlite database: {e}"))
+            })?;
+
+            // Validate timeline payload before persisting it.
+            let _: serde_json::Value = serde_json::from_str(&timeline_v2_json).map_err(|e| {
+                ApplicationError::Validation(format!("invalid timeline_v2 JSON: {e}"))
+            })?;
+
+            let mut metadata_stmt = conn
+                .prepare(
+                    r#"
+                    SELECT metadata_json
+                    FROM transcript_artifacts
+                    WHERE id = ?1 AND is_deleted = 0
+                    LIMIT 1
+                    "#,
+                )
+                .map_err(|e| {
+                    ApplicationError::Persistence(format!("failed to prepare metadata query: {e}"))
+                })?;
+
+            let metadata_json: String = match metadata_stmt.query_row(params![id], |row| row.get(0))
+            {
+                Ok(value) => value,
+                Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+                Err(e) => {
+                    return Err(ApplicationError::Persistence(format!(
+                        "failed to read metadata: {e}"
+                    )))
+                }
+            };
+
+            let mut metadata: BTreeMap<String, String> =
+                serde_json::from_str(&metadata_json).unwrap_or_default();
+            metadata.insert("timeline_v2".to_string(), timeline_v2_json);
+            let updated_metadata_json = serde_json::to_string(&metadata).map_err(|e| {
+                ApplicationError::Persistence(format!("failed to serialize metadata: {e}"))
+            })?;
+
+            let updated_rows = conn
+                .execute(
+                    r#"
+                    UPDATE transcript_artifacts
+                    SET metadata_json = ?2,
+                        updated_at = ?3
+                    WHERE id = ?1 AND is_deleted = 0
+                    "#,
+                    params![id, updated_metadata_json, Utc::now().to_rfc3339()],
+                )
+                .map_err(|e| {
+                    ApplicationError::Persistence(format!("failed to update timeline metadata: {e}"))
+                })?;
 
             if updated_rows == 0 {
                 return Ok(None);

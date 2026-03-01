@@ -25,6 +25,9 @@ pub async fn open_settings_window(
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
+        if let Some(main_win) = app.get_webview_window("main") {
+            let _ = main_win.emit("settings_opened", ());
+        }
         return Ok(false);
     }
 
@@ -57,23 +60,22 @@ pub async fn open_settings_window(
         })?;
     }
 
-    let settings_window = builder.build()
-    .map_err(|error| {
+    let settings_window = builder.build().map_err(|error| {
         CommandError::new("window", format!("failed to open settings window: {error}"))
     })?;
 
     if let Some(main_win) = main_window {
         let _ = main_win.emit("settings_opened", ());
         let app_handle = app.clone();
-        settings_window.on_window_event(move |event| {
-            if let tauri::WindowEvent::Destroyed = event {
+        settings_window.on_window_event(move |event| match event {
+            tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed => {
                 if let Some(main) = app_handle.get_webview_window("main") {
                     let _ = main.emit("settings_closed", ());
                 }
             }
+            _ => {}
         });
     }
-
 
     // Apply the same macOS vibrancy effect as the main window
     #[cfg(target_os = "macos")]
@@ -81,7 +83,7 @@ pub async fn open_settings_window(
         use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
         let _ = apply_vibrancy(
             &settings_window,
-            NSVisualEffectMaterial::Sidebar,
+            NSVisualEffectMaterial::UnderWindowBackground,
             Some(NSVisualEffectState::Active),
             None,
         );

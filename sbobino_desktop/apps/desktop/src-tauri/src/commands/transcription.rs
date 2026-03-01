@@ -14,6 +14,8 @@ use crate::{
     state::{AppState, TranscriptionTask},
 };
 
+const DELTA_REPLACE_PREFIX: &str = "\u{001F}REPLACE:";
+
 #[derive(Debug, Deserialize)]
 pub struct StartTranscriptionPayload {
     pub input_path: String,
@@ -40,6 +42,7 @@ pub struct TranscriptionDeltaEvent {
     pub job_id: String,
     pub text: String,
     pub sequence: u64,
+    pub mode: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,10 +67,7 @@ pub async fn start_transcription(
         whisper_options: payload.whisper_options,
     };
 
-    let transcription_service = state
-        .runtime_factory
-        .build_service()
-        .map_err(|error| CommandError::new("runtime_factory", error))?;
+    let runtime_factory = state.runtime_factory.clone();
     let app_handle = app.clone();
     let delta_app_handle = app.clone();
     let task_job_id = job_id.clone();
@@ -84,16 +84,39 @@ pub async fn start_transcription(
         });
         let delta_sequence = delta_sequence.clone();
         let emit_delta = Arc::new(move |text: String| {
+            let (mode, normalized_text) =
+                if let Some(snapshot) = text.strip_prefix(DELTA_REPLACE_PREFIX) {
+                    ("replace".to_string(), snapshot.to_string())
+                } else {
+                    ("append".to_string(), text)
+                };
             let sequence = delta_sequence.fetch_add(1, Ordering::Relaxed);
             let _ = delta_app_handle.emit(
                 "transcription://delta",
                 TranscriptionDeltaEvent {
                     job_id: delta_job_id.clone(),
-                    text,
+                    text: normalized_text,
                     sequence,
+                    mode,
                 },
             );
         });
+
+        let transcription_service = match runtime_factory.build_service() {
+            Ok(service) => service,
+            Err(error) => {
+                let _ = app.emit(
+                    "transcription://failed",
+                    JobFailedEvent {
+                        job_id: task_job_id.clone(),
+                        message: format!("Transcription runtime unavailable: {error}"),
+                    },
+                );
+                let mut registry = tasks.lock().await;
+                registry.remove(&cleanup_job_id);
+                return;
+            }
+        };
 
         match transcription_service
             .run_file_transcription(request, emit_progress, emit_delta, task_cancellation_token)
