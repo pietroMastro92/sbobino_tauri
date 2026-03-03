@@ -44,6 +44,7 @@ import {
   Sparkles,
   Plus,
   Search,
+  Scissors,
   Trash2,
   Upload,
   X,
@@ -120,7 +121,7 @@ import type {
   UpdateCheckResponse,
   WhisperOptions,
 } from "./types";
-import { AudioPlayer } from "./components/AudioPlayer";
+import { AudioPlayer, type TrimRegion } from "./components/AudioPlayer";
 import { ExportSheet, type ExportRequest } from "./components/ExportSheet";
 import { ModelManagerSheet } from "./components/ModelManagerSheet";
 import { LoadingAnimation } from "./components/LoadingAnimation";
@@ -959,6 +960,8 @@ type DetailToolbarProps = {
   onCancel: () => void;
   isImprovingText?: boolean;
   onImproveText?: () => void;
+  showRetranscribe?: boolean;
+  onRetranscribeTrimmedAudio?: () => void;
 };
 
 function DetailToolbar({
@@ -978,6 +981,8 @@ function DetailToolbar({
   onCancel,
   isImprovingText,
   onImproveText,
+  showRetranscribe,
+  onRetranscribeTrimmedAudio,
 }: DetailToolbarProps): JSX.Element {
   return (
     <header
@@ -1000,7 +1005,7 @@ function DetailToolbar({
       </div>
 
       <div style={{ display: "flex", alignItems: "center" }}>
-        {detailMode === "transcript" && onImproveText && (
+        {detailMode === "transcript" && !showRetranscribe && onImproveText && (
           <button
             className="optimize-hover-button"
             onClick={() => void onImproveText()}
@@ -1009,6 +1014,17 @@ function DetailToolbar({
           >
             <div className="button-content">
               <Sparkles size={14} /> Optimize
+            </div>
+          </button>
+        )}
+        {detailMode === "transcript" && showRetranscribe && onRetranscribeTrimmedAudio && (
+          <button
+            className="retranscribe-hover-button"
+            onClick={() => void onRetranscribeTrimmedAudio()}
+            title="Retranscribe Trimmed Audio"
+          >
+            <div className="button-content">
+              <Scissors size={14} /> Retranscribe
             </div>
           </button>
         )}
@@ -1325,6 +1341,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   const [chatIncludeSpeakers, setChatIncludeSpeakers] = useState(false);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
   const [audioDurationSeconds, setAudioDurationSeconds] = useState(0);
+  const [trimRegions, setTrimRegions] = useState<TrimRegion[]>([]);
+  const [trimmedAudioPath, setTrimmedAudioPath] = useState<string | null>(null);
 
   const activeJobIdRef = useRef<string | null>(activeJobId);
   const activeJobDeltaSequenceRef = useRef<number>(-1);
@@ -2080,13 +2098,16 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   }, [error]);
 
   const detailAudioInputPath = useMemo(
-    () =>
-      activeArtifact && activeArtifact.kind === "file"
-        ? activeArtifact.input_path
-        : activeJobId
-          ? selectedFile
-          : null,
-    [activeArtifact, activeJobId, selectedFile],
+    () => {
+      const originalPath =
+        activeArtifact && activeArtifact.kind === "file"
+          ? activeArtifact.input_path
+          : activeJobId
+            ? selectedFile
+            : null;
+      return trimmedAudioPath ?? originalPath;
+    },
+    [activeArtifact, activeJobId, selectedFile, trimmedAudioPath],
   );
 
   const detailAudioFileLabel = useMemo(
@@ -2547,7 +2568,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
       const startResult = await withTimeout(
         startTranscription({
-          input_path: targetFile,
+          input_path: trimmedAudioPath ?? targetFile,
           language: settings.transcription.language,
           model: settings.transcription.model,
           enable_ai: settings.transcription.enable_ai_post_processing,
@@ -4595,6 +4616,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             onCancel={() => void onCancel()}
             isImprovingText={isImprovingText}
             onImproveText={onImproveText}
+            showRetranscribe={!!trimmedAudioPath}
+            onRetranscribeTrimmedAudio={() => void onStartTranscription()}
           />
 
           <div className="detail-body">{renderDetailMain()}</div>
@@ -4649,6 +4672,10 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             inputPath={detailAudioInputPath}
             onMetadataLoaded={(metadata) => {
               setAudioDurationSeconds(metadata.durationSeconds);
+            }}
+            onTrimRegionsChange={setTrimRegions}
+            onTrimApplied={(path) => {
+              setTrimmedAudioPath(path);
             }}
           />
         </section>

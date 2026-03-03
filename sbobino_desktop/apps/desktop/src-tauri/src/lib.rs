@@ -14,7 +14,7 @@ use crate::commands::artifacts::{
     chat_artifact, delete_artifacts, empty_deleted_artifacts, export_artifact, get_artifact, list_artifacts,
     list_deleted_artifacts, list_recent_artifacts, rename_artifact, restore_artifacts,
     summarize_artifact, optimize_artifact, update_artifact, update_artifact_timeline,
-    hard_delete_artifacts, read_audio_file,
+    hard_delete_artifacts, read_audio_file, write_trimmed_audio,
 };
 use crate::commands::provisioning::{
     provisioning_cancel, provisioning_download_model, provisioning_models, provisioning_start,
@@ -146,6 +146,7 @@ pub fn run() {
             summarize_artifact,
             optimize_artifact,
             read_audio_file,
+            write_trimmed_audio,
             start_realtime,
             pause_realtime,
             resume_realtime,

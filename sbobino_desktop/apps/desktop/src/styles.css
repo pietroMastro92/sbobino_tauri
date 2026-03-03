@@ -1468,19 +1468,62 @@ code {
   padding: 0;
   border-radius: 6px;
   /* Add pulsing animation to the dot state */
-  animation: pulse-dot 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  animation: pulse-dot-yellow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
-@keyframes pulse-dot {
-  0%, 100% {
-    opacity: 1;
-    transform: scale(1);
-    box-shadow: 0 0 0 0 rgba(109, 148, 197, 0.4);
+@keyframes pulse-dot-yellow {
+  0% {
+    box-shadow: 0 0 0 0 rgba(234, 179, 8, 0.6);
+    background: rgba(234, 179, 8, 0.9);
   }
   50% {
-    opacity: 0.6;
-    transform: scale(0.9);
+    box-shadow: 0 0 0 4px rgba(234, 179, 8, 0);
+    background: rgba(234, 179, 8, 0.4);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(234, 179, 8, 0);
+    background: rgba(234, 179, 8, 0.9);
+  }
+}
+
+.retranscribe-hover-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  padding: 0 12px;
+  background: var(--topbar-control-bg);
+  border: 1px solid transparent;
+  border-radius: 16px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  margin-right: 8px; /* spacing from the mode selector */
+  overflow: hidden;
+  /* Start collapsed as a small dot */
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border-radius: 6px;
+  /* Add pulsing animation to the dot state */
+  animation: pulse-dot-blue 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse-dot-blue {
+  0% {
+    box-shadow: 0 0 0 0 rgba(109, 148, 197, 0.6);
+    background: rgba(109, 148, 197, 1);
+  }
+  50% {
     box-shadow: 0 0 0 4px rgba(109, 148, 197, 0);
+    background: rgba(109, 148, 197, 0.5);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(109, 148, 197, 0);
+    background: rgba(109, 148, 197, 1);
   }
 }
 
@@ -1496,9 +1539,9 @@ code {
   height: 32px;
   padding: 0 14px;
   border-radius: 16px;
-  background: var(--sidebar-active);
-  border-color: var(--detail-control-border);
-  color: var(--detail-active-text);
+  background: rgba(234, 179, 8, 0.15);
+  border-color: rgba(234, 179, 8, 0.4);
+  color: #c99310;
   animation: none;
 }
 
@@ -1514,6 +1557,43 @@ code {
 }
 
 .optimize-hover-button:hover:not(:disabled) .button-content {
+  opacity: 1;
+  transform: scale(1);
+  transition-delay: 0.1s; /* wait for expansion */
+}
+
+/* Retranscribe pseudo-states */
+
+.retranscribe-hover-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  animation: none;
+}
+
+.retranscribe-hover-button:hover:not(:disabled) {
+  /* Expand into a full button */
+  width: 140px;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 16px;
+  background: var(--sidebar-active);
+  border-color: var(--detail-control-border);
+  color: var(--detail-active-text);
+  animation: none;
+}
+
+.retranscribe-hover-button .button-content {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  opacity: 0;
+  transform: scale(0.8);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  pointer-events: none;
+}
+
+.retranscribe-hover-button:hover:not(:disabled) .button-content {
   opacity: 1;
   transform: scale(1);
   transition-delay: 0.1s; /* wait for expansion */
@@ -1804,16 +1884,8 @@ code {
   padding: 0 10px;
 }
 
-.audio-player {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 8px;
-  border-top: 1px solid var(--line-soft);
-  padding: 9px 12px;
-  background: var(--detail-glass-soft);
-  backdrop-filter: blur(8px);
-}
+/* .audio-player layout is now defined in the trim mode section below */
+
 
 .playback-button {
   width: 30px;
@@ -1862,6 +1934,324 @@ code {
   grid-column: 1 / -1;
   color: #9b5a6a;
   font-size: 0.82rem;
+}
+
+/* ── Audio Player: trim mode layout ────────────────────────── */
+
+.audio-player {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-top: 1px solid var(--line-soft);
+  background: var(--detail-glass-soft);
+  backdrop-filter: blur(8px);
+}
+
+.audio-controls-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+}
+
+.audio-waveform-spacer {
+  min-width: 0;
+}
+
+/* ── Trim toggle button ────────────────────────────────────── */
+
+.trim-toggle {
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease, border-color 150ms ease;
+}
+
+.trim-toggle:hover {
+  background: var(--sidebar-hover);
+  color: var(--text);
+}
+
+.trim-toggle--active {
+  background: var(--detail-active-bg);
+  border-color: var(--detail-active-border);
+  color: var(--detail-active-text);
+}
+
+.trim-toggle:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── Trim panel (waveform + regions) ───────────────────────── */
+
+.audio-trim-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 12px 10px;
+  animation: trimPanelIn 250ms ease;
+}
+
+@keyframes trimPanelIn {
+  from {
+    opacity: 0;
+    max-height: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    max-height: 200px;
+    transform: translateY(0);
+  }
+}
+
+/* ── Waveform track ────────────────────────────────────────── */
+
+.audio-waveform-track {
+  position: relative;
+  height: 64px;
+  border-radius: 10px;
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  overflow: hidden;
+  cursor: crosshair;
+}
+
+.audio-waveform-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.audio-waveform-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.audio-waveform-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.74rem;
+  font-weight: 500;
+  color: var(--muted);
+  pointer-events: none;
+  letter-spacing: 0.02em;
+  opacity: 0.7;
+}
+
+.trim-creating-overlay {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  background: var(--accent);
+  opacity: 0.18;
+  pointer-events: none;
+  border-radius: 4px;
+  transition: width 16ms linear;
+}
+
+/* ── Trim handles ──────────────────────────────────────────── */
+
+.trim-region-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.trim-handle {
+  position: absolute;
+  top: 0;
+  width: 14px;
+  height: 100%;
+  cursor: ew-resize;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+  transform: translateX(-50%);
+}
+
+.trim-handle-grip {
+  width: 4px;
+  height: 28px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 6px rgba(109, 148, 197, 0.35);
+  transition: height 120ms ease, box-shadow 120ms ease;
+}
+
+.trim-handle:hover .trim-handle-grip {
+  height: 36px;
+  box-shadow: 0 0 10px rgba(109, 148, 197, 0.55);
+}
+
+.trim-handle--start {
+  cursor: w-resize;
+}
+
+.trim-handle--end {
+  cursor: e-resize;
+}
+
+/* ── Trim region chips bar ─────────────────────────────────── */
+
+.trim-regions-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+}
+
+.trim-add-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--accent);
+  padding: 3px 10px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.trim-add-button:hover {
+  background: var(--sidebar-hover);
+  border-color: var(--accent);
+}
+
+.trim-add-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.trim-region-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--detail-active-bg);
+  padding: 3px 6px 3px 10px;
+  font-size: 0.76rem;
+  font-weight: 500;
+  color: var(--detail-active-text);
+  white-space: nowrap;
+  animation: chipIn 200ms ease;
+}
+
+@keyframes chipIn {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.trim-region-chip-remove {
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+  transition: background 100ms ease, color 100ms ease;
+}
+
+.trim-region-chip-remove:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+.trim-clear-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 3px 8px;
+  transition: color 100ms ease;
+}
+
+.trim-clear-button:hover {
+  color: var(--danger);
+}
+
+.trim-apply-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.74rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 12px 4px 8px;
+  transition: opacity 140ms ease, transform 80ms ease;
+}
+
+.trim-apply-button:hover:not(:disabled) {
+  opacity: 0.88;
+  transform: scale(1.02);
+}
+
+.trim-apply-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.trim-apply-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: trim-spin 600ms linear infinite;
+}
+
+@keyframes trim-spin {
+  to { transform: rotate(360deg); }
 }
 
 .detail-inspector {
@@ -3493,6 +3883,60 @@ code {
 
   [data-theme="dark"] .export-sheet {
     background: rgba(34, 40, 49, 0.80);
+  }
+
+  [data-theme="dark"] .trim-toggle {
+    background: rgba(57, 62, 70, 0.5);
+    border-color: rgba(223, 208, 184, 0.12);
+    color: var(--muted);
+  }
+
+  [data-theme="dark"] .trim-toggle:hover {
+    background: rgba(57, 62, 70, 0.7);
+  }
+
+  [data-theme="dark"] .trim-toggle--active {
+    background: var(--detail-active-bg);
+    border-color: var(--detail-active-border);
+    color: var(--detail-active-text);
+  }
+
+  [data-theme="dark"] .audio-waveform-track {
+    background: rgba(57, 62, 70, 0.35);
+    border-color: rgba(223, 208, 184, 0.1);
+  }
+
+  [data-theme="dark"] .trim-handle-grip {
+    background: var(--accent);
+    box-shadow: 0 0 6px rgba(148, 137, 121, 0.3);
+  }
+
+  [data-theme="dark"] .trim-handle:hover .trim-handle-grip {
+    box-shadow: 0 0 10px rgba(148, 137, 121, 0.5);
+  }
+
+  [data-theme="dark"] .trim-add-button {
+    border-color: rgba(223, 208, 184, 0.12);
+    color: var(--accent);
+  }
+
+  [data-theme="dark"] .trim-add-button:hover {
+    background: rgba(57, 62, 70, 0.5);
+  }
+
+  [data-theme="dark"] .trim-region-chip {
+    background: var(--detail-active-bg);
+    border-color: rgba(223, 208, 184, 0.12);
+    color: var(--detail-active-text);
+  }
+
+  [data-theme="dark"] .trim-region-chip-remove {
+    color: var(--muted);
+  }
+
+  [data-theme="dark"] .trim-region-chip-remove:hover {
+    background: var(--danger);
+    color: #fff;
   }
 
   [data-theme="dark"] .quick-action {

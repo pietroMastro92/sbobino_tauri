@@ -7,6 +7,7 @@ use printpdf::{ops::PdfPage, text::TextItem, units::Pt, BuiltinFont, Mm, Op, Pdf
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::State;
+use uuid::Uuid;
 
 use sbobino_application::{ApplicationError, ArtifactQuery, TranscriptEnhancer};
 use sbobino_domain::{ArtifactKind, TranscriptArtifact};
@@ -472,7 +473,7 @@ pub async fn optimize_artifact(
     state: State<'_, AppState>,
     payload: OptimizeArtifactPayload,
 ) -> Result<String, CommandError> {
-    let artifact = state
+    let _artifact = state
         .artifact_service
         .get(&payload.id)
         .await
@@ -855,6 +856,198 @@ pub async fn read_audio_file(payload: ReadAudioFilePayload) -> Result<Vec<u8>, C
     tokio::fs::read(&payload.path)
         .await
         .map_err(|e| CommandError::new("audio", format!("failed to read audio file: {e}")))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TrimRegion {
+    pub start: f64,
+    pub end: f64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WriteTrimmedAudioPayload {
+    pub input_path: String,
+    pub regions: Vec<TrimRegion>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WriteTrimmedAudioResponse {
+    pub path: String,
+}
+
+#[tauri::command]
+pub async fn write_trimmed_audio(
+    state: State<'_, AppState>,
+    payload: WriteTrimmedAudioPayload,
+) -> Result<WriteTrimmedAudioResponse, CommandError> {
+    use tokio::process::Command;
+
+    if payload.regions.is_empty() {
+        return Err(CommandError::new("trim", "no regions selected"));
+    }
+
+    let input = Path::new(&payload.input_path);
+    if !input.exists() {
+        return Err(CommandError::new(
+            "trim",
+            format!("input file not found: {}", payload.input_path),
+        ));
+    }
+
+    // Resolve the bundled ffmpeg binary path
+    let settings = state
+        .settings_service
+        .get()
+        .await
+        .map_err(|e| CommandError::new("trim", format!("failed to load settings: {e}")))?;
+    let ffmpeg_path = state
+        .runtime_factory
+        .resolve_binary_path(&settings.transcription.ffmpeg_path, "ffmpeg");
+
+    let temp_dir = std::env::temp_dir();
+    let stem = input
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("trimmed");
+    let output_filename = format!("sbobino_trim_{}_{}.wav", stem, Uuid::new_v4());
+    let output_path = temp_dir.join(&output_filename);
+
+    let mut sorted_regions = payload.regions;
+    sorted_regions.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
+
+    if sorted_regions.len() == 1 {
+        // Single region: direct ffmpeg extraction
+        let region = &sorted_regions[0];
+        let result = Command::new(&ffmpeg_path)
+            .kill_on_drop(true)
+            .arg("-y")
+            .arg("-i")
+            .arg(input)
+            .arg("-ss")
+            .arg(format!("{:.3}", region.start))
+            .arg("-to")
+            .arg(format!("{:.3}", region.end))
+            .arg("-ar")
+            .arg("16000")
+            .arg("-ac")
+            .arg("1")
+            .arg("-c:a")
+            .arg("pcm_s16le")
+            .arg(&output_path)
+            .output()
+            .await
+            .map_err(|e| {
+                CommandError::new("trim", format!("ffmpeg failed to start: {e}"))
+            })?;
+
+        if !result.status.success() {
+            return Err(CommandError::new(
+                "trim",
+                format!(
+                    "ffmpeg trim failed: {}",
+                    String::from_utf8_lossy(&result.stderr)
+                ),
+            ));
+        }
+    } else {
+        // Multiple regions: extract each, then concatenate
+        let mut part_paths = Vec::new();
+
+        for (i, region) in sorted_regions.iter().enumerate() {
+            let part_filename = format!("sbobino_part_{}_{}_{}.wav", stem, i, Uuid::new_v4());
+            let part_path = temp_dir.join(&part_filename);
+
+            let result = Command::new(&ffmpeg_path)
+                .kill_on_drop(true)
+                .arg("-y")
+                .arg("-i")
+                .arg(input)
+                .arg("-ss")
+                .arg(format!("{:.3}", region.start))
+                .arg("-to")
+                .arg(format!("{:.3}", region.end))
+                .arg("-ar")
+                .arg("16000")
+                .arg("-ac")
+                .arg("1")
+                .arg("-c:a")
+                .arg("pcm_s16le")
+                .arg(&part_path)
+                .output()
+                .await
+                .map_err(|e| {
+                    CommandError::new("trim", format!("ffmpeg failed to start: {e}"))
+                })?;
+
+            if !result.status.success() {
+                // Clean up any parts created so far
+                for p in &part_paths {
+                    let _ = tokio::fs::remove_file(p).await;
+                }
+                return Err(CommandError::new(
+                    "trim",
+                    format!(
+                        "ffmpeg trim failed on region {}: {}",
+                        i,
+                        String::from_utf8_lossy(&result.stderr)
+                    ),
+                ));
+            }
+
+            part_paths.push(part_path);
+        }
+
+        // Build concat file list
+        let concat_filename = format!("sbobino_concat_{}.txt", Uuid::new_v4());
+        let concat_path = temp_dir.join(&concat_filename);
+        let concat_content: String = part_paths
+            .iter()
+            .map(|p| format!("file '{}'", p.to_string_lossy().replace('\'', "'\\''")))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        tokio::fs::write(&concat_path, &concat_content)
+            .await
+            .map_err(|e| CommandError::new("trim", format!("failed to write concat list: {e}")))?;
+
+        let result = Command::new(&ffmpeg_path)
+            .kill_on_drop(true)
+            .arg("-y")
+            .arg("-f")
+            .arg("concat")
+            .arg("-safe")
+            .arg("0")
+            .arg("-i")
+            .arg(&concat_path)
+            .arg("-c")
+            .arg("copy")
+            .arg(&output_path)
+            .output()
+            .await
+            .map_err(|e| {
+                CommandError::new("trim", format!("ffmpeg concat failed to start: {e}"))
+            })?;
+
+        // Clean up temp files
+        let _ = tokio::fs::remove_file(&concat_path).await;
+        for p in &part_paths {
+            let _ = tokio::fs::remove_file(p).await;
+        }
+
+        if !result.status.success() {
+            return Err(CommandError::new(
+                "trim",
+                format!(
+                    "ffmpeg concat failed: {}",
+                    String::from_utf8_lossy(&result.stderr)
+                ),
+            ));
+        }
+    }
+
+    Ok(WriteTrimmedAudioResponse {
+        path: output_path.to_string_lossy().to_string(),
+    })
 }
 
 fn export_txt(path: &Path, transcription: &str) -> Result<(), CommandError> {

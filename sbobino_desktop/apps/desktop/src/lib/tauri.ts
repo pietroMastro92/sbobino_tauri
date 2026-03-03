@@ -289,6 +289,15 @@ export async function readAudioFile(path: string): Promise<number[]> {
   return invoke<number[]>("read_audio_file", { payload: { path } });
 }
 
+export async function writeTrimmedAudio(
+  inputPath: string,
+  regions: Array<{ start: number; end: number }>,
+): Promise<{ path: string }> {
+  return invoke<{ path: string }>("write_trimmed_audio", {
+    payload: { input_path: inputPath, regions },
+  });
+}
+
 export async function checkUpdates(): Promise<UpdateCheckResponse> {
   return invoke<UpdateCheckResponse>("check_updates");
 }
