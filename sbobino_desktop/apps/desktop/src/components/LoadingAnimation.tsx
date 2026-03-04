@@ -1,5 +1,6 @@
 
 import { Sparkles, type LucideIcon } from "lucide-react";
+import { t } from "../i18n";
 
 type LoadingAnimationProps = {
   icon?: LucideIcon;
@@ -10,10 +11,12 @@ type LoadingAnimationProps = {
 
 export function LoadingAnimation({
   icon: Icon = Sparkles,
-  title = "Loading...",
-  description = "Please wait...",
+  title,
+  description,
   variant = "transcribing",
 }: LoadingAnimationProps) {
+  const resolvedTitle = title ?? t("loading.title", "Loading...");
+  const resolvedDesc = description ?? t("loading.description", "Please wait...");
   return (
     <div className="center-empty" style={{ opacity: 0, animation: "fadeIn 0.5s ease-out forwards", height: "100%", maxHeight: "100%" }}>
       <style>
@@ -32,9 +35,10 @@ export function LoadingAnimation({
       <div className="center-empty-icon" style={{ animation: "pulseGlow 2.5s infinite ease-in-out" }}>
         <Icon size={28} />
       </div>
-      <h3>{title}</h3>
-      <p>{description}</p>
-      
+      <div className="loading-content">
+        <h2 className="loading-title">{resolvedTitle}</h2>
+        <p className="loading-desc">{resolvedDesc}</p>
+      </div>
       <div style={{ marginTop: "48px", width: "100%", maxWidth: "720px", display: "flex", justifyContent: "center" }}>
         {variant === "transcribing" && (
           <svg viewBox="0 0 720 140" xmlns="http://www.w3.org/2000/svg" style={{ width: "100%", height: "auto" }}>

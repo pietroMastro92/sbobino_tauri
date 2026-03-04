@@ -1,4 +1,5 @@
 import { Download, RefreshCw } from "lucide-react";
+import { t } from "../i18n";
 import type {
   ProvisioningModelCatalogEntry,
   ProvisioningProgressEvent,
@@ -43,20 +44,20 @@ export function ModelManagerSheet({
       <section className="model-sheet" onClick={(event) => event.stopPropagation()}>
         <header className="model-sheet-head">
           <div>
-            <h3>Model Manager</h3>
+            <h3>{t("modelManager.title", "Model Manager")}</h3>
             <small>
               {missingCount === 0
-                ? "All models are available"
-                : `${missingCount} model${missingCount > 1 ? "s" : ""} missing`}
+                ? t("modelManager.allAvailable", "All models are available")
+                : `${missingCount} ${t("modelManager.modelsMissing", "model(s) missing")}`}
             </small>
           </div>
-          <button className="icon-button" onClick={() => void onRefresh()} disabled={running} title="Refresh">
+          <button className="icon-button" onClick={() => void onRefresh()} disabled={running} title={t("modelManager.refresh", "Refresh")}>
             <RefreshCw size={14} />
           </button>
         </header>
 
         <p className="muted">
-          Directory: <code>{modelsDir || "(not configured)"}</code>
+          {t("modelManager.directory", "Directory:")} <code>{modelsDir || t("modelManager.notConfigured", "(not configured)")}</code>
         </p>
 
         <div className="model-list">
@@ -68,10 +69,10 @@ export function ModelManagerSheet({
               </div>
               <div className="model-row-actions">
                 <span className={model.installed ? "kind-chip" : "missing-chip"}>
-                  {model.installed ? "Ready" : "Missing"}
+                  {model.installed ? t("modelManager.ready", "Ready") : t("modelManager.missing", "Missing")}
                 </span>
                 <span className={model.coreml_installed ? "kind-chip" : "missing-chip"}>
-                  {model.coreml_installed ? "CoreML Ready" : "CoreML Missing"}
+                  {model.coreml_installed ? t("modelManager.coremlReady", "CoreML Ready") : t("modelManager.coremlMissing", "CoreML Missing")}
                 </span>
                 <button
                   className="secondary-button"
@@ -79,7 +80,7 @@ export function ModelManagerSheet({
                   onClick={() => void onDownloadModel(model.key)}
                 >
                   <Download size={14} />
-                  {model.installed && model.coreml_installed ? "Installed" : "Download"}
+                  {model.installed && model.coreml_installed ? t("modelManager.installed", "Installed") : t("modelManager.download", "Download")}
                 </button>
               </div>
             </div>
@@ -97,14 +98,14 @@ export function ModelManagerSheet({
         <footer className="model-sheet-actions">
           {running ? (
             <button className="secondary-button" onClick={() => void onCancel()}>
-              Cancel
+              {t("modelManager.cancel", "Cancel")}
             </button>
           ) : (
             <button className="primary-button" onClick={() => void onDownloadAll()} disabled={missingCount === 0}>
-              Download Missing
+              {t("modelManager.downloadMissing", "Download Missing")}
             </button>
           )}
-          <button className="secondary-button" onClick={onClose}>Close</button>
+          <button className="secondary-button" onClick={onClose}>{t("modelManager.close", "Close")}</button>
         </footer>
       </section>
     </div>

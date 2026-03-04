@@ -9,6 +9,8 @@ export type LanguageCode =
   | "zh"
   | "ja";
 
+export type AppLanguage = "en" | "it" | "es" | "de";
+
 export type SpeechModel = "tiny" | "base" | "small" | "medium" | "large_turbo";
 export type TranscriptionEngine = "whisper_cpp" | "whisper_kit";
 export type ArtifactKind = "file" | "realtime";
@@ -39,6 +41,7 @@ export type GeneralSettings = {
   auto_update_enabled: boolean;
   auto_update_repo: string;
   appearance_mode: AppearanceMode;
+  app_language: AppLanguage;
 };
 
 export type WhisperOptions = {
@@ -233,6 +236,8 @@ export type StartTranscriptionPayload = {
   model: SpeechModel;
   enable_ai: boolean;
   whisper_options: WhisperOptions;
+  title?: string;
+  parent_id?: string;
 };
 
 export type RealtimeDeltaKind = "append_final" | "update_preview";

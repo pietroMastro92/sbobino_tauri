@@ -1,5 +1,6 @@
 import { Braces, Captions, Copy, Download, FileCode2, FileText, FileType, FileType2, List, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "../i18n";
 
 export type ExportFormat = "txt" | "docx" | "html" | "pdf" | "json";
 export type ExportStyle = "transcript" | "subtitles" | "segments";
@@ -31,68 +32,76 @@ type ExportSheetProps = {
   onExport: (payload: ExportRequest) => Promise<void>;
 };
 
-const formatItems: Array<{
+type FormatItem = {
   value: ExportFormat;
   label: string;
   icon: JSX.Element;
   hint: string;
   badge?: string;
-}> = [
-  {
-    value: "txt",
-    label: ".txt",
-    icon: <FileText size={16} />,
-    hint: "Plain text",
-  },
-  {
-    value: "docx",
-    label: ".docx",
-    icon: <FileType2 size={16} />,
-    hint: "Word document",
-  },
-  {
-    value: "html",
-    label: ".html",
-    icon: <FileCode2 size={16} />,
-    hint: "Web page",
-  },
-  {
-    value: "pdf",
-    label: ".pdf",
-    icon: <FileType size={16} />,
-    hint: "Portable document",
-  },
-  {
-    value: "json",
-    label: ".json",
-    icon: <Braces size={16} />,
-    hint: "Structured data",
-  },
-];
+};
 
-const styleItems: Array<{
+function getFormatItems(t: (key: string, fallback?: string) => string): FormatItem[] {
+  return [
+    {
+      value: "txt",
+      label: ".txt",
+      icon: <FileText size={16} />,
+      hint: t("export.plainText", "Plain text"),
+    },
+    {
+      value: "docx",
+      label: ".docx",
+      icon: <FileType2 size={16} />,
+      hint: t("export.wordDocument", "Word document"),
+    },
+    {
+      value: "html",
+      label: ".html",
+      icon: <FileCode2 size={16} />,
+      hint: t("export.webPage", "Web page"),
+    },
+    {
+      value: "pdf",
+      label: ".pdf",
+      icon: <FileType size={16} />,
+      hint: t("export.portableDocument", "Portable document"),
+    },
+    {
+      value: "json",
+      label: ".json",
+      icon: <Braces size={16} />,
+      hint: t("export.structuredData", "Structured data"),
+    },
+  ];
+}
+
+type StyleItem = {
   value?: ExportStyle;
   label: string;
   icon: JSX.Element;
   subtitle?: string;
   badge?: string;
-}> = [
-  {
-    value: "transcript",
-    label: "Transcript",
-    icon: <FileText size={16} />,
-  },
-  {
-    value: "subtitles",
-    label: "Subtitles",
-    icon: <Captions size={16} />,
-  },
-  {
-    value: "segments",
-    label: "Segments",
-    icon: <List size={16} />,
-  },
-];
+};
+
+function getStyleItems(t: (key: string, fallback?: string) => string): StyleItem[] {
+  return [
+    {
+      value: "transcript",
+      label: t("export.transcript", "Transcript"),
+      icon: <FileText size={16} />,
+    },
+    {
+      value: "subtitles",
+      label: t("export.subtitles", "Subtitles"),
+      icon: <Captions size={16} />,
+    },
+    {
+      value: "segments",
+      label: t("export.segments", "Segments"),
+      icon: <List size={16} />,
+    },
+  ];
+}
 
 function parseMmSsToSeconds(value: string): number {
   const [mmRaw, ssRaw] = value.split(":");
@@ -163,6 +172,10 @@ export function ExportSheet({
   const [includeTimestamps, setIncludeTimestamps] = useState(false);
   const [grouping, setGrouping] = useState<ExportGrouping>("none");
   const [isExporting, setIsExporting] = useState(false);
+  const { t, language } = useTranslation();
+
+  const formatItems = useMemo(() => getFormatItems(t), [language]);
+  const styleItems = useMemo(() => getStyleItems(t), [language]);
 
   const exportContent = useMemo(() => {
     return buildExportContent({
@@ -176,7 +189,7 @@ export function ExportSheet({
   const preview = useMemo(() => {
     const normalized = exportContent.trim();
     if (!normalized) {
-      return "No content available for export.";
+      return t("export.noContent", "No content available for export.");
     }
 
     if (format === "json") {
@@ -248,7 +261,7 @@ export function ExportSheet({
       >
         <button
           className="export-close-button"
-          aria-label="Close export preview"
+          aria-label={t("export.closePreview", "Close export preview")}
           onClick={onClose}
           disabled={isExporting}
         >
@@ -257,7 +270,7 @@ export function ExportSheet({
 
         <div className="export-preview">
           <header className="export-preview-head">
-            <strong id="export-sheet-title">Export Preview</strong>
+            <strong id="export-sheet-title">{t("export.preview", "Export Preview")}</strong>
             <div className="export-tags">
               <span>{style}</span>
               <span>{format}</span>
@@ -268,7 +281,7 @@ export function ExportSheet({
 
         <aside className="export-controls">
           <div className="export-controls-scroll">
-            <h3>Style</h3>
+            <h3>{t("export.style", "Style")}</h3>
             <div className="export-style-grid">
               {styleItems.map((item) => (
                 <button
@@ -291,7 +304,7 @@ export function ExportSheet({
               ))}
             </div>
 
-            <h3>Format</h3>
+            <h3>{t("export.format", "Format")}</h3>
             <div className="export-format-grid">
               {formatItems.map((item) => (
                 <button
@@ -310,21 +323,21 @@ export function ExportSheet({
             </div>
 
             <div className="inspector-block export-options-block">
-              <h4>Options</h4>
+              <h4>{t("export.options", "Options")}</h4>
               <div className="property-line">
-                <span>Grouping</span>
+                <span>{t("export.grouping", "Grouping")}</span>
                 <select
                   value={grouping}
                   onChange={(event) => setGrouping(event.target.value as ExportGrouping)}
                 >
-                  <option value="none">None</option>
+                  <option value="none">{t("export.groupingNone", "None")}</option>
                   <option value="speaker_paragraphs" disabled>
-                    Speaker paragraphs
+                    {t("export.speakerParagraphs", "Speaker paragraphs")}
                   </option>
                 </select>
               </div>
               <label className="toggle-row">
-                <span>Show Timestamps</span>
+                <span>{t("export.showTimestamps", "Show Timestamps")}</span>
                 <input
                   type="checkbox"
                   checked={includeTimestamps}
@@ -337,7 +350,7 @@ export function ExportSheet({
 
           <div className="export-actions">
             <button className="secondary-button" onClick={onClose} disabled={isExporting}>
-              Close
+              {t("export.close", "Close")}
             </button>
             <button
               className="secondary-button"
@@ -345,11 +358,11 @@ export function ExportSheet({
               disabled={isExporting}
             >
               <Copy size={14} />
-              Copy
+              {t("export.copy", "Copy")}
             </button>
             <button className="primary-button" onClick={() => void onConfirm()} disabled={isExporting}>
               <Download size={14} />
-              {isExporting ? "Exporting..." : "Export"}
+              {isExporting ? t("export.exporting", "Exporting...") : t("export.export", "Export")}
             </button>
           </div>
         </aside>

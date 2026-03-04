@@ -1,4 +1,4 @@
-import {
+import React, {
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
   useCallback,
@@ -19,6 +19,7 @@ import {
   Cloud,
   Clock3,
   ChevronDown,
+  ChevronRight,
   Cpu,
   Database,
   FileAudio,
@@ -125,6 +126,7 @@ import { AudioPlayer, type TrimRegion } from "./components/AudioPlayer";
 import { ExportSheet, type ExportRequest } from "./components/ExportSheet";
 import { ModelManagerSheet } from "./components/ModelManagerSheet";
 import { LoadingAnimation } from "./components/LoadingAnimation";
+import { t, useTranslation, changeLanguage, type AppLanguage } from "./i18n";
 
 function HighlightMatch({ text, search }: { text: string; search: string }) {
   if (!search.trim() || !text) return <>{text}</>;
@@ -395,57 +397,59 @@ type SettingsPaneDefinition = {
   icon: LucideIcon;
 };
 
-const _settingsPaneDefinitions: SettingsPaneDefinition[] = [
-  {
-    key: "general",
-    label: "General",
-    description: "App updates and general behavior",
-    group: "General",
-    icon: House,
-  },
-  {
-    key: "transcription",
-    label: "Transcription",
-    description: "Default engine, model and language",
-    group: "Transcription",
-    icon: Mic,
-  },
-  {
-    key: "whisper_cpp",
-    label: "Whisper C++",
-    description: "whisper.cpp decoding controls",
-    group: "Transcription",
-    icon: Settings2,
-  },
-  {
-    key: "local_models",
-    label: "Local Models",
-    description: "Model downloads and runtime health",
-    group: "Transcription",
-    icon: Upload,
-  },
-  {
-    key: "advanced",
-    label: "Advanced",
-    description: "CLI and FFmpeg paths",
-    group: "Transcription",
-    icon: Settings2,
-  },
-  {
-    key: "ai_services",
-    label: "AI Services",
-    description: "Provider configuration",
-    group: "AI",
-    icon: Sparkles,
-  },
-  {
-    key: "prompts",
-    label: "Prompts",
-    description: "Template management",
-    group: "AI",
-    icon: MessageSquareText,
-  },
-];
+function getSettingsPaneDefinitions(): SettingsPaneDefinition[] {
+  return [
+    {
+      key: "general",
+      label: t("nav.general"),
+      description: t("settings.general.desc"),
+      group: "General",
+      icon: House,
+    },
+    {
+      key: "transcription",
+      label: t("nav.transcription"),
+      description: t("settings.transcription.desc"),
+      group: "Transcription",
+      icon: Mic,
+    },
+    {
+      key: "whisper_cpp",
+      label: t("nav.whisperCpp"),
+      description: t("settings.whisper.desc"),
+      group: "Transcription",
+      icon: Settings2,
+    },
+    {
+      key: "local_models",
+      label: t("nav.localModels"),
+      description: t("settings.localModels.desc"),
+      group: "Transcription",
+      icon: Upload,
+    },
+    {
+      key: "advanced",
+      label: t("nav.advanced"),
+      description: t("settings.advanced.desc"),
+      group: "Transcription",
+      icon: Settings2,
+    },
+    {
+      key: "ai_services",
+      label: t("nav.aiServices"),
+      description: t("settings.ai.desc"),
+      group: "AI",
+      icon: Sparkles,
+    },
+    {
+      key: "prompts",
+      label: t("nav.prompts"),
+      description: t("settings.prompts.desc"),
+      group: "AI",
+      icon: MessageSquareText,
+    },
+  ];
+}
 
 const AI_SERVICE_NONE = "__none";
 const AI_SERVICE_FOUNDATION = "__foundation";
@@ -489,8 +493,8 @@ function dayGroupLabel(value: string): string {
   const startDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
   const dayMs = 24 * 60 * 60 * 1000;
   const diffDays = Math.round((startToday.getTime() - startDate.getTime()) / dayMs);
-  if (diffDays === 0) return "oggi";
-  if (diffDays === 1) return "ieri";
+  if (diffDays === 0) return t("day.today");
+  if (diffDays === 1) return t("day.yesterday");
   return date.toLocaleDateString();
 }
 
@@ -914,19 +918,20 @@ function DetailCenterModeControl({
   chatDisabled,
   onSelect,
 }: DetailCenterModeControlProps): JSX.Element {
+  const { t } = useTranslation();
   return (
     <div className="segmented-control detail-mode-slider">
       <button
         className={detailMode === "transcript" || detailMode === "segments" ? "seg active" : "seg"}
         onClick={() => onSelect("transcript")}
-        title="Transcription"
+        title={t("detail.transcript", "Transcription")}
       >
         <FileText size={15} />
       </button>
       <button
         className={detailMode === "summary" ? "seg active" : "seg"}
         onClick={() => onSelect("summary")}
-        title="AI Summary"
+        title={t("detail.summary", "AI Summary")}
         disabled={summaryDisabled}
       >
         <Sparkles size={15} />
@@ -934,7 +939,7 @@ function DetailCenterModeControl({
       <button
         className={detailMode === "chat" ? "seg active" : "seg"}
         onClick={() => onSelect("chat")}
-        title="AI Chat"
+        title={t("detail.aiChatTitle", "AI Chat")}
         disabled={chatDisabled}
       >
         <MessageSquareText size={15} />
@@ -984,6 +989,7 @@ function DetailToolbar({
   showRetranscribe,
   onRetranscribeTrimmedAudio,
 }: DetailToolbarProps): JSX.Element {
+  const { t } = useTranslation();
   return (
     <header
       className={`detail-toolbar ${!leftSidebarOpen ? "sidebar-closed" : ""}`}
@@ -993,12 +999,12 @@ function DetailToolbar({
         <button
           className={`icon-button sidebar-toggle-btn sidebar-toggle-left ${leftSidebarOpen ? "is-open" : ""}`}
           onClick={onToggleSidebar}
-          title={leftSidebarOpen ? "Hide sidebar" : "Show sidebar"}
+          title={leftSidebarOpen ? t("topbar.hideSidebar", "Hide sidebar") : t("topbar.showSidebar", "Show sidebar")}
         >
           <PanelLeftClose className="icon-close" size={16} />
           <PanelLeftOpen className="icon-open" size={16} />
         </button>
-        <button className="icon-button" onClick={onBack} title="Back to history">
+        <button className="icon-button" onClick={onBack} title={t("detail.backToHistory")}>
           <ArrowLeft size={16} />
         </button>
         <strong className="detail-title" data-tauri-drag-region>{title}</strong>
@@ -1010,10 +1016,10 @@ function DetailToolbar({
             className="optimize-hover-button"
             onClick={() => void onImproveText()}
             disabled={isImprovingText || !hasArtifact}
-            title="Improve Text"
+            title={t("detail.improveText", "Improve Text")}
           >
             <div className="button-content">
-              <Sparkles size={14} /> Optimize
+              <Sparkles size={14} /> {t("detail.optimize", "Optimize")}
             </div>
           </button>
         )}
@@ -1021,10 +1027,10 @@ function DetailToolbar({
           <button
             className="retranscribe-hover-button"
             onClick={() => void onRetranscribeTrimmedAudio()}
-            title="Retranscribe Trimmed Audio"
+            title={t("detail.retranscribeTrimmed", "Retranscribe Trimmed Audio")}
           >
             <div className="button-content">
-              <Scissors size={14} /> Retranscribe
+              <Scissors size={14} /> {t("detail.retranscribe", "Retranscribe")}
             </div>
           </button>
         )}
@@ -1039,27 +1045,27 @@ function DetailToolbar({
       <div className="detail-toolbar-right">
         {hasArtifact ? (
           <button className="secondary-button export-toolbar-button" onClick={onOpenExport}>
-            Export
+            {t("detail.export", "Export")}
             <ChevronDown size={14} />
           </button>
         ) : null}
         <button
           className={`icon-button sidebar-toggle-btn sidebar-toggle-right ${rightSidebarOpen ? "is-open" : ""}`}
           onClick={() => (rightSidebarOpen ? onHideDetailsPanel() : onShowDetailsPanel())}
-          title={rightSidebarOpen ? "Hide details panel" : "Show details panel"}
+          title={rightSidebarOpen ? t("detail.hideDetailsPanel", "Hide details panel") : t("detail.showDetailsPanel", "Show details panel")}
         >
           <PanelRightClose className="icon-close" size={16} />
           <PanelRightOpen className="icon-open" size={16} />
         </button>
         {!hasArtifact && hasActiveJob ? (
-          <button className="transcribing-cancel-pill" onClick={onCancel} title="Cancel transcription">
+          <button className="transcribing-cancel-pill" onClick={onCancel} title={t("detail.cancelTranscription", "Cancel transcription")}>
             <span className="pill-content default-content">
               <ProgressRing percentage={transcriptionProgress} size={16} />
-              <span>Transcribing</span>
+              <span>{t("detail.transcribing")}</span>
             </span>
             <span className="pill-content hover-content">
               <X size={16} />
-              <span>Cancel transcription</span>
+              <span>{t("detail.cancelTranscription")}</span>
             </span>
           </button>
         ) : null}
@@ -1079,22 +1085,23 @@ function DetailInspectorHeader({
   onInspectorModeChange,
   onHideDetailsPanel,
 }: DetailInspectorHeaderProps): JSX.Element {
+  const { t } = useTranslation();
   return (
     <header className="inspector-header">
       <div className="segmented-control inspector-view-toggle">
         <button
           className={inspectorMode === "details" ? "seg active" : "seg"}
           onClick={() => onInspectorModeChange("details")}
-          title="Details controls"
-          aria-label="Show details controls"
+          title={t("detail.detailsControls")}
+          aria-label={t("detail.detailsControls")}
         >
           <List size={15} />
         </button>
         <button
           className={inspectorMode === "info" ? "seg active" : "seg"}
           onClick={() => onInspectorModeChange("info")}
-          title="Transcript information"
-          aria-label="Show transcript information"
+          title={t("detail.transcriptInfo", "Transcript information")}
+          aria-label={t("detail.transcriptInfo", "Transcript information")}
         >
           <Info size={15} />
         </button>
@@ -1112,27 +1119,28 @@ function TranscriptSegmentsTileSwitch({
   detailMode,
   onSelectMode,
 }: TranscriptSegmentsTileSwitchProps): JSX.Element {
+  const { t } = useTranslation();
   return (
     <div className="inspector-mode-grid">
       <button
         className={detailMode === "transcript" ? "mode-tile active" : "mode-tile"}
         onClick={() => onSelectMode("transcript")}
-        title="Transcript"
+        title={t("detail.transcript", "Transcript")}
       >
         <span className="mode-tile-icon">
           <FileText size={18} />
         </span>
-        <span>Transcript</span>
+        <span>{t("detail.transcript", "Transcript")}</span>
       </button>
       <button
         className={detailMode === "segments" ? "mode-tile active" : "mode-tile"}
         onClick={() => onSelectMode("segments")}
-        title="Segments"
+        title={t("detail.segments", "Segments")}
       >
         <span className="mode-tile-icon">
           <List size={18} />
         </span>
-        <span>Segments</span>
+        <span>{t("detail.segments", "Segments")}</span>
       </button>
     </div>
   );
@@ -1142,7 +1150,10 @@ type AppProps = {
   standaloneSettingsWindow?: boolean;
 };
 
+export type GroupedArtifact = TranscriptArtifact & { children?: GroupedArtifact[] };
+
 export function App({ standaloneSettingsWindow = false }: AppProps) {
+  const { t, language } = useTranslation();
   const {
     settings,
     selectedFile,
@@ -1204,7 +1215,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   }, [preferredAppearanceMode]);
 
   const [section, setSection] = useState<Section>("home");
-  const [settingsPane, setSettingsPane] = useState<SettingsPane>("transcription");
+  const [settingsPane, setSettingsPane] = useState<SettingsPane>("general");
   const [settingsQuery, setSettingsQuery] = useState("");
   const [showModelManager, setShowModelManager] = useState(false);
   const [detailMode, setDetailMode] = useState<DetailMode>("transcript");
@@ -1220,6 +1231,20 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   const [historyKind, setHistoryKind] = useState<"all" | ArtifactKind>("all");
   const [deletedArtifacts, setDeletedArtifacts] = useState<TranscriptArtifact[]>([]);
   const [selectedArtifactIds, setSelectedArtifactIds] = useState<string[]>([]);
+  const [expandedArtifactIds, setExpandedArtifactIds] = useState<Set<string>>(new Set());
+
+  const toggleArtifactExpansion = useCallback((id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setExpandedArtifactIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
 
   const [isStarting, setIsStarting] = useState(false);
   const [isSavingArtifact, setIsSavingArtifact] = useState(false);
@@ -1280,7 +1305,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   const [runtimeHealth, setRuntimeHealth] = useState<RuntimeHealth | null>(null);
   const platformIsAppleSilicon = runtimeHealth?.is_apple_silicon ?? guessAppleSiliconFromUA();
   const transcriptionEngineOptions = useMemo(() => allTranscriptionEngineOptions, []);
-  const settingsPaneDefinitions = useMemo(() => _settingsPaneDefinitions, []);
+  const settingsPaneDefinitions = useMemo(() => getSettingsPaneDefinitions(), [language]);
 
   const [realtimeState, setRealtimeState] = useState<"idle" | "running" | "paused">("idle");
   const [realtimeMessage, setRealtimeMessage] = useState("Realtime idle");
@@ -1432,7 +1457,11 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
         if (disposed) return;
 
-        setSettings(normalizeSettings(initialSettings));
+        const normalized = normalizeSettings(initialSettings);
+        setSettings(normalized);
+        if (normalized.general.app_language) {
+          changeLanguage(normalized.general.app_language);
+        }
         setArtifacts(activeArtifactsSnapshot);
         setDeletedArtifacts(deletedArtifactsSnapshot);
         setProvisioningState(provision);
@@ -1486,11 +1515,11 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       return;
     }
 
-    const matchedPane = settingsPaneDefinitions.find((entry) => entry.key === pane);
-    if (matchedPane) {
-      setSettingsPane(matchedPane.key);
+    const validPanes: SettingsPane[] = ["general", "transcription", "whisper_cpp", "local_models", "ai_services", "prompts", "advanced"];
+    if (validPanes.includes(pane as SettingsPane)) {
+      setSettingsPane(pane as SettingsPane);
     }
-  }, [settingsPaneDefinitions, standaloneSettingsWindow]);
+  }, [standaloneSettingsWindow]);
 
   useEffect(() => {
     if (!settings) {
@@ -1613,9 +1642,9 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     let unlisten: (() => void) | undefined;
     void (async () => {
       unlisten = await subscribeSettingsNavigate((pane) => {
-        const matchedPane = settingsPaneDefinitions.find((entry) => entry.key === pane);
-        if (matchedPane) {
-          setSettingsPane(matchedPane.key);
+        const validPanes: SettingsPane[] = ["general", "transcription", "whisper_cpp", "local_models", "ai_services", "prompts", "advanced"];
+        if (validPanes.includes(pane as SettingsPane)) {
+          setSettingsPane(pane as SettingsPane);
         }
       });
     })();
@@ -1623,14 +1652,18 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     return () => {
       unlisten?.();
     };
-  }, [settingsPaneDefinitions, standaloneSettingsWindow]);
+  }, [standaloneSettingsWindow]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
 
     void (async () => {
       unlisten = await subscribeSettingsUpdated((incoming) => {
-        setSettings(normalizeSettings(incoming));
+        const normalized = normalizeSettings(incoming);
+        setSettings(normalized);
+        if (normalized.general.app_language) {
+          changeLanguage(normalized.general.app_language);
+        }
       });
     })();
 
@@ -1922,33 +1955,55 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     });
   }, [deletedArtifacts, deletedSearch]);
 
+  const buildArtifactTree = useCallback((items: TranscriptArtifact[]): GroupedArtifact[] => {
+    const map = new Map<string, GroupedArtifact>();
+    items.forEach(item => {
+      map.set(item.id, { ...item, children: [] });
+    });
+
+    const roots: GroupedArtifact[] = [];
+    items.forEach(item => {
+      const node = map.get(item.id)!;
+      if (item.metadata?.parent_id && map.has(item.metadata.parent_id)) {
+        map.get(item.metadata.parent_id)!.children!.push(node);
+      } else {
+        roots.push(node);
+      }
+    });
+
+    return roots;
+  }, []);
+
   const groupedHistoryArtifacts = useMemo(() => {
-    const groups: Array<{ label: string; items: TranscriptArtifact[] }> = [];
-    for (const artifact of filteredArtifacts) {
-      const label = dayGroupLabel(artifact.updated_at);
+    const groups: Array<{ label: string; items: GroupedArtifact[] }> = [];
+    const roots = buildArtifactTree(filteredArtifacts);
+    for (const root of roots) {
+      const label = dayGroupLabel(root.updated_at);
       const existing = groups[groups.length - 1];
       if (!existing || existing.label !== label) {
-        groups.push({ label, items: [artifact] });
+        groups.push({ label, items: [root] });
       } else {
-        existing.items.push(artifact);
+        existing.items.push(root);
       }
     }
     return groups;
-  }, [filteredArtifacts]);
+  }, [filteredArtifacts, buildArtifactTree]);
 
   const groupedRecentArtifacts = useMemo(() => {
-    const groups: Array<{ label: string; items: TranscriptArtifact[] }> = [];
-    for (const artifact of artifacts.slice(0, 6)) {
-      const label = dayGroupLabel(artifact.updated_at);
+    const groups: Array<{ label: string; items: GroupedArtifact[] }> = [];
+    const roots = buildArtifactTree(artifacts).slice(0, 6);
+    
+    for (const root of roots) {
+      const label = dayGroupLabel(root.updated_at);
       const existing = groups[groups.length - 1];
       if (!existing || existing.label !== label) {
-        groups.push({ label, items: [artifact] });
+        groups.push({ label, items: [root] });
       } else {
-        existing.items.push(artifact);
+        existing.items.push(root);
       }
     }
     return groups;
-  }, [artifacts]);
+  }, [artifacts, buildArtifactTree]);
 
   const selectedArtifactIdSet = useMemo(
     () => new Set(selectedArtifactIds),
@@ -2353,7 +2408,11 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   async function refreshSettingsFromDisk(): Promise<void> {
     try {
       const next = await fetchSettingsSnapshot();
-      setSettings(normalizeSettings(next));
+      const normalized = normalizeSettings(next);
+      setSettings(normalized);
+      if (normalized.general.app_language) {
+        changeLanguage(normalized.general.app_language);
+      }
     } catch (error) {
       setError(`Could not reload settings: ${formatAppError(error)}`);
     }
@@ -2748,7 +2807,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     propagateToNeighbors: boolean,
   ): Promise<void> {
     if (!activeArtifact) {
-      setError("No transcript selected.");
+      setError(t("inspector.noTranscript"));
       return;
     }
 
@@ -3641,16 +3700,104 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   }
 
   function renderHome(): JSX.Element {
+    const renderHomeTree = (artifact: GroupedArtifact, depth = 0): React.ReactNode => {
+      return (
+        <React.Fragment key={artifact.id}>
+          <article
+            className={`history-item ${depth > 0 ? "history-child-item" : "home-history-item"}${selectedArtifactIdSet.has(artifact.id) ? " selected" : ""}`}
+          >
+            <button
+              className={depth > 0 ? "history-main history-main-rich" : "home-history-main"}
+              onClick={() => {
+                if (isSelectionMode) {
+                  toggleArtifactSelection(artifact.id);
+                  return;
+                }
+                void onOpenArtifact(artifact.id);
+              }}
+            >
+              <span className="history-audio-dot">
+                <AudioLines size={12} />
+              </span>
+              <div className={depth > 0 ? "history-main-copy" : "home-history-copy"}>
+                <div className="home-history-head" style={{ display: 'flex', alignItems: 'center' }}>
+                  {artifact.children && artifact.children.length > 0 && (
+                    <button 
+                      className="tree-expand-button" 
+                      onClick={(e) => toggleArtifactExpansion(artifact.id, e)}
+                      title={expandedArtifactIds.has(artifact.id) ? "Collapse child trims" : "Expand child trims"}
+                    >
+                      {expandedArtifactIds.has(artifact.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    </button>
+                  )}
+                  <strong>
+                    <HighlightMatch text={artifact.title} search={search} />
+                  </strong>
+                  <span className="history-inline-time" style={{ marginLeft: "auto" }}>{formatHomeTime(artifact.updated_at)}</span>
+                </div>
+                <p className="history-preview" style={artifact.children && artifact.children.length > 0 ? { paddingLeft: 22 } : {}}>
+                  <HighlightMatch
+                    text={previewSnippet(artifact.optimized_transcript || artifact.raw_transcript, depth > 0 ? 220 : 210)}
+                    search={search}
+                  />
+                </p>
+              </div>
+            </button>
+            <div className={depth > 0 ? "history-actions" : "home-history-actions"}>
+              <label className={depth > 0 ? "home-history-select history-select" : "home-history-select"} title={depth > 0 ? "Select trim transcription" : "Select transcription"} onClick={(e) => e.stopPropagation()}>
+                <input
+                  type="checkbox"
+                  checked={selectedArtifactIdSet.has(artifact.id)}
+                  onChange={() => toggleArtifactSelection(artifact.id)}
+                />
+              </label>
+              {!isSelectionMode ? (
+                depth > 0 ? (
+                  <>
+                    <span className="kind-chip">{t("history.trim")}</span>
+                    <button className="secondary-button history-action-button history-action-danger" onClick={(event) => {
+                        event.stopPropagation();
+                        void onDeleteArtifact(artifact);
+                    }}>
+                      <Trash2 size={14} />
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    className="icon-button danger-icon-button home-history-delete"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void onDeleteArtifact(artifact);
+                    }}
+                    title="Move to trash"
+                    aria-label={`Move ${artifact.title} to trash`}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )
+              ) : null}
+            </div>
+          </article>
+  
+          {artifact.children && artifact.children.length > 0 && expandedArtifactIds.has(artifact.id) && (
+            <div className="history-children-list">
+              {artifact.children.map((child) => renderHomeTree(child, depth + 1))}
+            </div>
+          )}
+        </React.Fragment>
+      );
+    };
+
     return (
       <div className="view-body home-view">
         <section className="main-input-bar">
           <input
             type="text"
-            placeholder="Audio file"
+            placeholder={t("home.audioFilePlaceholder", "Audio file")}
             value={selectedFile ? fileLabel(selectedFile) : ""}
             readOnly
           />
-          <button className="icon-button" onClick={() => void onPickFile()} title="Open Local File">
+          <button className="icon-button" onClick={() => void onPickFile()} title={t("home.openLocalFile", "Open Local File")}>
             <Upload size={16} />
           </button>
         </section>
@@ -3662,11 +3809,11 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             disabled={!canStartFileTranscription}
           >
             <FileAudio size={18} strokeWidth={2.5} />
-            {isStarting ? "Starting..." : "Start Transcription"}
+            {isStarting ? t("home.starting", "Starting...") : t("home.startTranscription", "Start Transcription")}
           </button>
           <button className="quick-action" onClick={() => void onStartRealtime()} disabled={!canStartRealtime}>
             <Mic size={18} strokeWidth={2.5} />
-            Start Live
+            {t("home.startLive", "Start Live")}
           </button>
           <button
             className="quick-action"
@@ -3674,15 +3821,15 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             disabled={realtimeState === "idle" || isStoppingRealtime}
           >
             <Radio size={18} strokeWidth={2.5} />
-            {isStoppingRealtime ? "Stopping..." : "Stop Live & Save"}
+            {isStoppingRealtime ? t("home.stopping", "Stopping...") : t("home.stopLiveSave", "Stop Live & Save")}
           </button>
           <button className="quick-action" onClick={() => setSection("queue")}>
             <ListChecks size={18} strokeWidth={2.5} />
-            Queue
+            {t("home.queue", "Queue")}
           </button>
           <button className="quick-action" onClick={() => setSection("history")}>
             <HistoryIcon size={18} strokeWidth={2.5} />
-            History
+            {t("home.history", "History")}
           </button>
         </div>
 
@@ -3690,28 +3837,28 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           {isSelectionMode ? (
             <div className="history-selection-toolbar">
               <button className="secondary-button" onClick={() => setSelectedArtifactIds([])}>
-                Cancel
+                {t("action.cancel", "Cancel")}
               </button>
               <button
                 className="secondary-button"
                 onClick={selectAllVisibleArtifacts}
                 disabled={homeVisibleArtifactIds.length === 0}
               >
-                Select all
+                {t("selection.selectAll", "Select all")}
               </button>
               <button
                 className="secondary-button history-action-danger"
                 onClick={() => void onDeleteSelectedArtifacts()}
                 disabled={selectedArtifactIds.length === 0}
               >
-                Delete selected ({selectedArtifactIds.length})
+                {t("selection.deleteSelected", "Delete selected")} ({selectedArtifactIds.length})
               </button>
             </div>
           ) : null}
           {groupedRecentArtifacts.length === 0 ? (
             <div className="center-empty compact">
-              <h3>No transcripts yet</h3>
-              <p>Open a file and start transcription to begin.</p>
+              <h3>{t("home.noTranscripts")}</h3>
+              <p>{t("home.noTranscriptsDesc")}</p>
             </div>
           ) : (
             <div className="history-groups">
@@ -3719,63 +3866,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                 <section key={group.label} className="history-group">
                   <h3 className="history-group-label">{group.label}</h3>
                   <div className={`history-list ${isSelectionMode ? "selection-active" : ""}`}>
-                    {group.items.map((artifact) => (
-                      <article
-                        key={artifact.id}
-                        className={`history-item home-history-item${selectedArtifactIdSet.has(artifact.id) ? " selected" : ""}`}
-                      >
-                        <button
-                          className="home-history-main"
-                          onClick={() => {
-                            if (isSelectionMode) {
-                              toggleArtifactSelection(artifact.id);
-                              return;
-                            }
-                            void onOpenArtifact(artifact.id);
-                          }}
-                        >
-                          <span className="history-audio-dot">
-                            <AudioLines size={12} />
-                          </span>
-                          <div className="home-history-copy">
-                            <div className="home-history-head">
-                              <strong>
-                                <HighlightMatch text={artifact.title} search={search} />
-                              </strong>
-                              <span className="history-inline-time">{formatHomeTime(artifact.updated_at)}</span>
-                            </div>
-                            <p className="history-preview">
-                              <HighlightMatch
-                                text={previewSnippet(artifact.optimized_transcript || artifact.raw_transcript, 210)}
-                                search={search}
-                              />
-                            </p>
-                          </div>
-                        </button>
-                        <div className="home-history-actions">
-                          <label className="home-history-select" title="Select transcription" onClick={(e) => e.stopPropagation()}>
-                            <input
-                              type="checkbox"
-                              checked={selectedArtifactIdSet.has(artifact.id)}
-                              onChange={() => toggleArtifactSelection(artifact.id)}
-                            />
-                          </label>
-                          {!isSelectionMode ? (
-                            <button
-                              className="icon-button danger-icon-button home-history-delete"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                void onDeleteArtifact(artifact);
-                              }}
-                              title="Move to trash"
-                              aria-label={`Move ${artifact.title} to trash`}
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          ) : null}
-                        </div>
-                      </article>
-                    ))}
+                    {group.items.map((artifact) => renderHomeTree(artifact))}
                   </div>
                 </section>
               ))}
@@ -3790,7 +3881,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     return (
       <div className="view-body">
         <div className="view-toolbar">
-          <h2>Queue</h2>
+          <h2>{t("queue.title")}</h2>
           <div className="toolbar-actions">
             <button className="secondary-button" onClick={() => setQueueItems([])}>
               Clear Finished
@@ -3804,8 +3895,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         {queueActiveItems.length === 0 ? (
           <div className="center-empty">
             <div className="center-empty-icon"><ListChecks size={28} /></div>
-            <h3>No Active Transcriptions</h3>
-            <p>Active transcriptions will appear here.</p>
+            <h3>{t("queue.noActive")}</h3>
+            <p>{t("queue.noActiveDesc")}</p>
           </div>
         ) : (
           <div className="queue-list">
@@ -3852,6 +3943,83 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   }
 
   function renderHistory(): JSX.Element {
+    const renderHistoryTree = (artifact: GroupedArtifact, depth = 0): React.ReactNode => {
+      return (
+        <React.Fragment key={artifact.id}>
+          <article className={`history-item ${depth > 0 ? "history-child-item" : ""}${selectedArtifactIdSet.has(artifact.id) ? " selected" : ""}`}>
+            <button
+              className="history-main history-main-rich"
+              onClick={() => {
+                if (isSelectionMode) {
+                  toggleArtifactSelection(artifact.id);
+                  return;
+                }
+                void onOpenArtifact(artifact.id);
+              }}
+            >
+              <span className="history-audio-dot">
+                <AudioLines size={12} />
+              </span>
+              <div className="history-main-copy">
+                <div className="home-history-head" style={{ display: 'flex', alignItems: 'center' }}>
+                  {artifact.children && artifact.children.length > 0 && (
+                    <button 
+                      className="tree-expand-button" 
+                      onClick={(e) => toggleArtifactExpansion(artifact.id, e)}
+                      title={expandedArtifactIds.has(artifact.id) ? "Collapse child trims" : "Expand child trims"}
+                    >
+                      {expandedArtifactIds.has(artifact.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    </button>
+                  )}
+                  <strong>
+                    <HighlightMatch text={artifact.title} search={search} />
+                  </strong>
+                  <span className="history-inline-time" style={{ marginLeft: "auto" }}>{formatHomeTime(artifact.updated_at)}</span>
+                </div>
+                <p className="history-preview" style={artifact.children && artifact.children.length > 0 ? { paddingLeft: 22 } : {}}>
+                  <HighlightMatch
+                    text={previewSnippet(artifact.optimized_transcript || artifact.raw_transcript, 220)}
+                    search={search}
+                  />
+                </p>
+              </div>
+            </button>
+            <div className="history-actions">
+              <label className="home-history-select history-select" title={depth > 0 ? "Select trim transcription" : "Select transcription"} onClick={(e) => e.stopPropagation()}>
+                <input
+                  type="checkbox"
+                  checked={selectedArtifactIdSet.has(artifact.id)}
+                  onChange={() => toggleArtifactSelection(artifact.id)}
+                />
+              </label>
+              {!isSelectionMode ? (
+                <>
+                  <span className="kind-chip">{depth > 0 ? "Trim" : (artifact.kind === "realtime" ? "Live" : "File")}</span>
+                  <button className="secondary-button history-action-button" onClick={() => void onRenameArtifact(artifact)}>
+                    <Pencil size={14} />
+                    Rename
+                  </button>
+                  <button className="secondary-button history-action-button history-action-danger" onClick={(event) => {
+                      event.stopPropagation();
+                      void onDeleteArtifact(artifact);
+                  }}>
+                    <Trash2 size={14} />
+                    {depth === 0 ? "Move to Trash" : ""}
+                  </button>
+                </>
+              ) : null}
+            </div>
+          </article>
+  
+          {artifact.children && artifact.children.length > 0 && expandedArtifactIds.has(artifact.id) && (
+            <div className="history-children-list">
+              {artifact.children.map((child) => renderHistoryTree(child, depth + 1))}
+            </div>
+          )}
+        </React.Fragment>
+      );
+    };
+
     return (
       <div className="view-body history-view">
         {isSelectionMode ? (
@@ -3878,7 +4046,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         {groupedHistoryArtifacts.length === 0 ? (
           <div className="center-empty">
             <div className="center-empty-icon"><Clock3 size={28} /></div>
-            <h3>No Transcriptions Yet</h3>
+            <h3>{t("history.noTranscriptions")}</h3>
           </div>
         ) : (
           <div className="history-groups">
@@ -3886,66 +4054,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
               <section key={group.label} className="history-group">
                 <h3 className="history-group-label">{group.label}</h3>
                 <div className={`history-list ${isSelectionMode ? "selection-active" : ""}`}>
-                  {group.items.map((artifact) => (
-                    <article
-                      key={artifact.id}
-                      className={`history-item${selectedArtifactIdSet.has(artifact.id) ? " selected" : ""}`}
-                    >
-                      <button
-                        className="history-main history-main-rich"
-                        onClick={() => {
-                          if (isSelectionMode) {
-                            toggleArtifactSelection(artifact.id);
-                            return;
-                          }
-                          void onOpenArtifact(artifact.id);
-                        }}
-                      >
-                        <span className="history-audio-dot">
-                          <AudioLines size={12} />
-                        </span>
-                        <div className="history-main-copy">
-                          <div className="home-history-head">
-                            <strong>
-                              <HighlightMatch text={artifact.title} search={search} />
-                            </strong>
-                            <span className="history-inline-time">{formatHomeTime(artifact.updated_at)}</span>
-                          </div>
-                          <p className="history-preview">
-                            <HighlightMatch
-                              text={previewSnippet(artifact.optimized_transcript || artifact.raw_transcript, 220)}
-                              search={search}
-                            />
-                          </p>
-                        </div>
-                      </button>
-                      <div className="history-actions">
-                        <label className="home-history-select history-select" title="Select transcription" onClick={(e) => e.stopPropagation()}>
-                          <input
-                            type="checkbox"
-                            checked={selectedArtifactIdSet.has(artifact.id)}
-                            onChange={() => toggleArtifactSelection(artifact.id)}
-                          />
-                        </label>
-                        {!isSelectionMode ? (
-                          <>
-                            <span className="kind-chip">{artifact.kind === "realtime" ? "Live" : "File"}</span>
-                            <button className="secondary-button history-action-button" onClick={() => void onRenameArtifact(artifact)}>
-                              <Pencil size={14} />
-                              Rename
-                            </button>
-                            <button className="secondary-button history-action-button history-action-danger" onClick={(event) => {
-                                event.stopPropagation();
-                                void onDeleteArtifact(artifact);
-                            }}>
-                              <Trash2 size={14} />
-                              Move to Trash
-                            </button>
-                          </>
-                        ) : null}
-                      </div>
-                    </article>
-                  ))}
+                  {group.items.map((artifact) => renderHistoryTree(artifact))}
                 </div>
               </section>
             ))}
@@ -3961,8 +4070,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         {filteredDeletedArtifacts.length === 0 ? (
           <div className="center-empty">
             <div className="center-empty-icon"><Trash2 size={28} /></div>
-            <h3>Recently Deleted Is Empty</h3>
-            <p>Deleted transcriptions will appear here for up to 30 days.</p>
+            <h3>{t("deleted.empty")}</h3>
+            <p>{t("deleted.emptyDesc")}</p>
           </div>
         ) : (
           <div className="history-list">
@@ -4025,7 +4134,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
       return (
         <div className="center-empty">
-          <h3>Select a transcript from History</h3>
+          <h3>{t("detail.selectTranscript")}</h3>
         </div>
       );
     }
@@ -4046,8 +4155,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         return (
           <div className="detail-empty">
             <div className="center-empty-icon"><Sparkles size={28} /></div>
-            <h2>AI Summary</h2>
-            <p>Generate a summary from the right panel options.</p>
+            <h2>{t("detail.aiSummaryTitle")}</h2>
+            <p>{t("detail.summaryEmptyDesc")}</p>
           </div>
         );
       }
@@ -4075,8 +4184,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             ) : chatHistory.length === 0 ? (
               <div className="detail-empty">
                 <div className="center-empty-icon"><MessageSquareText size={28} /></div>
-                <h2>AI Chat</h2>
-                <p>Ask questions on the current transcript.</p>
+                <h2>{t("detail.aiChatTitle")}</h2>
+                <p>{t("detail.chatEmptyDesc")}</p>
               </div>
             ) : null}
             {!isAskingChat && chatHistory.map((message, index) => (
@@ -4088,7 +4197,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="chat-input-bar">
             <input
-              placeholder="Chat with your transcript..."
+              placeholder={t("detail.chatPlaceholder")}
               value={chatInput}
               onChange={(event) => setChatInput(event.target.value)}
               onKeyDown={(event) => {
@@ -4116,7 +4225,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
               className="chat-submit-button" 
               onClick={() => void onSendChat()} 
               disabled={isAskingChat || chatInput.trim().length === 0}
-              aria-label="Submit Chat"
+              aria-label={t("detail.submitChat")}
             >
               <ArrowUp size={20} />
             </button>
@@ -4128,7 +4237,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     if (detailMode === "segments") {
       return (
         <div className="segments-view">
-          {detailSegments.length === 0 ? <p className="muted">No segments yet</p> : null}
+          {detailSegments.length === 0 ? <p className="muted">{t("detail.noSegments")}</p> : null}
           {detailSegments.map((segment, index) => (
             <article
               className={`segment-row ${
@@ -4224,23 +4333,23 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         />
 
         <div className="inspector-block">
-          <h4>Audio</h4>
+          <h4>{t("inspector.audio")}</h4>
           <div className="property-line">
-            <span>File</span>
+            <span>{t("inspector.file")}</span>
             <strong className="truncate-value" title={detailAudioFileLabel}>{detailAudioFileLabel}</strong>
           </div>
           <div className="property-line">
-            <span>Format</span>
+            <span>{t("inspector.format")}</span>
             <strong>{detailAudioFormat}</strong>
           </div>
           <div className="property-line">
-            <span>Duration</span>
+            <span>{t("inspector.duration")}</span>
             <strong>{formatShortDuration(transcriptSeconds)}</strong>
           </div>
         </div>
 
         <div className="inspector-block">
-          <h4>Title</h4>
+          <h4>{t("inspector.title")}</h4>
           <input
             className="inspector-input"
             value={draftTitle}
@@ -4249,7 +4358,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         </div>
 
         <div className="inspector-block">
-          <h4>People</h4>
+          <h4>{t("inspector.people")}</h4>
           <div className="pill">{selectedDetailSegment?.speakerLabel ?? "Unknown"}</div>
           <div className="speaker-edit-row">
             <input
@@ -4286,7 +4395,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             </button>
           </div>
           <label className="toggle-row compact">
-            <span>Propagate to adjacent unlabeled segments</span>
+            <span>{t("inspector.propagate")}</span>
             <input
               type="checkbox"
               checked={propagateSpeakerAssignment}
@@ -4311,9 +4420,9 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         </div>
 
         <div className="inspector-block">
-          <h4>Options</h4>
+          <h4>{t("inspector.options")}</h4>
           <label className="toggle-row">
-            <span>Font Size</span>
+            <span>{t("inspector.fontSize")}</span>
             <select
               className="inspector-select"
               value={fontSize}
@@ -4328,7 +4437,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           </label>
 
           <label className="toggle-row">
-            <span>Favorites Only</span>
+            <span>{t("inspector.favoritesOnly")}</span>
             <input
               type="checkbox"
               checked={favoritesOnly}
@@ -4337,7 +4446,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           </label>
 
           <label className="toggle-row">
-            <span>Group segments without speakers</span>
+            <span>{t("inspector.groupSegments")}</span>
             <input
               type="checkbox"
               checked={groupSegmentsWithoutSpeakers}
@@ -4375,10 +4484,10 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         <button className="secondary-button" onClick={() => void onGenerateSummary()} disabled={isGeneratingSummary || !activeArtifact}>
           {isGeneratingSummary ? "Summarizing..." : "Summarize"}
         </button>
-        <button className="secondary-button" onClick={() => setDraftSummary("")}>Clear</button>
+        <button className="secondary-button" onClick={() => setDraftSummary("")}>{t("summary.clear")}</button>
 
         <label className="toggle-row">
-          <span>Include timestamps</span>
+          <span>{t("summary.includeTimestamps")}</span>
           <input
             type="checkbox"
             checked={summaryIncludeTimestamps}
@@ -4386,7 +4495,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           />
         </label>
         <label className="toggle-row">
-          <span>Include speakers</span>
+          <span>{t("summary.includeSpeakers")}</span>
           <input
             type="checkbox"
             checked={summaryIncludeSpeakers}
@@ -4394,7 +4503,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           />
         </label>
         <label className="toggle-row">
-          <span>Autostart summary</span>
+          <span>{t("summary.autostartSummary")}</span>
           <input
             type="checkbox"
             checked={summaryAutostart}
@@ -4403,9 +4512,9 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         </label>
 
         <div className="inspector-block">
-          <h4>Options</h4>
+          <h4>{t("inspector.options")}</h4>
           <label className="toggle-row">
-            <span>Sections</span>
+            <span>{t("summary.sections")}</span>
             <input
               type="checkbox"
               checked={summarySections}
@@ -4413,7 +4522,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             />
           </label>
           <label className="toggle-row">
-            <span>Bullet Points</span>
+            <span>{t("summary.bulletPoints")}</span>
             <input
               type="checkbox"
               checked={summaryBulletPoints}
@@ -4421,7 +4530,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             />
           </label>
           <label className="toggle-row">
-            <span>Action Items</span>
+            <span>{t("summary.actionItems")}</span>
             <input
               type="checkbox"
               checked={summaryActionItems}
@@ -4429,7 +4538,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             />
           </label>
           <label className="toggle-row">
-            <span>Key Points Only</span>
+            <span>{t("summary.keyPointsOnly")}</span>
             <input
               type="checkbox"
               checked={summaryKeyPointsOnly}
@@ -4469,7 +4578,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   function renderChatInspector(): JSX.Element {
     return (
       <div className="inspector-body">
-        <h4>Prompts</h4>
+        <h4>{t("chat.prompts")}</h4>
         <div className="prompt-list">
           {settings?.prompts.templates.map((prompt) => (
             <button key={prompt.id} className="prompt-item" onClick={() => void onSendChat(prompt.body)}>
@@ -4487,9 +4596,9 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         </button>
 
         <div className="inspector-block">
-          <h4>Options</h4>
+          <h4>{t("inspector.options")}</h4>
           <label className="toggle-row">
-            <span>Include timestamps</span>
+            <span>{t("summary.includeTimestamps")}</span>
             <input
               type="checkbox"
               checked={chatIncludeTimestamps}
@@ -4497,7 +4606,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             />
           </label>
           <label className="toggle-row">
-            <span>Include speakers</span>
+            <span>{t("summary.includeSpeakers")}</span>
             <input
               type="checkbox"
               checked={chatIncludeSpeakers}
@@ -4515,7 +4624,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         <h4>Model & Language</h4>
 
         <div className="property-grid">
-          <label>Model</label>
+          <label>{t("metadata.model")}</label>
           <select
             value={settings?.transcription.model ?? "base"}
             onChange={(event) => void onChangeModel(event.target.value as SpeechModel)}
@@ -4527,14 +4636,14 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             ))}
           </select>
 
-          <label>Language</label>
+          <label>{t("metadata.language")}</label>
           <select
             value={settings?.transcription.language ?? "auto"}
             onChange={(event) => void onChangeLanguage(event.target.value as LanguageCode)}
           >
             {languageOptions.map((option) => (
               <option key={option.value} value={option.value}>
-                {option.label}
+                {t(`lang.${option.value}`, option.label)}
               </option>
             ))}
           </select>
@@ -4542,12 +4651,12 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
         {activeArtifact ? (
           <>
-            <div className="property-line"><span>Kind</span><strong>{activeArtifact.kind}</strong></div>
-            <div className="property-line"><span>Audio Duration</span><strong>{formatShortDuration(transcriptSeconds)}</strong></div>
-            <div className="property-line"><span>Created</span><strong>{formatDate(activeArtifact.created_at)}</strong></div>
-            <div className="property-line"><span>Updated</span><strong>{formatDate(activeArtifact.updated_at)}</strong></div>
-            <div className="property-line"><span>Characters</span><strong>{draftTranscript.length}</strong></div>
-            <div className="property-line"><span>Words</span><strong>{transcriptWordCount}</strong></div>
+            <div className="property-line"><span>{t("metadata.kind")}</span><strong>{activeArtifact.kind}</strong></div>
+            <div className="property-line"><span>{t("metadata.audioDuration")}</span><strong>{formatShortDuration(transcriptSeconds)}</strong></div>
+            <div className="property-line"><span>{t("metadata.created")}</span><strong>{formatDate(activeArtifact.created_at)}</strong></div>
+            <div className="property-line"><span>{t("metadata.updated")}</span><strong>{formatDate(activeArtifact.updated_at)}</strong></div>
+            <div className="property-line"><span>{t("metadata.characters")}</span><strong>{draftTranscript.length}</strong></div>
+            <div className="property-line"><span>{t("metadata.words")}</span><strong>{transcriptWordCount}</strong></div>
           </>
         ) : null}
 
@@ -4571,13 +4680,13 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
               Copy
             </button>
             <div className="inspector-block">
-              <h4>Transcribing</h4>
+              <h4>{t("inspector.transcribingTitle")}</h4>
               <p className="muted">{progress?.message ?? "Running Whisper transcription..."}</p>
             </div>
           </div>
         );
       }
-      return <div className="inspector-body muted">No transcript selected</div>;
+      return <div className="inspector-body muted">{t("inspector.noTranscript")}</div>;
     }
 
     if (inspectorMode === "info") return renderMetadataInspector();
@@ -4638,7 +4747,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                 Add Speaker...
               </button>
               <div className="segment-context-separator" />
-              <p className="segment-context-title">Assign Known Speaker</p>
+              <p className="segment-context-title">{t("inspector.assign")}</p>
               {knownSpeakerLabels.length > 0 ? (
                 knownSpeakerLabels.map((speakerLabel) => (
                   <button
@@ -4653,7 +4762,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                   </button>
                 ))
               ) : (
-                <p className="segment-context-empty">No known speaker labels yet</p>
+                <p className="segment-context-empty">{t("inspector.unknown")}</p>
               )}
               <div className="segment-context-separator" />
               <button
@@ -4699,7 +4808,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     return (
       <div className="view-body">
         <div className="view-toolbar">
-          <h2>Live Transcription</h2>
+          <h2>{t("topbar.live")}</h2>
           <div className="toolbar-actions">
             <button className="secondary-button" onClick={() => void onStartRealtime()} disabled={!canStartRealtime}>
               Start
@@ -4718,7 +4827,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
         <section className="panel-card">
           <div className="panel-head">
-            <strong>Status</strong>
+            <strong>{t("realtime.status")}</strong>
             <span className={`status-chip ${realtimeState}`}>{realtimeMessage}</span>
           </div>
 
@@ -4730,8 +4839,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
               </>
             ) : (
               <div className="center-empty compact">
-                <h3>No realtime transcript yet</h3>
-                <p>Start live mode to stream transcript output.</p>
+                <h3>{t("realtime.noTranscript")}</h3>
+                <p>{t("realtime.noTranscriptDesc")}</p>
               </div>
             )}
           </div>
@@ -4742,21 +4851,21 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
   function renderSettingsGeneral(): JSX.Element {
     if (!settings) {
-      return <div className="settings-placeholder">Settings unavailable.</div>;
+      return <div className="settings-placeholder">{t("settings.unavailable")}</div>;
     }
 
     return (
       <div className="settings-stack">
         <section className="settings-panel">
           <header>
-            <h3>General</h3>
-            <p>Application-level defaults and update behavior.</p>
+            <h3>{t("settings.general.title", "General")}</h3>
+            <p>{t("settings.general.desc")}</p>
           </header>
 
           <div className="settings-row">
             <div>
-              <strong>Enable auto update checks</strong>
-              <small>Checks Tauri updater and release feed in the background.</small>
+              <strong>{t("settings.general.autoUpdate", "Enable auto update checks")}</strong>
+              <small>{t("settings.general.autoUpdateDesc")}</small>
             </div>
             <input
               type="checkbox"
@@ -4775,8 +4884,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="settings-row settings-row-block">
             <div>
-              <strong>Updates repository</strong>
-              <small>GitHub repository used for update checks.</small>
+              <strong>{t("settings.general.updatesRepo", "Updates repository")}</strong>
+              <small>{t("settings.general.updatesRepoDesc", "GitHub repository used for update checks.")}</small>
             </div>
             <input
               value={settings.general.auto_update_repo}
@@ -4794,8 +4903,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="settings-row settings-row-block">
             <div>
-              <strong>Appearance</strong>
-              <small>Choose app theme behavior.</small>
+              <strong>{t("settings.general.appearanceMode", "Appearance")}</strong>
+              <small>{t("settings.general.appearanceDesc", "Choose app theme behavior.")}</small>
             </div>
             <select
               value={settings.general.appearance_mode ?? "system"}
@@ -4810,9 +4919,35 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                 }));
               }}
             >
-              <option value="system">System</option>
-              <option value="light">Light</option>
-              <option value="dark">Dark</option>
+              <option value="system">{t("settings.general.system", "System")}</option>
+              <option value="light">{t("settings.general.light", "Light")}</option>
+              <option value="dark">{t("settings.general.dark", "Dark")}</option>
+            </select>
+          </div>
+
+          <div className="settings-row settings-row-block">
+            <div>
+              <strong>{t("settings.general.appLanguage", "App Language")}</strong>
+              <small>{t("settings.general.appLanguageDesc", "Choose the application language.")}</small>
+            </div>
+            <select
+              value={settings.general.app_language ?? "en"}
+              onChange={(event) => {
+                const value = event.target.value as AppLanguage;
+                changeLanguage(value);
+                void patchSettings((current) => ({
+                  ...current,
+                  general: {
+                    ...current.general,
+                    app_language: value,
+                  },
+                }));
+              }}
+            >
+              <option value="en">English</option>
+              <option value="it">Italiano</option>
+              <option value="es">Español</option>
+              <option value="de">Deutsch</option>
             </select>
           </div>
 
@@ -4848,21 +4983,21 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
   function renderSettingsTranscription(): JSX.Element {
     if (!settings) {
-      return <div className="settings-placeholder">Settings unavailable.</div>;
+      return <div className="settings-placeholder">{t("settings.unavailable")}</div>;
     }
 
     return (
       <div className="settings-stack">
         <section className="settings-panel">
           <header>
-            <h3>Transcription Defaults</h3>
-            <p>Used for every new transcription job.</p>
+            <h3>{t("settings.transcription.title", "Transcription Defaults")}</h3>
+            <p>{t("settings.transcription.desc", "Used for every new transcription job.")}</p>
           </header>
 
           <div className="settings-row settings-row-block">
             <div>
-              <strong>Transcription engine</strong>
-              <small>This app uses Whisper.cpp for local transcription.</small>
+              <strong>{t("settings.transcription.engine", "Transcription engine")}</strong>
+              <small>{t("settings.transcription.engineDesc", "This app uses Whisper.cpp for local transcription.")}</small>
             </div>
             <select
               value={settings.transcription.engine}
@@ -4881,7 +5016,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="settings-row settings-row-block">
             <div>
-              <strong>Default model</strong>
+              <strong>{t("settings.transcription.model", "Default model")}</strong>
             </div>
             <select
               value={settings.transcription.model}
@@ -4899,7 +5034,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="settings-row settings-row-block">
             <div>
-              <strong>Default language</strong>
+              <strong>{t("settings.transcription.language", "Default language")}</strong>
             </div>
             <select
               value={settings.transcription.language}
@@ -4909,7 +5044,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             >
               {languageOptions.map((option) => (
                 <option key={option.value} value={option.value}>
-                  {option.label}
+                  {t(`lang.${option.value}`, option.label)}
                 </option>
               ))}
             </select>
@@ -4917,8 +5052,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="settings-row">
             <div>
-              <strong>Enable AI post-processing</strong>
-              <small>Run optimize/summary prompts after transcription.</small>
+              <strong>{t("settings.transcription.enableAi", "Enable AI post-processing")}</strong>
+              <small>{t("settings.transcription.enableAiDesc", "Run optimize/summary prompts after transcription.")}</small>
             </div>
             <input
               type="checkbox"
@@ -4935,7 +5070,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
   function renderSettingsWhisperCpp(): JSX.Element {
     if (!settings) {
-      return <div className="settings-placeholder">Settings unavailable.</div>;
+      return <div className="settings-placeholder">{t("settings.unavailable")}</div>;
     }
 
     const whisperOptions = settings.transcription.whisper_options ?? getDefaultWhisperOptions(platformIsAppleSilicon);
@@ -4944,14 +5079,14 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       <div className="settings-stack">
         <section className="settings-panel">
           <header>
-            <h3>Whisper C++</h3>
-            <p>Decoding controls used by `whisper-cli` (whisper.cpp).</p>
+            <h3>{t("settings.whisper.title", "Whisper C++")}</h3>
+            <p>{t("settings.whisper.desc", "Decoding controls used by `whisper-cli` (whisper.cpp).")}</p>
           </header>
 
           <div className="settings-row">
             <div>
-              <strong>Translate transcript to English</strong>
-              <small>Equivalent to `--translate`.</small>
+              <strong>{t("settings.whisper.translateToEnglish", "Translate transcript to English")}</strong>
+              <small>{t("settings.whisper.translateDesc", "Equivalent to `--translate`.")}</small>
             </div>
             <input
               type="checkbox"
@@ -4967,8 +5102,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="settings-row">
             <div>
-              <strong>No context between windows</strong>
-              <small>Equivalent to `--max-context 0`.</small>
+              <strong>{t("settings.whisper.noContext", "No context between windows")}</strong>
+              <small>{t("settings.whisper.noContextDesc", "Equivalent to `--max-context 0`.")}</small>
             </div>
             <input
               type="checkbox"
@@ -4984,8 +5119,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="settings-row">
             <div>
-              <strong>Split on word</strong>
-              <small>Use word boundaries when producing segments (`--split-on-word`).</small>
+              <strong>{t("settings.whisper.splitOnWord", "Split on word")}</strong>
+              <small>{t("settings.whisper.splitOnWordDesc", "Use word boundaries when producing segments (`--split-on-word`).")}</small>
             </div>
             <input
               type="checkbox"
@@ -5001,8 +5136,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="settings-row">
             <div>
-              <strong>Speaker diarization (tinydiarize)</strong>
-              <small>Enable whisper.cpp tiny diarization (`-tdrz`) to infer speaker turns.</small>
+              <strong>{t("settings.whisper.tinydiarize", "Speaker diarization (tinydiarize)")}</strong>
+              <small>{t("settings.whisper.tinydiarizeDesc", "Enable whisper.cpp tiny diarization (`-tdrz`) to infer speaker turns.")}</small>
             </div>
             <input
               type="checkbox"
@@ -5018,8 +5153,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="settings-row">
             <div>
-              <strong>Stereo diarization</strong>
-              <small>Enable whisper.cpp stereo diarization (`-di`) for stereo channel separation.</small>
+              <strong>{t("settings.whisper.stereodiarize", "Stereo diarization")}</strong>
+              <small>{t("settings.whisper.stereodiarizeDesc", "Enable whisper.cpp stereo diarization (`-di`) for stereo channel separation.")}</small>
             </div>
             <input
               type="checkbox"
@@ -5035,7 +5170,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="settings-row settings-row-block">
             <div>
-              <strong>Threads</strong>
+              <strong>{t("settings.whisper.threads", "Threads")}</strong>
               <small>`--threads`</small>
             </div>
             <input
@@ -5054,7 +5189,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="settings-row settings-row-block">
             <div>
-              <strong>Processors</strong>
+              <strong>{t("settings.whisper.processors", "Processors")}</strong>
               <small>`--processors`</small>
             </div>
             <input
@@ -5073,8 +5208,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="settings-row settings-row-block">
             <div>
-              <strong>Beam size</strong>
-              <small>`--beam-size` (when &gt; 1, best-of is ignored).</small>
+              <strong>{t("settings.whisper.beamSize", "Beam size")}</strong>
+              <small>{t("settings.whisper.beamSizeDesc", "`--beam-size` (when > 1, best-of is ignored).")}</small>
             </div>
             <input
               type="number"
@@ -5092,7 +5227,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="settings-row settings-row-block">
             <div>
-              <strong>Best of</strong>
+              <strong>{t("settings.whisper.bestOf")}</strong>
               <small>`--best-of` (used when beam size is 1).</small>
             </div>
             <input
@@ -5112,7 +5247,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="settings-row settings-row-block">
             <div>
-              <strong>Temperature</strong>
+              <strong>{t("settings.whisper.temperature")}</strong>
               <small>`--temperature`</small>
             </div>
             <input
@@ -5132,7 +5267,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="settings-row settings-row-block">
             <div>
-              <strong>Entropy threshold</strong>
+              <strong>{t("settings.whisper.entropyThreshold")}</strong>
               <small>`--entropy-thold`</small>
             </div>
             <input
@@ -5152,7 +5287,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="settings-row settings-row-block">
             <div>
-              <strong>Logprob threshold</strong>
+              <strong>{t("settings.whisper.logprobThreshold")}</strong>
               <small>`--logprob-thold`</small>
             </div>
             <input
@@ -5172,7 +5307,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="settings-row settings-row-block">
             <div>
-              <strong>Word threshold</strong>
+              <strong>{t("settings.whisper.wordThreshold")}</strong>
               <small>`--word-thold`</small>
             </div>
             <input
@@ -5196,7 +5331,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
   function renderSettingsWhisperKit(): JSX.Element {
     if (!settings) {
-      return <div className="settings-placeholder">Settings unavailable.</div>;
+      return <div className="settings-placeholder">{t("settings.unavailable")}</div>;
     }
 
     const whisperOptions = settings.transcription.whisper_options ?? getDefaultWhisperOptions(platformIsAppleSilicon);
@@ -5205,13 +5340,13 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       <div className="settings-stack">
         <section className="settings-panel">
           <header>
-            <h3>WhisperKit</h3>
-            <p>Apple-native inference and model execution controls.</p>
+            <h3>{t("settings.whisperkit.title")}</h3>
+            <p>{t("settings.whisperkit.desc")}</p>
           </header>
 
           <div className="settings-row settings-row-block">
             <div>
-              <strong>Chunking strategy</strong>
+              <strong>{t("settings.whisperkit.chunkingStrategy")}</strong>
             </div>
             <select
               value={whisperOptions.chunking_strategy}
@@ -5224,7 +5359,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             >
               {chunkingOptions.map((option) => (
                 <option key={option.value} value={option.value}>
-                  {option.label}
+                  {t(`settings.whisperkit.chunking.${option.value}`, option.label)}
                 </option>
               ))}
             </select>
@@ -5232,8 +5367,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="settings-row settings-row-block">
             <div>
-              <strong>Concurrent workers</strong>
-              <small>Maximum parallel worker count for decoding.</small>
+              <strong>{t("settings.whisperkit.concurrentWorkers")}</strong>
+              <small>{t("settings.whisperkit.concurrentWorkersDesc")}</small>
             </div>
             <input
               type="number"
@@ -5252,8 +5387,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           {platformIsAppleSilicon && (
             <div className="settings-row settings-row-block">
               <div>
-                <strong>Audio encoder compute units</strong>
-                <small>CoreML execution unit for the audio encoder (Apple Silicon only).</small>
+                <strong>{t("settings.whisperkit.audioEncoderUnits")}</strong>
+                <small>{t("settings.whisperkit.audioEncoderUnitsDesc")}</small>
               </div>
               <select
                 value={whisperOptions.audio_encoder_compute_units}
@@ -5267,7 +5402,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
               >
                 {computeUnitOptions.map((option) => (
                   <option key={option.value} value={option.value}>
-                    {option.label}
+                    {t(`settings.whisperkit.compute.${option.value}`, option.label)}
                   </option>
                 ))}
               </select>
@@ -5277,8 +5412,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           {platformIsAppleSilicon && (
             <div className="settings-row settings-row-block">
               <div>
-                <strong>Text decoder compute units</strong>
-                <small>CoreML execution unit for the text decoder (Apple Silicon only).</small>
+                <strong>{t("settings.whisperkit.textDecoderUnits")}</strong>
+                <small>{t("settings.whisperkit.textDecoderUnitsDesc")}</small>
               </div>
               <select
                 value={whisperOptions.text_decoder_compute_units}
@@ -5292,7 +5427,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
               >
                 {computeUnitOptions.map((option) => (
                   <option key={option.value} value={option.value}>
-                    {option.label}
+                    {t(`settings.whisperkit.compute.${option.value}`, option.label)}
                   </option>
                 ))}
               </select>
@@ -5301,7 +5436,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="settings-row">
             <div>
-              <strong>Use prefill prompt</strong>
+              <strong>{t("settings.whisperkit.usePrefillPrompt")}</strong>
             </div>
             <input
               type="checkbox"
@@ -5317,7 +5452,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="settings-row">
             <div>
-              <strong>Use prefill cache</strong>
+              <strong>{t("settings.whisperkit.usePrefillCache")}</strong>
             </div>
             <input
               type="checkbox"
@@ -5333,7 +5468,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="settings-row">
             <div>
-              <strong>Without timestamps</strong>
+              <strong>{t("settings.whisperkit.withoutTimestamps")}</strong>
             </div>
             <input
               type="checkbox"
@@ -5349,7 +5484,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="settings-row">
             <div>
-              <strong>Word timestamps</strong>
+              <strong>{t("settings.whisperkit.wordTimestamps")}</strong>
             </div>
             <input
               type="checkbox"
@@ -5365,8 +5500,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="settings-row settings-row-block">
             <div>
-              <strong>Prompt override</strong>
-              <small>Optional prompt used by WhisperKit decoders.</small>
+              <strong>{t("settings.whisperkit.promptOverride")}</strong>
+              <small>{t("settings.whisperkit.promptOverrideDesc")}</small>
             </div>
             <textarea
               className="settings-textarea small"
@@ -5387,14 +5522,14 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
   function renderSettingsLocalModels(): JSX.Element {
     if (!settings) {
-      return <div className="settings-placeholder">Settings unavailable.</div>;
+      return <div className="settings-placeholder">{t("settings.unavailable")}</div>;
     }
 
     return (
       <div className="settings-stack">
         <section className="settings-panel">
           <div className="settings-card-head">
-            <h3>Local Models</h3>
+            <h3>{t("settings.localModels.title")}</h3>
             <button className="secondary-button" onClick={() => void refreshProvisioningModels()}>
               Refresh
             </button>
@@ -5409,66 +5544,66 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           {runtimeHealth ? (
             <div className="settings-health-block">
-              <h4>Transcription Runtime Health</h4>
+              <h4>{t("settings.localModels.runtimeHealth")}</h4>
               <div className="settings-health-rows">
                 <div className="settings-health-row">
-                  <span className="settings-health-label">Platform</span>
+                  <span className="settings-health-label">{t("settings.localModels.platform")}</span>
                   <span className="settings-health-value-inline">
                     <code>{runtimeHealth.host_os}</code>
                     <code>{runtimeHealth.host_arch}</code>
                   </span>
                 </div>
                 <div className="settings-health-row">
-                  <span className="settings-health-label">Engine policy</span>
+                  <span className="settings-health-label">{t("settings.localModels.enginePolicy")}</span>
                   <span className="settings-health-value-inline">
                     <code>{runtimeHealth.preferred_engine}</code>
                     {runtimeHealth.configured_engine === runtimeHealth.preferred_engine ? (
-                      <span className="kind-chip">Aligned</span>
+                      <span className="kind-chip">{t("settings.localModels.aligned")}</span>
                     ) : (
-                      <span className="missing-chip">Will auto-fix on start</span>
+                      <span className="missing-chip">{t("settings.localModels.willAutoFix")}</span>
                     )}
                   </span>
                 </div>
                 <div className="settings-health-row">
-                  <span className="settings-health-label">Whisper CLI</span>
+                  <span className="settings-health-label">{t("settings.localModels.whisperCli")}</span>
                   <span className="settings-health-value-inline">
                     <code className="settings-health-value">{runtimeHealth.whisper_cli_resolved || runtimeHealth.whisper_cli_path}</code>
                     {runtimeHealth.whisper_cli_available ? (
-                      <span className="kind-chip">Runnable</span>
+                      <span className="kind-chip">{t("settings.localModels.runnable")}</span>
                     ) : (
-                      <span className="missing-chip">Unavailable</span>
+                      <span className="missing-chip">{t("settings.localModels.unavailable")}</span>
                     )}
                   </span>
                 </div>
                 <div className="settings-health-row">
-                  <span className="settings-health-label">Whisper Stream</span>
+                  <span className="settings-health-label">{t("settings.localModels.whisperStream")}</span>
                   <span className="settings-health-value-inline">
                     <code className="settings-health-value">{runtimeHealth.whisper_stream_resolved || runtimeHealth.whisper_stream_path}</code>
                     {runtimeHealth.whisper_stream_available ? (
-                      <span className="kind-chip">Runnable</span>
+                      <span className="kind-chip">{t("settings.localModels.runnable")}</span>
                     ) : (
-                      <span className="missing-chip">Unavailable</span>
+                      <span className="missing-chip">{t("settings.localModels.unavailable")}</span>
                     )}
                   </span>
                 </div>
                 <div className="settings-health-row">
-                  <span className="settings-health-label">Active model</span>
+                  <span className="settings-health-label">{t("settings.localModels.activeModel")}</span>
                   <span className="settings-health-value-inline">
                     <code>{runtimeHealth.model_filename}</code>
                     {runtimeHealth.model_present ? (
-                      <span className="kind-chip">Installed</span>
+                      <span className="kind-chip">{t("settings.localModels.installed")}</span>
                     ) : (
-                      <span className="missing-chip">Missing</span>
+                      <span className="missing-chip">{t("settings.localModels.missing")}</span>
                     )}
                   </span>
                 </div>
                 {platformIsAppleSilicon && (
                   <div className="settings-health-row">
-                    <span className="settings-health-label">CoreML encoder</span>
+                    <span className="settings-health-label">{t("settings.localModels.coremlEncoder")}</span>
                     {runtimeHealth.coreml_encoder_present ? (
-                      <span className="kind-chip">Installed</span>
+                      <span className="kind-chip">{t("settings.localModels.installed")}</span>
                     ) : (
-                      <span className="missing-chip">Missing</span>
+                      <span className="missing-chip">{t("settings.localModels.missing")}</span>
                     )}
                   </div>
                 )}
@@ -5526,7 +5661,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
   function renderSettingsAiServices(): JSX.Element {
     if (!settings) {
-      return <div className="settings-placeholder">Settings unavailable.</div>;
+      return <div className="settings-placeholder">{t("settings.unavailable")}</div>;
     }
 
     const foundationAvailable = platformIsAppleSilicon;
@@ -5645,18 +5780,17 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     return (
       <div className="settings-stack ai-services-stack">
         <section className="settings-panel ai-services-panel">
-          <h3>Services</h3>
+          <h3>{t("settings.ai.services")}</h3>
 
           <div className="ai-services-notice">
             <p>
-              When you use remote AI services, your transcript will be sent to the service&apos;s
-              servers and won&apos;t stay only on your Mac.
+              {t("settings.ai.privacyNotice", "When you use remote AI services, your transcript will be sent to the service's servers and won't stay only on your Mac.")}
             </p>
             <button
               className={aiServicesAcknowledged ? "secondary-button ai-notice-button acknowledged" : "secondary-button ai-notice-button"}
               onClick={() => setAiServicesAcknowledged(true)}
             >
-              {aiServicesAcknowledged ? "Understood" : "I Understand"}
+              {aiServicesAcknowledged ? t("settings.ai.understood", "Understood") : t("settings.ai.iUnderstand", "I Understand")}
             </button>
           </div>
 
@@ -5664,12 +5798,12 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             <div className="ai-service-row">
               <span className="ai-service-icon foundation"></span>
               <div className="ai-service-title">
-                <strong>Foundation Model</strong>
-                <small>{foundationAvailable ? "Apple" : "Requires Apple Silicon"}</small>
+                <strong>{t("settings.ai.foundationModel")}</strong>
+                <small>{foundationAvailable ? t("settings.ai.apple", "Apple") : t("settings.ai.requiresAppleSilicon", "Requires Apple Silicon")}</small>
               </div>
               <div className="ai-service-actions">
                 <label className="toggle-row compact">
-                  <span>Enabled</span>
+                  <span>{t("settings.ai.enabled")}</span>
                   <input
                     type="checkbox"
                     checked={foundationEnabled}
@@ -5700,7 +5834,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                   disabled={!foundationAvailable || !foundationEnabled || foundationActive}
                   onClick={activateFoundation}
                 >
-                  {foundationActive ? "Active" : "Use"}
+                  {foundationActive ? t("settings.ai.active", "Active") : t("settings.ai.use", "Use")}
                 </button>
               </div>
             </div>
@@ -5714,21 +5848,21 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
               </span>
               <div className="ai-service-title">
                 <strong>{settings.ai.providers.gemini.model}</strong>
-                <small>{geminiConfigured ? "Configured to use" : "Configure to use"}</small>
+                <small>{geminiConfigured ? t("settings.ai.configuredToUse", "Configured to use") : t("settings.ai.configureToUse", "Configure to use")}</small>
               </div>
               <div className="ai-service-actions">
                 <button
                   className="secondary-button"
                   onClick={() => setAiServiceConfigOpen(showGeminiConfig ? null : googleService?.id ?? null)}
                 >
-                  {showGeminiConfig ? "Done" : "Configure"}
+                  {showGeminiConfig ? t("settings.ai.done", "Done") : t("settings.ai.configure", "Configure")}
                 </button>
                 <button
                   className="secondary-button"
                   disabled={!geminiConfigured || geminiActive}
                   onClick={activateGemini}
                 >
-                  {geminiActive ? "Active" : "Use"}
+                  {geminiActive ? t("settings.ai.active", "Active") : t("settings.ai.use", "Use")}
                 </button>
               </div>
             </div>
@@ -5736,10 +5870,10 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             {showGeminiConfig ? (
               <div className="ai-service-config">
                 <label>
-                  API Key
+                  {t("settings.ai.apiKey", "API Key")}
                   <input
                     type="password"
-                    placeholder="Inserisci API Key..."
+                    placeholder={t("settings.ai.apiKeyPlaceholder", "Enter API Key...")}
                     value={settings.ai.providers.gemini.api_key ?? ""}
                     onChange={(event) => {
                       const value = event.target.value.trim();
@@ -5767,7 +5901,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
                 <div className="ai-service-config-row">
                   <label>
-                    Gemini Model
+                    {t("settings.ai.geminiModel", "Gemini Model")}
                     <select
                       value={settings.ai.providers.gemini.model}
                       onChange={(event) => {
@@ -5804,7 +5938,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                       disabled={loadingGeminiModels}
                       onClick={() => setGeminiModelFetchNonce((value) => value + 1)}
                     >
-                      {loadingGeminiModels ? "Loading models..." : "Refresh models"}
+                      {loadingGeminiModels ? t("settings.ai.loadingModels", "Loading models...") : t("settings.ai.refreshModels", "Refresh models")}
                     </button>
                     <a
                       className="cta-link-button ai-service-link"
@@ -5812,7 +5946,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                       target="_blank"
                       rel="noreferrer"
                     >
-                      Create a Google API Key
+                      {t("settings.ai.createGoogleKey", "Create a Google API Key")}
                     </a>
                   </div>
                 </div>
@@ -5851,7 +5985,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                       setAiServiceConfigOpen(null);
                     }}
                   >
-                    Delete
+                    {t("action.delete", "Delete")}
                   </button>
                 </div>
               </div>
@@ -5880,11 +6014,11 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                   </span>
                   <div className="ai-service-title">
                     <strong>{service.label || formatProviderLabel(service.kind)}</strong>
-                    <small>{service.enabled ? "Configured" : "Disabled"}</small>
+                    <small>{service.enabled ? t("settings.ai.configuredToUse", "Configured") : t("settings.ai.disabled", "Disabled")}</small>
                   </div>
                   <div className="ai-service-actions">
                     <label className="toggle-row compact">
-                      <span>Enabled</span>
+                      <span>{t("settings.ai.enabled")}</span>
                       <input
                         type="checkbox"
                         checked={service.enabled}
@@ -5920,7 +6054,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                       className="secondary-button"
                       onClick={() => setAiServiceConfigOpen(isOpen ? null : service.id)}
                     >
-                      {isOpen ? "Done" : "Configure"}
+                      {isOpen ? t("settings.ai.done", "Done") : t("settings.ai.configure", "Configure")}
                     </button>
                     <button
                       className="secondary-button"
@@ -5933,7 +6067,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                         }));
                       }}
                     >
-                      {isActiveRemote ? "Active" : "Use"}
+                      {isActiveRemote ? t("settings.ai.active", "Active") : t("settings.ai.use", "Use")}
                     </button>
                   </div>
                 </div>
@@ -5941,7 +6075,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                 {isOpen ? (
                   <div className="ai-service-config">
                     <label>
-                      API Key
+                      {t("settings.ai.apiKey", "API Key")}
                       <input
                         type="password"
                         value={service.api_key ?? ""}
@@ -5954,10 +6088,10 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                       />
                     </label>
                     <label>
-                      Model
+                      {t("settings.ai.model", "Model")}
                       <input
                         value={service.model ?? ""}
-                        placeholder="Optional model name"
+                        placeholder={t("settings.ai.modelPlaceholder", "Optional model name")}
                         onChange={(event) =>
                           patchRemoteService(service.id, (current) => ({
                             ...current,
@@ -5967,10 +6101,10 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                       />
                     </label>
                     <label>
-                      Base URL
+                      {t("settings.ai.baseUrl", "Base URL")}
                       <input
                         value={service.base_url ?? ""}
-                        placeholder="Optional API endpoint"
+                        placeholder={t("settings.ai.baseUrlPlaceholder", "Optional API endpoint")}
                         onChange={(event) =>
                           patchRemoteService(service.id, (current) => ({
                             ...current,
@@ -5985,7 +6119,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                         className="secondary-button"
                         onClick={() => removeRemoteService(service.id)}
                       >
-                        Delete
+                        {t("action.delete", "Delete")}
                       </button>
                     </div>
                   </div>
@@ -5995,7 +6129,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             })}
 
           <div className="ai-service-library">
-            <strong>Add another service</strong>
+            <strong>{t("settings.ai.addService")}</strong>
             <div className="ai-service-grid">
               {serviceCatalog.map((service) => {
                 const ServiceIcon = service.icon;
@@ -6024,16 +6158,16 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
   function renderSettingsPrompts(): JSX.Element {
     if (!settings) {
-      return <div className="settings-placeholder">Settings unavailable.</div>;
+      return <div className="settings-placeholder">{t("settings.unavailable")}</div>;
     }
 
     return (
       <div className="settings-prompts-layout">
         <aside className="prompt-sidebar">
           <div className="settings-card-head">
-            <h3>Prompt Templates</h3>
+            <h3>{t("settings.prompts.templates")}</h3>
             <button className="secondary-button" onClick={() => void onResetPrompts()}>
-              Reset
+              {t("action.reset", "Reset")}
             </button>
           </div>
 
@@ -6045,15 +6179,15 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                 onClick={() => setActivePromptId(template.id)}
               >
                 <span>{template.name}</span>
-                {template.builtin ? <small>Built-in</small> : <small>Custom</small>}
+                {template.builtin ? <small>{t("settings.prompts.builtIn")}</small> : <small>{t("settings.prompts.custom")}</small>}
               </button>
             ))}
           </div>
 
           <div className="settings-card-block compact">
-            <h4>Prompt Bindings</h4>
+            <h4>{t("settings.prompts.bindings")}</h4>
             <label>
-              Optimize
+              {t("settings.prompts.optimize", "Optimize")}
               <select
                 value={settings.prompts.bindings.optimize_prompt_id}
                 onChange={(event) => {
@@ -6078,7 +6212,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
               </select>
             </label>
             <label>
-              Summary
+              {t("settings.prompts.summary", "Summary")}
               <select
                 value={settings.prompts.bindings.summary_prompt_id}
                 onChange={(event) => {
@@ -6103,7 +6237,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
               </select>
             </label>
             <label>
-              FAQ
+              {t("settings.prompts.faq", "FAQ")}
               <select
                 value={settings.prompts.bindings.faq_prompt_id}
                 onChange={(event) => {
@@ -6132,11 +6266,11 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
         <section className="settings-card-block prompt-editor-pane">
           {!promptDraft ? (
-            <div className="settings-placeholder">Select a prompt template</div>
+            <div className="settings-placeholder">{t("settings.prompts.selectTemplate")}</div>
           ) : (
             <>
               <div className="settings-card-head">
-                <h3>Edit Prompt</h3>
+                <h3>{t("settings.prompts.editPrompt")}</h3>
                 <button className="primary-button" onClick={() => void onSavePromptTemplate()}>
                   <Save size={14} />
                   Save Prompt
@@ -6169,7 +6303,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                   >
                     {promptTaskOptions.map((task) => (
                       <option key={task.value} value={task.value}>
-                        {task.label}
+                        {t(`settings.prompts.task.${task.value}`, task.label)}
                       </option>
                     ))}
                   </select>
@@ -6205,16 +6339,16 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
   function renderSettingsAdvanced(): JSX.Element {
     if (!settings) {
-      return <div className="settings-placeholder">Settings unavailable.</div>;
+      return <div className="settings-placeholder">{t("settings.unavailable")}</div>;
     }
 
     return (
       <div className="settings-stack">
         <section className="settings-panel">
-          <h3>Advanced</h3>
+          <h3>{t("settings.advanced.title")}</h3>
 
           <label>
-            Whisper CLI path
+            {t("settings.advanced.whisperCliPath", "Whisper CLI path")}
             <input
               value={settings.transcription.whisper_cli_path}
               onChange={(event) => {
@@ -6230,7 +6364,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           </label>
 
           <label>
-            Whisper Stream path
+            {t("settings.advanced.whisperStreamPath", "Whisper Stream path")}
             <input
               value={settings.transcription.whisperkit_cli_path}
               onChange={(event) => {
@@ -6246,7 +6380,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           </label>
 
           <label>
-            FFmpeg path
+            {t("settings.advanced.ffmpegPath", "FFmpeg path")}
             <input
               value={settings.transcription.ffmpeg_path}
               onChange={(event) => {
@@ -6262,7 +6396,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           </label>
 
           <label>
-            Models directory
+            {t("settings.advanced.modelsDir", "Models directory")}
             <input
               value={settings.transcription.models_dir}
               onChange={(event) => {
@@ -6279,7 +6413,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="notice-actions">
             <button className="secondary-button" onClick={() => void refreshSettingsFromDisk()}>
-              Reload from disk
+              {t("settings.advanced.reloadFromDisk", "Reload from disk")}
             </button>
           </div>
         </section>
@@ -6295,7 +6429,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     if (pane === "general") return renderSettingsGeneral();
     if (pane === "ai_services") return renderSettingsAiServices();
     if (pane === "prompts") return renderSettingsPrompts();
-    return <div className="settings-placeholder">Settings unavailable.</div>;
+    return <div className="settings-placeholder">{t("settings.unavailable")}</div>;
   }
 
   function renderSettings(): JSX.Element {
@@ -6305,7 +6439,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           <label className="settings-search">
             <Search size={14} />
             <input
-              placeholder="Search settings..."
+              placeholder={t("settings.searchPlaceholder")}
               value={settingsQuery}
               onChange={(event) => setSettingsQuery(event.target.value)}
             />
@@ -6335,7 +6469,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
               </section>
             ))}
             {visibleSettingsPanes.length === 0 ? (
-              <div className="settings-nav-empty">No section matches your search.</div>
+              <div className="settings-nav-empty">{t("settings.noMatch")}</div>
             ) : null}
           </div>
         </aside>
@@ -6396,21 +6530,21 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             <div className="sidebar-section">
               <button className={section === "home" ? "sidebar-item active" : "sidebar-item"} onClick={() => setSection("home")}>
                 <House size={16} />
-                Home
+                {t("sidebar.home", "Home")}
               </button>
               <button className={section === "queue" ? "sidebar-item active" : "sidebar-item"} onClick={() => setSection("queue")}>
                 <ListChecks size={16} />
-                Queue
+                {t("sidebar.queue", "Queue")}
               </button>
               <button className={section === "history" ? "sidebar-item active" : "sidebar-item"} onClick={() => setSection("history")}>
                 <HistoryIcon size={16} />
-                History
+                {t("sidebar.history", "History")}
               </button>
             </div>
 
             {openArtifacts.length > 0 ? (
               <div className="sidebar-section">
-                <h4>Open</h4>
+                <h4>{t("sidebar.open")}</h4>
                 {openArtifacts.map((artifact) => (
                   <div key={artifact.id} className="sidebar-open-row" title={artifact.title}>
                     <button
@@ -6437,8 +6571,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                             setSection("home");
                         }
                       }}
-                      title="Close opened transcription"
-                      aria-label="Close opened transcription"
+                      title={t("sidebar.closeTranscription", "Close opened transcription")}
+                      aria-label={t("sidebar.closeTranscription", "Close opened transcription")}
                     >
                       <X size={12} />
                     </button>
@@ -6453,14 +6587,14 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                 onClick={() => setSection("deleted_history")}
               >
                 <Trash2 size={16} />
-                Recently Deleted
+                {t("sidebar.recentlyDeleted", "Recently Deleted")}
               </button>
             </div>
 
             <div className="sidebar-footer">
-              <button className="sidebar-item" onClick={() => void onOpenStandaloneSettingsWindow("transcription")}>
+              <button className="sidebar-item" onClick={() => void onOpenStandaloneSettingsWindow("general")}>
                 <Settings2 size={16} />
-                Settings
+                {t("sidebar.settings", "Settings")}
               </button>
             </div>
           </aside>
@@ -6472,7 +6606,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                 <button
                   className={`icon-button sidebar-toggle-btn sidebar-toggle-left ${leftSidebarOpen ? "is-open" : ""}`}
                   onClick={() => setLeftSidebarOpen(!leftSidebarOpen)}
-                  title={leftSidebarOpen ? "Hide sidebar" : "Show sidebar"}
+                  title={leftSidebarOpen ? t("topbar.hideSidebar", "Hide sidebar") : t("topbar.showSidebar", "Show sidebar")}
                 >
                   <PanelLeftClose className="icon-close" size={16} />
                   <PanelLeftOpen className="icon-open" size={16} />
@@ -6480,12 +6614,12 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                 {section === "home" ? null : (
                   <h1 data-tauri-drag-region>
                     {section === "queue"
-                      ? "Queue"
+                      ? t("topbar.queue", "Queue")
                       : section === "realtime"
-                        ? "Live"
+                        ? t("topbar.live", "Live")
                         : section === "deleted_history"
-                            ? "Recently Deleted"
-                            : "Transcriptions"}
+                            ? t("topbar.recentlyDeleted", "Recently Deleted")
+                            : t("topbar.transcriptions", "Transcriptions")}
                   </h1>
                 )}
               </div>
@@ -6515,7 +6649,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                       onChange={(event) => void onChangeLanguage(event.target.value as LanguageCode)}
                     >
                       {languageOptions.map((option) => (
-                        <option key={option.value} value={option.value}>{option.label}</option>
+                        <option key={option.value} value={option.value}>{t(`lang.${option.value}`, option.label)}</option>
                       ))}
                     </select>
                   </label>
@@ -6530,15 +6664,15 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                       value={historyKind}
                       onChange={(event) => setHistoryKind(event.target.value as "all" | ArtifactKind)}
                     >
-                      <option value="all">All</option>
-                      <option value="file">Files</option>
-                      <option value="realtime">Live</option>
+                      <option value="all">{t("history.all")}</option>
+                      <option value="file">{t("history.files")}</option>
+                      <option value="realtime">{t("history.live")}</option>
                     </select>
                   </label>
                   <label className="search-chip history-top-search">
                     <Search size={14} />
                     <input
-                      placeholder="Search history..."
+                      placeholder={t("history.searchPlaceholder")}
                       value={search}
                       onChange={(event) => setSearch(event.target.value)}
                     />
@@ -6555,7 +6689,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                   <label className="search-chip history-top-search">
                     <Search size={14} />
                     <input
-                      placeholder="Search history..."
+                      placeholder={t("history.searchPlaceholder")}
                       value={deletedSearch}
                       onChange={(event) => setDeletedSearch(event.target.value)}
                     />
@@ -6587,7 +6721,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             aria-label="Rename transcription"
           >
             <header className="rename-sheet-head">
-              <h3>Rename transcription</h3>
+              <h3>{t("rename.title")}</h3>
             </header>
             <input
               className="rename-sheet-input"

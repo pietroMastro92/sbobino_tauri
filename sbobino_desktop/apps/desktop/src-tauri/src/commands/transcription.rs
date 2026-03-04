@@ -24,6 +24,10 @@ pub struct StartTranscriptionPayload {
     pub enable_ai: bool,
     #[serde(default)]
     pub whisper_options: WhisperOptions,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub parent_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -65,6 +69,8 @@ pub async fn start_transcription(
         model: payload.model,
         enable_ai: payload.enable_ai,
         whisper_options: payload.whisper_options,
+        title: payload.title,
+        parent_id: payload.parent_id,
     };
 
     let runtime_factory = state.runtime_factory.clone();

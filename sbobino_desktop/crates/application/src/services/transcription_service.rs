@@ -248,13 +248,21 @@ impl TranscriptionService {
                 transcription_output.timeline_v2_metadata_json(),
             );
 
-            let artifact = TranscriptArtifact::new(
-                request.job_id.clone(),
+            if let Some(pid) = &request.parent_id {
+                metadata.insert("parent_id".to_string(), pid.clone());
+            }
+
+            let final_title = request.title.clone().unwrap_or_else(|| {
                 input_path
                     .file_name()
                     .and_then(|name| name.to_str())
                     .unwrap_or(&request.input_path)
-                    .to_string(),
+                    .to_string()
+            });
+
+            let artifact = TranscriptArtifact::new(
+                request.job_id.clone(),
+                final_title,
                 ArtifactKind::File,
                 request.input_path.clone(),
                 raw_transcript,

@@ -9,8 +9,8 @@ pub use artifact::{
 pub use error::DomainError;
 pub use job::{JobProgress, JobStage, JobStatus, TranscriptionJob};
 pub use settings::{
-    default_prompt_templates, AiProvider, AiSettings, AppSettings, AppearanceMode, GeneralSettings,
-    LanguageCode, PromptBindings, PromptCategory, PromptSettings, PromptTask, PromptTemplate,
-    RemoteServiceConfig, RemoteServiceKind, SpeechModel, TranscriptionEngine,
+    default_prompt_templates, AiProvider, AiSettings, AppLanguage, AppSettings, AppearanceMode,
+    GeneralSettings, LanguageCode, PromptBindings, PromptCategory, PromptSettings, PromptTask,
+    PromptTemplate, RemoteServiceConfig, RemoteServiceKind, SpeechModel, TranscriptionEngine,
     TranscriptionSettings, WhisperOptions,
 };

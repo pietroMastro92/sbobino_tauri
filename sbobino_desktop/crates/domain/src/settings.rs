@@ -15,6 +15,16 @@ pub enum LanguageCode {
     Ja,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AppLanguage {
+    #[default]
+    En,
+    It,
+    Es,
+    De,
+}
+
 impl LanguageCode {
     pub fn as_whisper_code(&self) -> &str {
         match self {
@@ -136,6 +146,7 @@ pub struct GeneralSettings {
     pub auto_update_enabled: bool,
     pub auto_update_repo: String,
     pub appearance_mode: AppearanceMode,
+    pub app_language: AppLanguage,
 }
 
 impl Default for GeneralSettings {
@@ -144,6 +155,7 @@ impl Default for GeneralSettings {
             auto_update_enabled: true,
             auto_update_repo: "pietroMastro92/sbobbino".to_string(),
             appearance_mode: AppearanceMode::System,
+            app_language: AppLanguage::En,
         }
     }
 }

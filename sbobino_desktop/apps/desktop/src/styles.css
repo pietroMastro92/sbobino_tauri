@@ -230,7 +230,13 @@ code {
   padding: 0;
   opacity: 0;
   pointer-events: none;
+  cursor: pointer;
   transition: opacity 120ms ease, background-color 120ms ease, color 120ms ease;
+}
+
+.sidebar-open-close:hover {
+  background-color: var(--hover);
+  color: var(--text);
 }
 
 .sidebar-open-row:hover .sidebar-open-close,
@@ -1410,6 +1416,71 @@ code {
   gap: 6px;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+/* History Children Grouping Graph UI */
+.history-children-list {
+  display: flex;
+  flex-direction: column;
+  margin-left: 20px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border-color);
+  margin-top: 4px;
+  margin-bottom: 8px;
+  position: relative;
+}
+
+.history-children-list::before {
+  content: "";
+  position: absolute;
+  top: -12px;
+  left: -2px;
+  width: 2px;
+  height: 12px;
+  background: var(--bg-primary); /* hide the top part of the border connecting to parent */
+}
+
+.history-child-item {
+  position: relative;
+}
+
+.history-child-item::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -14px;
+  width: 14px;
+  height: 2px;
+  background: var(--border-color);
+  z-index: 0;
+}
+
+.tree-expand-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  padding: 4px;
+  margin-right: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.tree-expand-button:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.history-child-dot,
+.dark-theme .history-child-dot {
+  background: var(--border-color);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  opacity: 0.6;
 }
 
 .transcribing-cancel-pill {
@@ -2665,7 +2736,7 @@ code {
   border: 1px solid var(--glass-border);
   border-radius: 18px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 326px;
+  grid-template-columns: minmax(0, 1fr) 380px;
   overflow: hidden;
   box-shadow: 0 30px 80px rgba(12, 18, 28, 0.24);
   position: relative;
@@ -2877,6 +2948,7 @@ code {
 .export-actions {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 0;
   padding: 10px 14px 12px;
@@ -3861,6 +3933,17 @@ code {
     background: rgba(57, 62, 70, 0.5);
     color: var(--text);
     border-color: rgba(223, 208, 184, 0.12);
+  }
+
+  [data-theme="dark"] .format-card.active {
+    border-color: var(--detail-active-border);
+    background: var(--detail-active-bg);
+    color: var(--detail-active-text);
+  }
+
+  [data-theme="dark"] .format-card.active .format-card-icon {
+    border-color: var(--detail-active-border);
+    background: var(--surface);
   }
 
   [data-theme="dark"] .chat-submit-button {

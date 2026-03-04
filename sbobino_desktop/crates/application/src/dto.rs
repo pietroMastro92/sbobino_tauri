@@ -10,6 +10,8 @@ pub struct RunTranscriptionRequest {
     pub model: SpeechModel,
     pub enable_ai: bool,
     pub whisper_options: WhisperOptions,
+    pub title: Option<String>,
+    pub parent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
