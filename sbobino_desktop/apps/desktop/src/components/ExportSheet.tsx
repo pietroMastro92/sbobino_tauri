@@ -1,8 +1,8 @@
-import { Braces, Captions, Copy, Download, FileCode2, FileText, FileType, FileType2, List, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Braces, Captions, Copy, Download, FileCode2, FileSpreadsheet, FileText, FileType, FileType2, List, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "../i18n";
 
-export type ExportFormat = "txt" | "docx" | "html" | "pdf" | "json";
+export type ExportFormat = "txt" | "docx" | "html" | "pdf" | "json" | "srt" | "vtt" | "csv" | "md";
 export type ExportStyle = "transcript" | "subtitles" | "segments";
 export type ExportGrouping = "none" | "speaker_paragraphs";
 
@@ -28,6 +28,7 @@ type ExportSheetProps = {
   open: boolean;
   transcriptText: string;
   segments: ExportSegment[];
+  title?: string;
   onClose: () => void;
   onExport: (payload: ExportRequest) => Promise<void>;
 };
@@ -40,39 +41,43 @@ type FormatItem = {
   badge?: string;
 };
 
-function getFormatItems(t: (key: string, fallback?: string) => string): FormatItem[] {
+function getTranscriptFormats(t: (key: string, fallback?: string) => string): FormatItem[] {
   return [
-    {
-      value: "txt",
-      label: ".txt",
-      icon: <FileText size={16} />,
-      hint: t("export.plainText", "Plain text"),
-    },
-    {
-      value: "docx",
-      label: ".docx",
-      icon: <FileType2 size={16} />,
-      hint: t("export.wordDocument", "Word document"),
-    },
-    {
-      value: "html",
-      label: ".html",
-      icon: <FileCode2 size={16} />,
-      hint: t("export.webPage", "Web page"),
-    },
-    {
-      value: "pdf",
-      label: ".pdf",
-      icon: <FileType size={16} />,
-      hint: t("export.portableDocument", "Portable document"),
-    },
-    {
-      value: "json",
-      label: ".json",
-      icon: <Braces size={16} />,
-      hint: t("export.structuredData", "Structured data"),
-    },
+    { value: "txt", label: ".txt", icon: <FileText size={16} />, hint: t("export.plainText", "Plain text") },
+    { value: "docx", label: ".docx", icon: <FileType2 size={16} />, hint: t("export.wordDocument", "Word document") },
+    { value: "html", label: ".html", icon: <FileCode2 size={16} />, hint: t("export.webPage", "Web page") },
+    { value: "pdf", label: ".pdf", icon: <FileType size={16} />, hint: t("export.portableDocument", "Portable document") },
+    { value: "json", label: ".json", icon: <Braces size={16} />, hint: t("export.structuredData", "Structured data") },
   ];
+}
+
+function getSubtitlesFormats(t: (key: string, fallback?: string) => string): FormatItem[] {
+  return [
+    { value: "srt", label: ".srt", icon: <Captions size={16} />, hint: t("export.srtSubtitles", "SRT subtitles") },
+    { value: "vtt", label: ".vtt", icon: <Captions size={16} />, hint: t("export.webVtt", "WebVTT") },
+    { value: "md", label: ".md", icon: <FileText size={16} />, hint: t("export.markdown", "Markdown") },
+  ];
+}
+
+function getSegmentsFormats(t: (key: string, fallback?: string) => string): FormatItem[] {
+  return [
+    { value: "txt", label: ".txt", icon: <FileText size={16} />, hint: t("export.plainText", "Plain text") },
+    { value: "csv", label: ".csv", icon: <FileSpreadsheet size={16} />, hint: t("export.csvSpreadsheet", "CSV spreadsheet") },
+    { value: "docx", label: ".docx", icon: <FileType2 size={16} />, hint: t("export.wordDocument", "Word document") },
+    { value: "html", label: ".html", icon: <FileCode2 size={16} />, hint: t("export.webPage", "Web page") },
+    { value: "pdf", label: ".pdf", icon: <FileType size={16} />, hint: t("export.portableDocument", "Portable document") },
+    { value: "md", label: ".md", icon: <FileText size={16} />, hint: t("export.markdown", "Markdown") },
+    { value: "json", label: ".json", icon: <Braces size={16} />, hint: t("export.structuredData", "Structured data") },
+  ];
+}
+
+function getFormatsForStyle(
+  style: ExportStyle,
+  t: (key: string, fallback?: string) => string,
+): FormatItem[] {
+  if (style === "subtitles") return getSubtitlesFormats(t);
+  if (style === "segments") return getSegmentsFormats(t);
+  return getTranscriptFormats(t);
 }
 
 type StyleItem = {
@@ -120,43 +125,132 @@ function formatSrtTime(seconds: number): string {
   return `${hh}:${mm}:${ss},000`;
 }
 
-function buildExportContent(params: {
+function formatVttTime(seconds: number): string {
+  const hh = String(Math.floor(seconds / 3600)).padStart(2, "0");
+  const mm = String(Math.floor((seconds % 3600) / 60)).padStart(2, "0");
+  const ss = String(seconds % 60).padStart(2, "0");
+  return `${hh}:${mm}:${ss}.000`;
+}
+
+function buildPreviewContent(params: {
   transcriptText: string;
   segments: ExportSegment[];
   style: ExportStyle;
+  format: ExportFormat;
   includeTimestamps: boolean;
+  title: string;
 }): string {
-  const { transcriptText, segments, style, includeTimestamps } = params;
+  const { transcriptText, segments, style, format, includeTimestamps, title } = params;
   const normalizedTranscript = transcriptText.trim();
 
+  // ── Subtitles ──
   if (style === "subtitles") {
-    if (segments.length === 0) {
-      return normalizedTranscript;
+    if (format === "srt") {
+      if (segments.length === 0) return normalizedTranscript;
+      return segments
+        .map((segment, index) => {
+          const startSeconds = parseMmSsToSeconds(segment.time);
+          const endSeconds = startSeconds + 11;
+          return `${index + 1}\n${formatSrtTime(startSeconds)} --> ${formatSrtTime(endSeconds)}\n${segment.line.trim()}`;
+        })
+        .join("\n\n");
     }
-    return segments
-      .map((segment, index) => {
-        const startSeconds = parseMmSsToSeconds(segment.time);
-        const endSeconds = startSeconds + 4;
-        return `${index + 1}\n${formatSrtTime(startSeconds)} --> ${formatSrtTime(endSeconds)}\n${segment.line.trim()}`;
-      })
-      .join("\n\n");
-  }
-
-  if (style === "segments") {
-    if (segments.length === 0) {
-      return normalizedTranscript;
+    if (format === "vtt") {
+      if (segments.length === 0) return `WEBVTT\n\n${normalizedTranscript}`;
+      const cues = segments
+        .map((segment) => {
+          const startSeconds = parseMmSsToSeconds(segment.time);
+          const endSeconds = startSeconds + 11;
+          return `${formatVttTime(startSeconds)} --> ${formatVttTime(endSeconds)}\n${segment.line.trim()}`;
+        })
+        .join("\n\n");
+      return `WEBVTT\n\n${cues}`;
     }
-    return segments
-      .map((segment) =>
-        includeTimestamps ? `[${segment.time}] ${segment.line.trim()}` : segment.line.trim(),
-      )
-      .join("\n");
-  }
-
-  if (!includeTimestamps || segments.length === 0) {
+    if (format === "md") {
+      if (segments.length === 0) return normalizedTranscript;
+      return segments
+        .map((segment) => `${segment.line.trim()}\n${segment.time}`)
+        .join("\n\n");
+    }
     return normalizedTranscript;
   }
 
+  // ── Segments ──
+  if (style === "segments") {
+    if (format === "json") {
+      if (segments.length === 0) {
+        return JSON.stringify([{ text: normalizedTranscript }], null, 2);
+      }
+      const arr = segments.map((segment) => {
+        const startSeconds = parseMmSsToSeconds(segment.time);
+        const endStr = String(startSeconds + 11).padStart(2, "0");
+        return {
+          text: segment.line.trim(),
+          timestamp: `${segment.time}-00:${endStr}`,
+        };
+      });
+      return JSON.stringify(arr, null, 2);
+    }
+
+    if (format === "csv") {
+      const header = "Start Timestamp;End Timestamp;Transcript";
+      if (segments.length === 0) return `${header}\n00:00;00:00;"${normalizedTranscript}"`;
+      const rows = segments.map((segment) => {
+        const startSeconds = parseMmSsToSeconds(segment.time);
+        const endSeconds = startSeconds + 11;
+        const endMm = String(Math.floor(endSeconds / 60)).padStart(2, "0");
+        const endSs = String(endSeconds % 60).padStart(2, "0");
+        return `${segment.time};${endMm}:${endSs};"${segment.line.trim()}"`;
+      });
+      return `${header}\n${rows.join("\n")}`;
+    }
+
+    if (format === "html" || format === "pdf") {
+      const titleLine = title ? `${title}\n\n` : "";
+      if (segments.length === 0) {
+        return `${titleLine}${normalizedTranscript}`;
+      }
+      const lines = segments.map((segment) =>
+        includeTimestamps ? `${segment.time}\n${segment.line.trim()}` : segment.line.trim(),
+      );
+      return `${titleLine}${lines.join("\n\n")}`;
+    }
+
+    if (format === "md") {
+      if (segments.length === 0) return normalizedTranscript;
+      return segments
+        .map((segment) =>
+          includeTimestamps ? `${segment.line.trim()}\n${segment.time}` : segment.line.trim(),
+        )
+        .join("\n\n");
+    }
+
+    // txt, docx
+    if (segments.length === 0) return normalizedTranscript;
+    return segments
+      .map((segment) =>
+        includeTimestamps ? `${segment.time}\n${segment.line.trim()}` : segment.line.trim(),
+      )
+      .join("\n\n");
+  }
+
+  // ── Transcript ──
+  if (format === "json") {
+    return JSON.stringify([{ text: normalizedTranscript }], null, 2);
+  }
+
+  if (format === "html" || format === "pdf") {
+    const titleLine = title ? `${title}\n\n` : "";
+    if (!includeTimestamps || segments.length === 0) {
+      return `${titleLine}${normalizedTranscript}`;
+    }
+    return `${titleLine}${segments.map((segment) => `[${segment.time}] ${segment.line.trim()}`).join("\n")}`;
+  }
+
+  // txt, docx
+  if (!includeTimestamps || segments.length === 0) {
+    return normalizedTranscript;
+  }
   return segments.map((segment) => `[${segment.time}] ${segment.line.trim()}`).join("\n");
 }
 
@@ -164,6 +258,7 @@ export function ExportSheet({
   open,
   transcriptText,
   segments,
+  title = "",
   onClose,
   onExport,
 }: ExportSheetProps): JSX.Element | null {
@@ -171,38 +266,52 @@ export function ExportSheet({
   const [style, setStyle] = useState<ExportStyle>("transcript");
   const [includeTimestamps, setIncludeTimestamps] = useState(false);
   const [grouping, setGrouping] = useState<ExportGrouping>("none");
+  const [showSpeakerNames, setShowSpeakerNames] = useState(false);
+  const [favoritedOnly, setFavoritedOnly] = useState(false);
+  const [allowMultipleLines, setAllowMultipleLines] = useState(false);
+  const [useOriginalFileName, setUseOriginalFileName] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const { t, language } = useTranslation();
+  const prevStyleRef = useRef(style);
 
-  const formatItems = useMemo(() => getFormatItems(t), [language]);
   const styleItems = useMemo(() => getStyleItems(t), [language]);
+  const formatItems = useMemo(() => getFormatsForStyle(style, t), [style, language]);
+
+  // Auto-reset format when style changes
+  useEffect(() => {
+    if (prevStyleRef.current !== style) {
+      prevStyleRef.current = style;
+      const available = getFormatsForStyle(style, t);
+      if (available.length > 0 && !available.some((f) => f.value === format)) {
+        setFormat(available[0].value);
+      }
+      // Subtitles always have timestamps on, segments default to on
+      if (style === "subtitles") {
+        setIncludeTimestamps(true);
+      } else if (style === "segments") {
+        setIncludeTimestamps(true);
+      }
+    }
+  }, [style, format, t]);
 
   const exportContent = useMemo(() => {
-    return buildExportContent({
+    return buildPreviewContent({
       transcriptText,
       segments,
       style,
+      format,
       includeTimestamps,
+      title,
     });
-  }, [includeTimestamps, segments, style, transcriptText]);
+  }, [includeTimestamps, segments, style, format, transcriptText, title]);
 
   const preview = useMemo(() => {
     const normalized = exportContent.trim();
     if (!normalized) {
       return t("export.noContent", "No content available for export.");
     }
-
-    if (format === "json") {
-      try {
-        const obj = { text: normalized };
-        return JSON.stringify(obj, null, 2);
-      } catch {
-        return normalized;
-      }
-    }
-
     return normalized;
-  }, [exportContent, format]);
+  }, [exportContent, t]);
 
   useEffect(() => {
     if (!open) return;
@@ -250,6 +359,16 @@ export function ExportSheet({
     }
   }
 
+  const styleLabelCapitalized =
+    style === "transcript"
+      ? t("export.transcript", "Transcript")
+      : style === "subtitles"
+        ? t("export.subtitles", "Subtitles")
+        : t("export.segments", "Segments");
+
+  // Preview may need special rendering for HTML/PDF (title as heading)
+  const previewHasTitle = (format === "html" || format === "pdf") && title;
+
   return (
     <div className="sheet-overlay" onClick={onClose}>
       <section
@@ -272,11 +391,20 @@ export function ExportSheet({
           <header className="export-preview-head">
             <strong id="export-sheet-title">{t("export.preview", "Export Preview")}</strong>
             <div className="export-tags">
-              <span>{style}</span>
-              <span>{format}</span>
+              <span>{styleLabelCapitalized}</span>
+              <span>.{format}</span>
             </div>
           </header>
-          <pre>{preview}</pre>
+          <div className="export-preview-body">
+            {previewHasTitle ? (
+              <>
+                <h2 className="export-preview-title">{title}</h2>
+                <pre>{preview.replace(`${title}\n\n`, "")}</pre>
+              </>
+            ) : (
+              <pre>{preview}</pre>
+            )}
+          </div>
         </div>
 
         <aside className="export-controls">
@@ -317,48 +445,149 @@ export function ExportSheet({
                     {item.badge ? <span className="format-card-badge">{item.badge}</span> : null}
                   </span>
                   <strong>{item.label}</strong>
-                  <small>{item.hint}</small>
                 </button>
               ))}
             </div>
 
+            {/* ── Options ── */}
             <div className="inspector-block export-options-block">
               <h4>{t("export.options", "Options")}</h4>
-              <div className="property-line">
-                <span>{t("export.grouping", "Grouping")}</span>
-                <select
-                  value={grouping}
-                  onChange={(event) => setGrouping(event.target.value as ExportGrouping)}
-                >
-                  <option value="none">{t("export.groupingNone", "None")}</option>
-                  <option value="speaker_paragraphs" disabled>
-                    {t("export.speakerParagraphs", "Speaker paragraphs")}
-                  </option>
-                </select>
-              </div>
-              <label className="toggle-row">
-                <span>{t("export.showTimestamps", "Show Timestamps")}</span>
-                <input
-                  type="checkbox"
-                  checked={includeTimestamps}
-                  onChange={(event) => setIncludeTimestamps(event.target.checked)}
-                  disabled={style === "subtitles"}
-                />
-              </label>
+
+              {style === "transcript" ? (
+                <>
+                  <div className="property-line">
+                    <span>{t("export.grouping", "Grouping")}</span>
+                    <select
+                      value={grouping}
+                      onChange={(event) => setGrouping(event.target.value as ExportGrouping)}
+                    >
+                      <option value="none">{t("export.groupingNone", "None")}</option>
+                      <option value="speaker_paragraphs" disabled>
+                        {t("export.speakerParagraphs", "Speaker paragraphs")}
+                      </option>
+                    </select>
+                  </div>
+                  <label className="toggle-row">
+                    <span>{t("export.showTimestamps", "Show Timestamps")}</span>
+                    <input
+                      type="checkbox"
+                      checked={includeTimestamps}
+                      onChange={(event) => setIncludeTimestamps(event.target.checked)}
+                    />
+                  </label>
+                  <p className="export-option-note">
+                    {t(
+                      "export.speakerNote",
+                      "The Speaker paragraphs option is unavailable unless speakers are assigned to your transcript.",
+                    )}
+                  </p>
+                </>
+              ) : null}
+
+              {style === "subtitles" ? (
+                <>
+                  <label className="toggle-row">
+                    <span>{t("export.showSpeakerNames", "Show Speaker Names")}</span>
+                    <input
+                      type="checkbox"
+                      checked={showSpeakerNames}
+                      onChange={(event) => setShowSpeakerNames(event.target.checked)}
+                    />
+                  </label>
+                  <label className="toggle-row">
+                    <span>{t("export.favoritedOnly", "Favorited Segments Only")}</span>
+                    <input
+                      type="checkbox"
+                      checked={favoritedOnly}
+                      onChange={(event) => setFavoritedOnly(event.target.checked)}
+                    />
+                  </label>
+                  <p className="export-option-note">
+                    {t(
+                      "export.speakerNote",
+                      "You can only enable speaker names if you assign speakers in your transcript.",
+                    )}
+                  </p>
+                  <label className="toggle-row">
+                    <span>{t("export.allowMultipleLines", "Allow multiple lines")}</span>
+                    <input
+                      type="checkbox"
+                      checked={allowMultipleLines}
+                      onChange={(event) => setAllowMultipleLines(event.target.checked)}
+                    />
+                  </label>
+                  <label className="toggle-row">
+                    <span>{t("export.useOriginalFileName", "Use Original File Name")}</span>
+                    <input
+                      type="checkbox"
+                      checked={useOriginalFileName}
+                      onChange={(event) => setUseOriginalFileName(event.target.checked)}
+                    />
+                  </label>
+                </>
+              ) : null}
+
+              {style === "segments" ? (
+                <>
+                  <label className="toggle-row">
+                    <span>{t("export.showSpeakerNames", "Show Speaker Names")}</span>
+                    <input
+                      type="checkbox"
+                      checked={showSpeakerNames}
+                      onChange={(event) => setShowSpeakerNames(event.target.checked)}
+                    />
+                  </label>
+                  <label className="toggle-row">
+                    <span>{t("export.favoritedOnly", "Favorited Segments Only")}</span>
+                    <input
+                      type="checkbox"
+                      checked={favoritedOnly}
+                      onChange={(event) => setFavoritedOnly(event.target.checked)}
+                    />
+                  </label>
+                  <p className="export-option-note">
+                    {t(
+                      "export.speakerNote",
+                      "You can only enable speaker names if you assign speakers in your transcript.",
+                    )}
+                  </p>
+                  <label className="toggle-row">
+                    <span>{t("export.showTimestamps", "Show Timestamps")}</span>
+                    <input
+                      type="checkbox"
+                      checked={includeTimestamps}
+                      onChange={(event) => setIncludeTimestamps(event.target.checked)}
+                    />
+                  </label>
+                  <label className="toggle-row">
+                    <span>{t("export.allowMultipleLines", "Allow multiple lines")}</span>
+                    <input
+                      type="checkbox"
+                      checked={allowMultipleLines}
+                      onChange={(event) => setAllowMultipleLines(event.target.checked)}
+                    />
+                  </label>
+                  <label className="toggle-row">
+                    <span>{t("export.useOriginalFileName", "Use Original File Name")}</span>
+                    <input
+                      type="checkbox"
+                      checked={useOriginalFileName}
+                      onChange={(event) => setUseOriginalFileName(event.target.checked)}
+                    />
+                  </label>
+                </>
+              ) : null}
             </div>
           </div>
 
           <div className="export-actions">
-            <button className="secondary-button" onClick={onClose} disabled={isExporting}>
-              {t("export.close", "Close")}
-            </button>
             <button
-              className="secondary-button"
+              className="secondary-button icon-only"
               onClick={() => void onCopyContent()}
               disabled={isExporting}
+              title={t("export.copy", "Copy")}
             >
               <Copy size={14} />
-              {t("export.copy", "Copy")}
             </button>
             <button className="primary-button" onClick={() => void onConfirm()} disabled={isExporting}>
               <Download size={14} />

@@ -60,6 +60,8 @@ pub async fn start_transcription(
     state: State<'_, AppState>,
     payload: StartTranscriptionPayload,
 ) -> Result<StartTranscriptionResponse, CommandError> {
+    println!("DEBUG: start_transcription payload received: {:?}", payload);
+    let _ = std::fs::write("/tmp/sbobino_debug.txt", format!("{:#?}", payload));
     let job_id = Uuid::new_v4().to_string();
 
     let request = RunTranscriptionRequest {

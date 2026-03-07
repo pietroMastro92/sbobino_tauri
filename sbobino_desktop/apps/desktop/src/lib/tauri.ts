@@ -176,7 +176,7 @@ export async function emptyDeletedArtifacts(): Promise<{ deleted: number }> {
 
 export async function exportArtifact(payload: {
   id: string;
-  format: "txt" | "docx" | "html" | "pdf" | "json";
+  format: "txt" | "docx" | "html" | "pdf" | "json" | "srt" | "vtt" | "csv" | "md";
   destination_path: string;
   style?: "transcript" | "subtitles" | "segments";
   options?: {

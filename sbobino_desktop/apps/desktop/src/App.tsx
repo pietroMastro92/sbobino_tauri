@@ -181,6 +181,19 @@ type PromptTestState = {
   running: boolean;
 };
 
+type TrimmedAudioDraft = {
+  path: string;
+  parentArtifactId: string;
+  title: string;
+  regions: TrimRegion[];
+};
+
+type PendingTranscriptionContext = {
+  inputPath: string;
+  parentId?: string;
+  title?: string;
+};
+
 const languageOptions: Array<{ value: LanguageCode; label: string }> = [
   { value: "auto", label: "Auto Detect" },
   { value: "en", label: "English" },
@@ -526,6 +539,16 @@ function formatTimelineTimestamp(seconds: number): string {
   const mm = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
   const ss = String(totalSeconds % 60).padStart(2, "0");
   return `${mm}:${ss}`;
+}
+
+function formatTrimRangeLabel(region: TrimRegion): string {
+  return `${formatTimelineTimestamp(region.startTime)}-${formatTimelineTimestamp(region.endTime)}`;
+}
+
+function buildTrimArtifactTitle(sourceLabel: string, regions: TrimRegion[]): string {
+  const sortedRegions = [...regions].sort((left, right) => left.startTime - right.startTime);
+  const ranges = sortedRegions.map(formatTrimRangeLabel).join(", ");
+  return ranges ? `${sourceLabel} - Trim ${ranges}` : `${sourceLabel} - Trim`;
 }
 
 function parseTimelineV2Segments(timelineV2Json: string | null | undefined): DetailSegment[] {
@@ -1010,7 +1033,7 @@ function DetailToolbar({
         <strong className="detail-title" data-tauri-drag-region>{title}</strong>
       </div>
 
-      <div style={{ display: "flex", alignItems: "center" }}>
+      <div className="detail-toolbar-center">
         {detailMode === "transcript" && !showRetranscribe && onImproveText && (
           <button
             className="optimize-hover-button"
@@ -1019,7 +1042,8 @@ function DetailToolbar({
             title={t("detail.improveText", "Improve Text")}
           >
             <div className="button-content">
-              <Sparkles size={14} /> {t("detail.optimize", "Optimize")}
+              <Sparkles size={14} />
+              <span className="detail-action-label">{t("detail.optimize", "Optimize")}</span>
             </div>
           </button>
         )}
@@ -1030,7 +1054,8 @@ function DetailToolbar({
             title={t("detail.retranscribeTrimmed", "Retranscribe Trimmed Audio")}
           >
             <div className="button-content">
-              <Scissors size={14} /> {t("detail.retranscribe", "Retranscribe")}
+              <Scissors size={14} />
+              <span className="detail-action-label">{t("detail.retranscribe", "Retranscribe")}</span>
             </div>
           </button>
         )}
@@ -1367,7 +1392,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
   const [audioDurationSeconds, setAudioDurationSeconds] = useState(0);
   const [trimRegions, setTrimRegions] = useState<TrimRegion[]>([]);
-  const [trimmedAudioPath, setTrimmedAudioPath] = useState<string | null>(null);
+  const [trimmedAudioDraft, setTrimmedAudioDraft] = useState<TrimmedAudioDraft | null>(null);
 
   const activeJobIdRef = useRef<string | null>(activeJobId);
   const activeJobDeltaSequenceRef = useRef<number>(-1);
@@ -1375,6 +1400,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   const detailMainRef = useRef<HTMLElement | null>(null);
   const peopleSpeakerInputRef = useRef<HTMLInputElement | null>(null);
   const failedJobMessagesRef = useRef<Map<string, string>>(new Map());
+  const pendingTranscriptionContextRef = useRef<Map<string, PendingTranscriptionContext>>(new Map());
   const startupWatchdogRef = useRef<number | null>(null);
   const settingsSaveSequenceRef = useRef(0);
   const clearStartupWatchdog = useCallback(() => {
@@ -1387,6 +1413,16 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   useEffect(() => {
     activeJobIdRef.current = activeJobId;
   }, [activeJobId]);
+
+  useEffect(() => {
+    if (!trimmedAudioDraft || !activeArtifact) {
+      return;
+    }
+    if (activeArtifact.id !== trimmedAudioDraft.parentArtifactId) {
+      setTrimmedAudioDraft(null);
+      setTrimRegions([]);
+    }
+  }, [activeArtifact, trimmedAudioDraft]);
 
   useEffect(() => {
     if (!activeJobId) {
@@ -1730,6 +1766,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           setProgress(event);
           if (event.stage === "cancelled" || event.stage === "failed") {
             clearStartupWatchdog();
+            pendingTranscriptionContextRef.current.delete(event.job_id);
             clearActiveJob();
             activeJobIdRef.current = null;
             setActiveJobPreviewText("");
@@ -1746,7 +1783,21 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
       const uCompleted = await subscribeJobCompleted((artifact) => {
         failedJobMessagesRef.current.delete(artifact.job_id);
-        prependArtifact(artifact);
+        const pendingContext = pendingTranscriptionContextRef.current.get(artifact.job_id);
+        pendingTranscriptionContextRef.current.delete(artifact.job_id);
+        const hydratedArtifact = pendingContext
+          ? {
+              ...artifact,
+              title: pendingContext.title?.trim() ? pendingContext.title : artifact.title,
+              input_path: pendingContext.inputPath || artifact.input_path,
+              metadata: {
+                ...artifact.metadata,
+                ...(pendingContext.parentId ? { parent_id: pendingContext.parentId } : {}),
+              },
+            }
+          : artifact;
+
+        prependArtifact(hydratedArtifact);
         setQueueItems((previous) => previous.filter((entry) => entry.job_id !== artifact.job_id));
         setActiveJobPreviewText("");
         setActiveJobTitle("");
@@ -1756,7 +1807,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           clearStartupWatchdog();
           clearActiveJob();
           activeJobIdRef.current = null;
-          hydrateDetail(artifact);
+          hydrateDetail(hydratedArtifact);
           setSection("detail");
           setError(null);
         }
@@ -1765,6 +1816,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
       const uFailed = await subscribeJobFailed((payload) => {
         failedJobMessagesRef.current.set(payload.job_id, payload.message);
+        pendingTranscriptionContextRef.current.delete(payload.job_id);
         setQueueItems((previous) =>
           previous.map((entry) =>
             entry.job_id === payload.job_id
@@ -2152,17 +2204,27 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     return () => clearTimeout(timer);
   }, [error]);
 
+  const activeTrimmedAudioDraft = useMemo(() => {
+    if (!trimmedAudioDraft || !activeArtifact) {
+      return null;
+    }
+    return trimmedAudioDraft.parentArtifactId === activeArtifact.id ? trimmedAudioDraft : null;
+  }, [activeArtifact, trimmedAudioDraft]);
+
   const detailAudioInputPath = useMemo(
     () => {
-      const originalPath =
-        activeArtifact && activeArtifact.kind === "file"
-          ? activeArtifact.input_path
-          : activeJobId
-            ? selectedFile
-            : null;
-      return trimmedAudioPath ?? originalPath;
+      if (activeTrimmedAudioDraft) {
+        return activeTrimmedAudioDraft.path;
+      }
+      if (activeArtifact && activeArtifact.kind === "file") {
+        return activeArtifact.input_path;
+      }
+      if (activeJobId) {
+        return selectedFile;
+      }
+      return null;
     },
-    [activeArtifact, activeJobId, selectedFile, trimmedAudioPath],
+    [activeArtifact, activeJobId, activeTrimmedAudioDraft, selectedFile],
   );
 
   const detailAudioFileLabel = useMemo(
@@ -2585,9 +2647,22 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     }));
   }
 
-  async function onStartTranscription(fileToProcess?: string): Promise<void> {
+  async function onStartTranscription(
+    fileToProcess?: string,
+    options?: { parentId?: string; title?: string },
+  ): Promise<void> {
     const targetFile = fileToProcess && typeof fileToProcess === "string" ? fileToProcess : selectedFile;
     if (!settings || !targetFile) return;
+    const parentId = options?.parentId;
+    const requestedTitle = options?.title?.trim() ? options.title.trim() : undefined;
+    const isTrimRetranscription =
+      trimmedAudioDraft?.path === targetFile
+      && trimmedAudioDraft.parentArtifactId === parentId;
+
+    if (!isTrimRetranscription) {
+      setTrimmedAudioDraft(null);
+      setTrimRegions([]);
+    }
 
     clearStartupWatchdog();
     setIsStarting(true);
@@ -2627,24 +2702,32 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
       const startResult = await withTimeout(
         startTranscription({
-          input_path: trimmedAudioPath ?? targetFile,
+          input_path: targetFile,
           language: settings.transcription.language,
           model: settings.transcription.model,
           enable_ai: settings.transcription.enable_ai_post_processing,
           whisper_options: sanitizeWhisperOptions(
             settings.transcription.whisper_options ?? getDefaultWhisperOptions(platformIsAppleSilicon),
           ),
+          title: requestedTitle,
+          parent_id: parentId,
         }),
         12_000,
         "Start request timed out while waiting for backend response.",
       );
 
       const { job_id } = startResult;
+      pendingTranscriptionContextRef.current.set(job_id, {
+        inputPath: targetFile,
+        parentId,
+        title: requestedTitle,
+      });
 
       if (failedJobMessagesRef.current.has(job_id)) {
         const earlyFailure =
           failedJobMessagesRef.current.get(job_id) ?? "Transcription failed.";
         failedJobMessagesRef.current.delete(job_id);
+        pendingTranscriptionContextRef.current.delete(job_id);
         clearActiveJob();
         activeJobIdRef.current = null;
         setActiveJobPreviewText("");
@@ -2667,7 +2750,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           total_seconds: null,
         }),
       );
-      setActiveJobTitle(fileLabel(targetFile));
+      setActiveJobTitle(requestedTitle ?? fileLabel(targetFile));
       setActiveJobPreviewText("");
       activeJobDeltaSequenceRef.current = -1;
       setActiveArtifact(null);
@@ -2680,6 +2763,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         if (activeJobIdRef.current !== job_id) {
           return;
         }
+        pendingTranscriptionContextRef.current.delete(job_id);
         clearActiveJob();
         activeJobIdRef.current = null;
         setActiveJobPreviewText("");
@@ -3704,10 +3788,10 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       return (
         <React.Fragment key={artifact.id}>
           <article
-            className={`history-item ${depth > 0 ? "history-child-item" : "home-history-item"}${selectedArtifactIdSet.has(artifact.id) ? " selected" : ""}`}
+            className={`history-item home-history-item${depth > 0 ? " history-child-item" : ""}${selectedArtifactIdSet.has(artifact.id) ? " selected" : ""}`}
           >
             <button
-              className={depth > 0 ? "history-main history-main-rich" : "home-history-main"}
+              className="home-history-main"
               onClick={() => {
                 if (isSelectionMode) {
                   toggleArtifactSelection(artifact.id);
@@ -3719,7 +3803,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
               <span className="history-audio-dot">
                 <AudioLines size={12} />
               </span>
-              <div className={depth > 0 ? "history-main-copy" : "home-history-copy"}>
+              <div className="home-history-copy">
                 <div className="home-history-head" style={{ display: 'flex', alignItems: 'center' }}>
                   {artifact.children && artifact.children.length > 0 && (
                     <button 
@@ -3737,14 +3821,14 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                 </div>
                 <p className="history-preview" style={artifact.children && artifact.children.length > 0 ? { paddingLeft: 22 } : {}}>
                   <HighlightMatch
-                    text={previewSnippet(artifact.optimized_transcript || artifact.raw_transcript, depth > 0 ? 220 : 210)}
+                    text={previewSnippet(artifact.optimized_transcript || artifact.raw_transcript, 210)}
                     search={search}
                   />
                 </p>
               </div>
             </button>
-            <div className={depth > 0 ? "history-actions" : "home-history-actions"}>
-              <label className={depth > 0 ? "home-history-select history-select" : "home-history-select"} title={depth > 0 ? "Select trim transcription" : "Select transcription"} onClick={(e) => e.stopPropagation()}>
+            <div className="home-history-actions">
+              <label className="home-history-select" title={depth > 0 ? "Select trim transcription" : "Select transcription"} onClick={(e) => e.stopPropagation()}>
                 <input
                   type="checkbox"
                   checked={selectedArtifactIdSet.has(artifact.id)}
@@ -3752,29 +3836,17 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                 />
               </label>
               {!isSelectionMode ? (
-                depth > 0 ? (
-                  <>
-                    <span className="kind-chip">{t("history.trim")}</span>
-                    <button className="secondary-button history-action-button history-action-danger" onClick={(event) => {
-                        event.stopPropagation();
-                        void onDeleteArtifact(artifact);
-                    }}>
-                      <Trash2 size={14} />
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    className="icon-button danger-icon-button home-history-delete"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void onDeleteArtifact(artifact);
-                    }}
-                    title="Move to trash"
-                    aria-label={`Move ${artifact.title} to trash`}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                )
+                <button
+                  className="icon-button danger-icon-button home-history-delete"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void onDeleteArtifact(artifact);
+                  }}
+                  title="Move to trash"
+                  aria-label={`Move ${artifact.title} to trash`}
+                >
+                  <Trash2 size={14} />
+                </button>
               ) : null}
             </div>
           </article>
@@ -3994,17 +4066,20 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
               </label>
               {!isSelectionMode ? (
                 <>
-                  <span className="kind-chip">{depth > 0 ? "Trim" : (artifact.kind === "realtime" ? "Live" : "File")}</span>
                   <button className="secondary-button history-action-button" onClick={() => void onRenameArtifact(artifact)}>
                     <Pencil size={14} />
                     Rename
                   </button>
-                  <button className="secondary-button history-action-button history-action-danger" onClick={(event) => {
-                      event.stopPropagation();
-                      void onDeleteArtifact(artifact);
-                  }}>
+                  <button
+                    className="icon-button danger-icon-button history-inline-delete"
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        void onDeleteArtifact(artifact);
+                    }}
+                    title="Move to trash"
+                    aria-label={`Move ${artifact.title} to trash`}
+                  >
                     <Trash2 size={14} />
-                    {depth === 0 ? "Move to Trash" : ""}
                   </button>
                 </>
               ) : null}
@@ -4725,8 +4800,15 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             onCancel={() => void onCancel()}
             isImprovingText={isImprovingText}
             onImproveText={onImproveText}
-            showRetranscribe={!!trimmedAudioPath}
-            onRetranscribeTrimmedAudio={() => void onStartTranscription()}
+            showRetranscribe={Boolean(activeTrimmedAudioDraft && !activeJobId)}
+            onRetranscribeTrimmedAudio={() => {
+              if (activeTrimmedAudioDraft) {
+                void onStartTranscription(activeTrimmedAudioDraft.path, {
+                  parentId: activeTrimmedAudioDraft.parentArtifactId,
+                  title: activeTrimmedAudioDraft.title,
+                });
+              }
+            }}
           />
 
           <div className="detail-body">{renderDetailMain()}</div>
@@ -4777,16 +4859,33 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             </div>
           ) : null}
 
-          <AudioPlayer
-            inputPath={detailAudioInputPath}
-            onMetadataLoaded={(metadata) => {
-              setAudioDurationSeconds(metadata.durationSeconds);
-            }}
-            onTrimRegionsChange={setTrimRegions}
-            onTrimApplied={(path) => {
-              setTrimmedAudioPath(path);
-            }}
-          />
+          <div className="detail-audio-stack">
+            <div className="detail-audio-player-group">
+              {activeTrimmedAudioDraft ? (
+                <div className="detail-audio-player-label">Trimmed audio</div>
+              ) : null}
+              <AudioPlayer
+                inputPath={detailAudioInputPath}
+                trimEnabled
+                onMetadataLoaded={(metadata) => {
+                  setAudioDurationSeconds(metadata.durationSeconds);
+                }}
+                onTrimRegionsChange={setTrimRegions}
+                onTrimApplied={(path) => {
+                  if (!activeArtifact) {
+                    return;
+                  }
+                  const sourceLabel = fileLabel(activeArtifact.input_path);
+                  setTrimmedAudioDraft({
+                    path,
+                    parentArtifactId: activeArtifact.id,
+                    title: buildTrimArtifactTitle(sourceLabel, trimRegions),
+                    regions: [...trimRegions],
+                  });
+                }}
+              />
+            </div>
+          </div>
         </section>
 
         <aside className={`detail-inspector ${rightSidebarOpen ? "" : "collapsed"}`}>
@@ -6546,21 +6645,25 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
               <div className="sidebar-section">
                 <h4>{t("sidebar.open")}</h4>
                 {openArtifacts.map((artifact) => (
-                  <div key={artifact.id} className="sidebar-open-row" title={artifact.title}>
-                    <button
-                      className={
-                        activeArtifactId === artifact.id
-                          ? "sidebar-item sidebar-open-item active"
-                          : "sidebar-item sidebar-open-item"
-                      }
-                      onClick={() => {
-                        hydrateDetail(artifact);
-                        setSection("detail");
-                      }}
-                    >
+                  <div
+                    key={artifact.id}
+                    className={
+                      activeArtifactId === artifact.id
+                        ? "sidebar-item sidebar-open-row active"
+                        : "sidebar-item sidebar-open-row"
+                    }
+                    title={artifact.title}
+                    onClick={() => {
+                      hydrateDetail(artifact);
+                      setSection("detail");
+                    }}
+                    role="button"
+                    tabIndex={0}
+                  >
+                    <div className="sidebar-open-item">
                       <FileAudio size={16} />
                       <span className="sidebar-item-label">{artifact.title}</span>
-                    </button>
+                    </div>
                     <button
                       className="sidebar-open-close"
                       onClick={(event) => {
@@ -6774,6 +6877,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         open={showExportSheet}
         transcriptText={exportPreviewText}
         segments={detailSegments}
+        title={activeArtifact?.title ?? ""}
         onClose={() => setShowExportSheet(false)}
         onExport={onExport}
       />

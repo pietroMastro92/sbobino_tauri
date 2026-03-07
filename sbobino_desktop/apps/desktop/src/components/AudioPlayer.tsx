@@ -1,6 +1,5 @@
 import { Pause, Play, Rabbit, Scissors, X, Trash2, Check } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { readAudioFile, writeTrimmedAudio } from "../lib/tauri";
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -13,6 +12,8 @@ export type TrimRegion = {
 
 type AudioPlayerProps = {
   inputPath: string | null;
+  trimEnabled?: boolean;
+  initialTrimRegions?: TrimRegion[];
   onMetadataLoaded?: (metadata: { durationSeconds: number }) => void;
   onTrimRegionsChange?: (regions: TrimRegion[]) => void;
   onTrimApplied?: (trimmedPath: string) => void;
@@ -51,6 +52,45 @@ function makeRegionId(): string {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+const MIN_REGION_DURATION = 0.5;
+
+function sortRegions(regions: TrimRegion[]): TrimRegion[] {
+  return [...regions].sort((a, b) => a.startTime - b.startTime);
+}
+
+function findRegionIndexAtTime(regions: TrimRegion[], time: number): number {
+  return regions.findIndex((region) => time >= region.startTime && time < region.endTime);
+}
+
+function findRegionIndexFromTime(regions: TrimRegion[], time: number): number {
+  const containingIndex = findRegionIndexAtTime(regions, time);
+  if (containingIndex >= 0) {
+    return containingIndex;
+  }
+  return regions.findIndex((region) => region.endTime > time);
+}
+
+function findRegionBounds(
+  regions: TrimRegion[],
+  regionId: string,
+  duration: number,
+): { previousEnd: number; nextStart: number } {
+  const ordered = sortRegions(regions);
+  const index = ordered.findIndex((region) => region.id === regionId);
+  if (index === -1) {
+    return { previousEnd: 0, nextStart: duration };
+  }
+
+  return {
+    previousEnd: ordered[index - 1]?.endTime ?? 0,
+    nextStart: ordered[index + 1]?.startTime ?? duration,
+  };
+}
+
+function formatRegionLabel(region: TrimRegion): string {
+  return `${formatTime(region.startTime)} - ${formatTime(region.endTime)}`;
 }
 
 // ── Waveform: pre-compute peaks (expensive — done once) ────────────
@@ -101,7 +141,12 @@ function drawWaveform(
   trimMode: boolean,
   colors: WaveformColors,
 ): void {
-  const ctx = canvas.getContext("2d");
+  let ctx: CanvasRenderingContext2D | null = null;
+  try {
+    ctx = canvas.getContext("2d");
+  } catch {
+    return;
+  }
   if (!ctx) return;
 
   const dpr = window.devicePixelRatio || 1;
@@ -208,6 +253,8 @@ function drawWaveform(
 
 export function AudioPlayer({
   inputPath,
+  trimEnabled = true,
+  initialTrimRegions,
   onMetadataLoaded,
   onTrimRegionsChange,
   onTrimApplied,
@@ -215,11 +262,16 @@ export function AudioPlayer({
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const waveformTrackRef = useRef<HTMLDivElement | null>(null);
+  const onMetadataLoadedRef = useRef(onMetadataLoaded);
   const fallbackBlobUrlRef = useRef<string | null>(null);
+  const fallbackLoadPromiseRef = useRef<Promise<boolean> | null>(null);
   const fallbackAttemptedRef = useRef(false);
   const pendingAutoPlayRef = useRef(false);
+  const pendingAutoPlayInFlightRef = useRef(false);
   const sourceVersionRef = useRef(0);
   const animFrameRef = useRef<number>(0);
+  const trimPlaybackRegionIndexRef = useRef<number | null>(null);
+  const manualTrimStartRef = useRef(false);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -233,7 +285,8 @@ export function AudioPlayer({
   // Trim state
   const [trimMode, setTrimMode] = useState(false);
   const [regions, setRegions] = useState<TrimRegion[]>([]);
-  const [dragging, setDragging] = useState<{ regionId: string; handle: "start" | "end" } | null>(null);
+  const [activeRegionId, setActiveRegionId] = useState<string | null>(null);
+  const [dragging, setDragging] = useState<{ regionId: string; handle: "start" | "end" | "move" } | null>(null);
   const [creating, setCreating] = useState<{ startTime: number; currentTime: number } | null>(null);
 
   // Cached waveform peaks — computed ONCE per audio source, not every frame
@@ -281,10 +334,24 @@ export function AudioPlayer({
     return inputPath;
   }, [inputPath]);
 
+  const normalizedInitialTrimRegions = useMemo(
+    () => sortRegions(initialTrimRegions ?? []),
+    [initialTrimRegions],
+  );
+
+  useEffect(() => {
+    onMetadataLoadedRef.current = onMetadataLoaded;
+  }, [onMetadataLoaded]);
+
   // Notify parent of region changes
   useEffect(() => {
     onTrimRegionsChange?.(regions);
   }, [regions, onTrimRegionsChange]);
+
+  useEffect(() => {
+    trimPlaybackRegionIndexRef.current = null;
+    manualTrimStartRef.current = false;
+  }, [regions, trimMode, sourcePath]);
 
   // ── Cache CSS colors & listen for theme changes ─────────────
 
@@ -312,6 +379,7 @@ export function AudioPlayer({
       URL.revokeObjectURL(fallbackBlobUrlRef.current);
       fallbackBlobUrlRef.current = null;
     }
+    fallbackLoadPromiseRef.current = null;
 
     if (!sourcePath) {
       setSrc(null);
@@ -321,9 +389,10 @@ export function AudioPlayer({
       pendingAutoPlayRef.current = false;
       setNeedsFallback(false);
       setCachedPeaks(null);
-      setRegions([]);
+      setRegions(normalizedInitialTrimRegions);
+      setActiveRegionId(normalizedInitialTrimRegions[0]?.id ?? null);
       setTrimMode(false);
-      onMetadataLoaded?.({ durationSeconds: 0 });
+      onMetadataLoadedRef.current?.({ durationSeconds: 0 });
       return;
     }
 
@@ -334,21 +403,25 @@ export function AudioPlayer({
       fallbackAttemptedRef.current = false;
       pendingAutoPlayRef.current = false;
       setNeedsFallback(false);
+      setCachedPeaks(null);
+      setRegions(normalizedInitialTrimRegions);
+      setActiveRegionId(normalizedInitialTrimRegions[0]?.id ?? null);
+      setTrimMode(false);
       return;
     }
 
-    const primarySrc = isTauri() ? convertFileSrc(sourcePath) : sourcePath;
     const sourceVersion = sourceVersionRef.current + 1;
     sourceVersionRef.current = sourceVersion;
 
-    setSrc(primarySrc);
+    setSrc(null);
     setLoadError(null);
-    setIsLoading(false);
+    setIsLoading(true);
     fallbackAttemptedRef.current = false;
     pendingAutoPlayRef.current = false;
     setNeedsFallback(false);
     setCachedPeaks(null);
-    setRegions([]);
+    setRegions(normalizedInitialTrimRegions);
+    setActiveRegionId(normalizedInitialTrimRegions[0]?.id ?? null);
     setTrimMode(false);
 
     return () => {
@@ -356,7 +429,7 @@ export function AudioPlayer({
         sourceVersionRef.current += 1;
       }
     };
-  }, [sourcePath]);
+  }, [normalizedInitialTrimRegions, sourcePath]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -367,7 +440,6 @@ export function AudioPlayer({
     setCurrentTime(0);
     setDuration(0);
     setLoadError(null);
-    pendingAutoPlayRef.current = false;
   }, [src]);
 
   useEffect(() => {
@@ -416,65 +488,173 @@ export function AudioPlayer({
     drawWaveform(canvas, cachedPeaks, regions, duration, currentTime, trimMode, colorsRef.current);
   }, [cachedPeaks, regions, duration, currentTime, trimMode]);
 
+  const consumePendingAutoPlay = useCallback(async (audio: HTMLAudioElement) => {
+    if (!pendingAutoPlayRef.current || !audio.paused || pendingAutoPlayInFlightRef.current) {
+      return;
+    }
+
+    pendingAutoPlayRef.current = false;
+    pendingAutoPlayInFlightRef.current = true;
+    try {
+      await audio.play();
+      setLoadError(null);
+      setIsPlaying(true);
+    } catch {
+      // Keep the pending play request alive and retry on the next ready event.
+      pendingAutoPlayRef.current = true;
+    } finally {
+      pendingAutoPlayInFlightRef.current = false;
+    }
+  }, []);
+
   useEffect(() => {
     if (!trimMode) return;
-    animFrameRef.current = requestAnimationFrame(redrawCanvas);
-    return () => cancelAnimationFrame(animFrameRef.current);
+
+    const scheduleRedraw = () => {
+      cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = requestAnimationFrame(redrawCanvas);
+    };
+
+    scheduleRedraw();
+
+    if (typeof ResizeObserver === "undefined") {
+      return () => cancelAnimationFrame(animFrameRef.current);
+    }
+
+    const track = waveformTrackRef.current;
+    if (!track) {
+      return () => cancelAnimationFrame(animFrameRef.current);
+    }
+
+    const observer = new ResizeObserver(() => {
+      scheduleRedraw();
+    });
+    observer.observe(track);
+
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(animFrameRef.current);
+    };
   }, [trimMode, redrawCanvas]);
 
   // ── Fallback audio loading ─────────────────────────────────
 
   if (!sourcePath) return null;
 
-  async function loadFallbackAudio(autoPlay: boolean): Promise<boolean> {
+  const loadFallbackAudio = useCallback(async (autoPlay: boolean, background = false): Promise<boolean> => {
     const currentSourcePath = sourcePath;
     if (!currentSourcePath) return false;
 
     if (fallbackBlobUrlRef.current) {
       setSrc(fallbackBlobUrlRef.current);
       setNeedsFallback(false);
-      pendingAutoPlayRef.current = autoPlay;
+      pendingAutoPlayRef.current = pendingAutoPlayRef.current || autoPlay;
       return true;
+    }
+
+    if (fallbackLoadPromiseRef.current) {
+      pendingAutoPlayRef.current = pendingAutoPlayRef.current || autoPlay;
+      return fallbackLoadPromiseRef.current;
     }
 
     if (fallbackAttemptedRef.current) return false;
 
     fallbackAttemptedRef.current = true;
     const sourceVersion = sourceVersionRef.current;
-    setIsLoading(true);
-    setLoadError(null);
-
-    try {
-      const bytes = await readAudioFile(currentSourcePath);
-      if (sourceVersionRef.current !== sourceVersion) return false;
-      const blob = new Blob([new Uint8Array(bytes)], { type: mimeFromPath(currentSourcePath) });
-      const objectUrl = URL.createObjectURL(blob);
-      if (fallbackBlobUrlRef.current) URL.revokeObjectURL(fallbackBlobUrlRef.current);
-      fallbackBlobUrlRef.current = objectUrl;
-      pendingAutoPlayRef.current = autoPlay;
-      setSrc(objectUrl);
-      setNeedsFallback(false);
+    if (!background) {
+      setIsLoading(true);
       setLoadError(null);
-      return true;
-    } catch (error) {
-      if (sourceVersionRef.current !== sourceVersion) return false;
-      setLoadError(`Cannot load fallback audio: ${String(error)}`);
-      return false;
-    } finally {
-      if (sourceVersionRef.current === sourceVersion) setIsLoading(false);
     }
-  }
+
+    pendingAutoPlayRef.current = pendingAutoPlayRef.current || autoPlay;
+
+    let loadPromise: Promise<boolean> | null = null;
+    loadPromise = (async () => {
+      try {
+        const bytes = await readAudioFile(currentSourcePath);
+        if (sourceVersionRef.current !== sourceVersion) return false;
+        const blob = new Blob([new Uint8Array(bytes)], { type: mimeFromPath(currentSourcePath) });
+        const objectUrl = URL.createObjectURL(blob);
+        if (fallbackBlobUrlRef.current) URL.revokeObjectURL(fallbackBlobUrlRef.current);
+        fallbackBlobUrlRef.current = objectUrl;
+        setSrc(objectUrl);
+        setNeedsFallback(false);
+        setLoadError(null);
+        if (!background && sourceVersionRef.current === sourceVersion) {
+          setIsLoading(false);
+        }
+        return true;
+      } catch (error) {
+        if (sourceVersionRef.current !== sourceVersion) return false;
+        if (!background) {
+          setLoadError(`Cannot load fallback audio: ${String(error)}`);
+        }
+        return false;
+      } finally {
+        if (!background && sourceVersionRef.current === sourceVersion) {
+          setIsLoading(false);
+        }
+        if (loadPromise && fallbackLoadPromiseRef.current === loadPromise) {
+          fallbackLoadPromiseRef.current = null;
+        }
+      }
+    })();
+
+    fallbackLoadPromiseRef.current = loadPromise;
+    return loadPromise;
+  }, [sourcePath]);
+
+  useEffect(() => {
+    if (!sourcePath || sourcePath.startsWith("http://") || sourcePath.startsWith("https://")) {
+      return;
+    }
+
+    if (fallbackBlobUrlRef.current) {
+      return;
+    }
+
+    void loadFallbackAudio(false, false);
+    return undefined;
+  }, [loadFallbackAudio, sourcePath]);
 
   // ── Playback ───────────────────────────────────────────────
 
   async function togglePlayback(): Promise<void> {
     const audio = audioRef.current;
     if (!audio) return;
+    const prefersLocalBlob = Boolean(
+      sourcePath
+      && !sourcePath.startsWith("http://")
+      && !sourcePath.startsWith("https://"),
+    );
 
     if (audio.paused) {
-      if (needsFallback && !fallbackBlobUrlRef.current) {
-        const prepared = await loadFallbackAudio(true);
-        if (prepared) return;
+      if (prefersLocalBlob) {
+        const localSourceReady = Boolean(audio.currentSrc) && audio.readyState >= HTMLMediaElement.HAVE_METADATA;
+        if (!localSourceReady) {
+          pendingAutoPlayRef.current = true;
+          if (!fallbackBlobUrlRef.current) {
+            const prepared = await loadFallbackAudio(false);
+            if (!prepared) {
+              pendingAutoPlayRef.current = false;
+            }
+          }
+          return;
+        }
+      }
+      if (trimMode && regions.length > 0) {
+        const regionIndex = manualTrimStartRef.current
+          ? findRegionIndexFromTime(regions, audio.currentTime)
+          : findRegionIndexAtTime(regions, audio.currentTime);
+        const nextRegionIndex = regionIndex >= 0 ? regionIndex : 0;
+        const nextRegion = regions[nextRegionIndex];
+        if (nextRegion) {
+          trimPlaybackRegionIndexRef.current = nextRegionIndex;
+          if (audio.currentTime < nextRegion.startTime || audio.currentTime >= nextRegion.endTime) {
+            audio.currentTime = nextRegion.startTime;
+            setCurrentTime(nextRegion.startTime);
+          }
+        }
       }
       try {
         await audio.play();
@@ -493,6 +673,10 @@ export function AudioPlayer({
   function onSeek(value: number): void {
     const audio = audioRef.current;
     if (!audio || !Number.isFinite(value)) return;
+    if (trimMode && regions.length > 0) {
+      manualTrimStartRef.current = true;
+      trimPlaybackRegionIndexRef.current = null;
+    }
     audio.currentTime = value;
     setCurrentTime(value);
   }
@@ -505,42 +689,40 @@ export function AudioPlayer({
 
   // ── Waveform: click-drag to create region ──────────────────
 
-  function getTimeFromMouseEvent(e: React.MouseEvent | MouseEvent): number {
+  function getTimeFromMouseEvent(e: { clientX: number }): number {
     const track = waveformTrackRef.current;
     if (!track || duration <= 0) return 0;
     const rect = track.getBoundingClientRect();
     return clamp((e.clientX - rect.left) / rect.width, 0, 1) * duration;
   }
 
-  function onWaveformMouseDown(event: React.MouseEvent<HTMLDivElement>): void {
+  function onWaveformPointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
     if (!trimMode || duration <= 0) return;
-    // Don't start creating if clicking on a handle
-    if ((event.target as HTMLElement).closest(".trim-handle")) return;
+    if ((event.target as HTMLElement).closest(".trim-region-overlay")) return;
 
     const time = getTimeFromMouseEvent(event);
+    setActiveRegionId(null);
     setCreating({ startTime: time, currentTime: time });
 
-    function onMouseMove(e: MouseEvent) {
+    function onPointerMove(e: PointerEvent) {
       const moveTime = getTimeFromMouseEvent(e);
       setCreating((prev) => prev ? { ...prev, currentTime: moveTime } : null);
     }
 
-    function onMouseUp(e: MouseEvent) {
+    function onPointerUp(e: PointerEvent) {
       const endTime = getTimeFromMouseEvent(e);
       setCreating(null);
 
       const s = Math.min(time, endTime);
       const en = Math.max(time, endTime);
 
-      // Only create region if dragged at least 0.3 seconds
-      if (en - s >= 0.3) {
+      if (en - s >= MIN_REGION_DURATION) {
         const newRegion: TrimRegion = {
           id: makeRegionId(),
           startTime: clamp(s, 0, duration),
           endTime: clamp(en, 0, duration),
         };
 
-        // Check overlaps
         const overlaps = regions.some(
           (r) => newRegion.startTime < r.endTime && newRegion.endTime > r.startTime,
         );
@@ -549,71 +731,130 @@ export function AudioPlayer({
           triggerHaptic("error");
         } else {
           triggerHaptic("success");
-          setRegions((prev) =>
-            [...prev, newRegion].sort((a, b) => a.startTime - b.startTime),
-          );
+          setActiveRegionId(newRegion.id);
+          setRegions((prev) => sortRegions([...prev, newRegion]));
         }
       } else {
-        // Short click → seek
         onSeek(endTime);
       }
 
-      document.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseup", onMouseUp);
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
     }
 
     event.preventDefault();
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
   }
 
   // ── Trim region management ─────────────────────────────────
 
   function removeRegion(id: string): void {
     setRegions((prev) => prev.filter((r) => r.id !== id));
+    setActiveRegionId((prev) => (prev === id ? null : prev));
   }
 
   function clearAllRegions(): void {
     setRegions([]);
+    setActiveRegionId(null);
   }
 
-  // ── Handle dragging (existing region handles) ──────────────
+  function dragRegionHandle(regionId: string, handle: "start" | "end", time: number): void {
+    const currentSecond = Math.floor(time);
+    if (currentSecond !== lastHapticSecondRef.current) {
+      lastHapticSecondRef.current = currentSecond;
+      triggerHaptic("nudge");
+    }
 
-  function onHandleMouseDown(event: React.MouseEvent, regionId: string, handle: "start" | "end"): void {
+    setRegions((prev) => {
+      const bounds = findRegionBounds(prev, regionId, duration);
+      return sortRegions(prev.map((region) => {
+        if (region.id !== regionId) return region;
+        if (handle === "start") {
+          return {
+            ...region,
+            startTime: clamp(time, bounds.previousEnd, region.endTime - MIN_REGION_DURATION),
+          };
+        }
+        return {
+          ...region,
+          endTime: clamp(time, region.startTime + MIN_REGION_DURATION, bounds.nextStart),
+        };
+      }));
+    });
+
+    onSeek(time);
+  }
+
+  function dragRegionWindow(regionId: string, time: number, anchorOffset: number): void {
+    const currentSecond = Math.floor(time);
+    if (currentSecond !== lastHapticSecondRef.current) {
+      lastHapticSecondRef.current = currentSecond;
+      triggerHaptic("nudge");
+    }
+
+    setRegions((prev) => {
+      const bounds = findRegionBounds(prev, regionId, duration);
+      return sortRegions(prev.map((region) => {
+        if (region.id !== regionId) return region;
+        const regionDuration = region.endTime - region.startTime;
+        const minStart = bounds.previousEnd;
+        const maxStart = Math.max(bounds.nextStart - regionDuration, minStart);
+        const nextStart = clamp(time - anchorOffset, minStart, maxStart);
+        return {
+          ...region,
+          startTime: nextStart,
+          endTime: nextStart + regionDuration,
+        };
+      }));
+    });
+  }
+
+  function onHandlePointerDown(event: ReactPointerEvent, regionId: string, handle: "start" | "end"): void {
     event.preventDefault();
     event.stopPropagation();
+    setActiveRegionId(regionId);
     setDragging({ regionId, handle });
     lastHapticSecondRef.current = -1;
 
-    function onMouseMove(e: MouseEvent) {
+    function onPointerMove(e: PointerEvent) {
       const time = getTimeFromMouseEvent(e);
-
-      const currentSecond = Math.floor(time);
-      if (currentSecond !== lastHapticSecondRef.current) {
-        lastHapticSecondRef.current = currentSecond;
-        triggerHaptic("nudge");
-      }
-
-      setRegions((prev) =>
-        prev.map((r) => {
-          if (r.id !== regionId) return r;
-          if (handle === "start") return { ...r, startTime: clamp(time, 0, r.endTime - 0.5) };
-          return { ...r, endTime: clamp(time, r.startTime + 0.5, duration) };
-        }),
-      );
-
-      onSeek(time);
+      dragRegionHandle(regionId, handle, time);
     }
 
-    function onMouseUp() {
+    function onPointerUp() {
       setDragging(null);
       triggerHaptic("success");
-      document.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseup", onMouseUp);
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
     }
 
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+  }
+
+  function onRegionPointerDown(event: ReactPointerEvent<HTMLButtonElement>, region: TrimRegion): void {
+    event.preventDefault();
+    event.stopPropagation();
+    setActiveRegionId(region.id);
+    setDragging({ regionId: region.id, handle: "move" });
+    lastHapticSecondRef.current = -1;
+    const anchorOffset = getTimeFromMouseEvent(event) - region.startTime;
+
+    function onPointerMove(e: PointerEvent) {
+      const time = getTimeFromMouseEvent(e);
+      dragRegionWindow(region.id, time, anchorOffset);
+    }
+
+    function onPointerUp() {
+      setDragging(null);
+      triggerHaptic("success");
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+    }
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
   }
 
   // ── Compute creating region for display ─────────────────────
@@ -629,19 +870,54 @@ export function AudioPlayer({
       <audio
         ref={audioRef}
         src={src ?? undefined}
-        preload="metadata"
+        preload="auto"
         onLoadedMetadata={(event) => {
           const durationSeconds = event.currentTarget.duration || 0;
           setDuration(durationSeconds);
-          onMetadataLoaded?.({ durationSeconds });
+          onMetadataLoadedRef.current?.({ durationSeconds });
           setLoadError(null);
-          if (pendingAutoPlayRef.current) {
-            pendingAutoPlayRef.current = false;
-            void event.currentTarget.play().catch(() => setIsPlaying(false));
-          }
+          setIsLoading(false);
+          void consumePendingAutoPlay(event.currentTarget);
         }}
-        onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime || 0)}
-        onEnded={() => setIsPlaying(false)}
+        onLoadedData={(event) => {
+          setIsLoading(false);
+          void consumePendingAutoPlay(event.currentTarget);
+        }}
+        onCanPlay={(event) => {
+          setIsLoading(false);
+          void consumePendingAutoPlay(event.currentTarget);
+        }}
+        onTimeUpdate={(event) => {
+          const nextTime = event.currentTarget.currentTime || 0;
+          if (trimMode && regions.length > 0) {
+            const activeRegionIndex = trimPlaybackRegionIndexRef.current ?? findRegionIndexFromTime(regions, nextTime);
+            if (activeRegionIndex >= 0) {
+              const activeRegion = regions[activeRegionIndex];
+              if (nextTime >= activeRegion.endTime) {
+                const nextRegion = regions[activeRegionIndex + 1];
+                if (nextRegion) {
+                  trimPlaybackRegionIndexRef.current = activeRegionIndex + 1;
+                  event.currentTarget.currentTime = nextRegion.startTime;
+                  setCurrentTime(nextRegion.startTime);
+                  return;
+                }
+                trimPlaybackRegionIndexRef.current = null;
+                manualTrimStartRef.current = false;
+                event.currentTarget.pause();
+                event.currentTarget.currentTime = activeRegion.endTime;
+                setCurrentTime(activeRegion.endTime);
+                return;
+              }
+              trimPlaybackRegionIndexRef.current = activeRegionIndex;
+            }
+          }
+          setCurrentTime(nextTime);
+        }}
+        onEnded={() => {
+          trimPlaybackRegionIndexRef.current = null;
+          manualTrimStartRef.current = false;
+          setIsPlaying(false);
+        }}
         onPause={() => setIsPlaying(false)}
         onPlay={() => setIsPlaying(true)}
         onError={() => {
@@ -673,7 +949,7 @@ export function AudioPlayer({
           className="playback-button"
           onClick={() => void togglePlayback()}
           title="Play/Pause"
-          disabled={!src || isLoading}
+          disabled={!sourcePath}
         >
           {isPlaying ? <Pause size={16} /> : <Play size={16} />}
         </button>
@@ -715,26 +991,38 @@ export function AudioPlayer({
           </select>
         </label>
 
-        <button
-          className={`trim-toggle ${trimMode ? "trim-toggle--active" : ""}`}
-          onClick={() => {
-            setTrimMode((prev) => !prev);
-            if (!trimMode) triggerHaptic("nudge");
-          }}
-          title={trimMode ? "Disable trim mode" : "Enable trim mode"}
-          disabled={duration <= 0 || !src}
-        >
-          <Scissors size={14} />
-        </button>
+        {trimEnabled ? (
+          <button
+            className={`trim-toggle ${trimMode ? "trim-toggle--active" : ""}`}
+            onClick={() => {
+              setTrimMode((prev) => !prev);
+              if (!trimMode) triggerHaptic("nudge");
+            }}
+            title={trimMode ? "Disable trim mode" : "Enable trim mode"}
+            disabled={duration <= 0 || !src}
+          >
+            <Scissors size={14} />
+          </button>
+        ) : null}
       </div>
 
       {/* Waveform + trim handles */}
-      {trimMode ? (
+      {trimEnabled && trimMode ? (
         <div className="audio-trim-panel">
+          <div className="audio-trim-header">
+            <div>
+              <strong>Trim editor</strong>
+              <span>Drag on the waveform to keep the moments you want. Resize from the handles or move a range from its center.</span>
+            </div>
+            <div className="trim-selection-status">
+              {regions.length > 0 ? `${regions.length} range${regions.length > 1 ? "s" : ""}` : "No ranges yet"}
+            </div>
+          </div>
+
           <div
             className="audio-waveform-track"
             ref={waveformTrackRef}
-            onMouseDown={onWaveformMouseDown}
+            onPointerDown={onWaveformPointerDown}
           >
             <canvas ref={canvasRef} className="audio-waveform-canvas" />
 
@@ -742,12 +1030,10 @@ export function AudioPlayer({
               <div className="audio-waveform-loading">Decoding waveform...</div>
             ) : null}
 
-            {/* Hint text when no regions */}
             {!isDecodingWaveform && regions.length === 0 && !creating ? (
-              <div className="audio-waveform-hint">Click and drag to select a region</div>
+              <div className="audio-waveform-hint">Drag to keep the part you want</div>
             ) : null}
 
-            {/* Live preview of region being created */}
             {creatingRegion && creatingRegion.endTime - creatingRegion.startTime >= 0.1 ? (
               <div
                 className="trim-creating-overlay"
@@ -755,42 +1041,84 @@ export function AudioPlayer({
                   left: `${(creatingRegion.startTime / duration) * 100}%`,
                   width: `${((creatingRegion.endTime - creatingRegion.startTime) / duration) * 100}%`,
                 }}
-              />
+              >
+                <span className="trim-creating-label">
+                  {formatTime(creatingRegion.endTime - creatingRegion.startTime)}
+                </span>
+              </div>
             ) : null}
 
-            {/* Existing region handles */}
             {regions.map((region) => {
               const startPct = duration > 0 ? (region.startTime / duration) * 100 : 0;
-              const endPct = duration > 0 ? (region.endTime / duration) * 100 : 0;
+              const widthPct = duration > 0 ? ((region.endTime - region.startTime) / duration) * 100 : 0;
+              const isActive = region.id === activeRegionId;
               return (
-                <div key={region.id} className="trim-region-overlay">
-                  <div
-                    className="trim-handle trim-handle--start"
-                    style={{ left: `${startPct}%` }}
-                    onMouseDown={(e) => onHandleMouseDown(e, region.id, "start")}
+                <div
+                  key={region.id}
+                  className={`trim-region-overlay ${isActive ? "is-active" : ""}`}
+                  style={{ left: `${startPct}%`, width: `${widthPct}%` }}
+                >
+                  <button
+                    type="button"
+                    className="trim-region-handle trim-region-handle--start"
+                    onPointerDown={(e) => onHandlePointerDown(e, region.id, "start")}
+                    onClick={(e) => e.stopPropagation()}
                     title={`Start: ${formatTime(region.startTime)}`}
                   >
-                    <div className="trim-handle-grip" />
-                  </div>
-                  <div
-                    className="trim-handle trim-handle--end"
-                    style={{ left: `${endPct}%` }}
-                    onMouseDown={(e) => onHandleMouseDown(e, region.id, "end")}
+                    <span className="trim-region-handle-grip" />
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`trim-region-window ${dragging?.regionId === region.id && dragging.handle === "move" ? "is-dragging" : ""}`}
+                    onPointerDown={(e) => onRegionPointerDown(e, region)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setActiveRegionId(region.id);
+                    }}
+                    title={`Move range ${formatRegionLabel(region)}`}
+                  >
+                    <span className="trim-region-window-badge">{formatRegionLabel(region)}</span>
+                    <span className="trim-region-window-duration">
+                      {formatTime(region.endTime - region.startTime)}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="trim-region-handle trim-region-handle--end"
+                    onPointerDown={(e) => onHandlePointerDown(e, region.id, "end")}
+                    onClick={(e) => e.stopPropagation()}
                     title={`End: ${formatTime(region.endTime)}`}
                   >
-                    <div className="trim-handle-grip" />
-                  </div>
+                    <span className="trim-region-handle-grip" />
+                  </button>
                 </div>
               );
             })}
           </div>
 
-          {/* Region chips bar */}
+          <div className="trim-scale">
+            <span>00:00</span>
+            <span>Playhead {formatTime(currentTime)}</span>
+            <span>{formatTime(duration)}</span>
+          </div>
+
           {regions.length > 0 ? (
             <div className="trim-regions-bar">
               {regions.map((region) => (
-                <div key={region.id} className="trim-region-chip">
-                  <span>{formatTime(region.startTime)} – {formatTime(region.endTime)}</span>
+                <div
+                  key={region.id}
+                  className={`trim-region-chip ${region.id === activeRegionId ? "is-active" : ""}`}
+                >
+                  <button
+                    type="button"
+                    className="trim-region-chip-label"
+                    onClick={() => setActiveRegionId(region.id)}
+                    title={`Focus range ${formatRegionLabel(region)}`}
+                  >
+                    <span>{formatRegionLabel(region)}</span>
+                  </button>
                   <button className="trim-region-chip-remove" onClick={() => removeRegion(region.id)} title="Remove region">
                     <X size={10} />
                   </button>
