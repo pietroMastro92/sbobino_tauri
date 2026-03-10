@@ -26,6 +26,9 @@ use adapters::{
     gemini::GeminiEnhancer,
     noop_enhancer::NoopEnhancer,
     openai_compatible::{AuthStyle, OpenAiCompatibleEnhancer},
+    pyannote::{
+        embedded_helper_script, PyannoteSpeakerDiarizationEngine, EMBEDDED_HELPER_FILENAME,
+    },
     whisper_cpp::WhisperCppEngine,
     whisper_stream::WhisperStreamEngine,
 };
@@ -39,6 +42,7 @@ pub struct RuntimeTranscriptionFactory {
     settings_repo: Arc<FsSettingsRepository>,
     artifacts_repo: Arc<SqliteArtifactRepository>,
     data_dir: PathBuf,
+    bundle_resources_dir: Option<PathBuf>,
 }
 
 const REQUIRED_MODEL_FILES: [&str; 5] = [
@@ -88,7 +92,7 @@ struct BinaryResolution {
 }
 
 impl RuntimeTranscriptionFactory {
-    pub fn new(data_dir: &Path) -> Result<Self, String> {
+    pub fn new(data_dir: &Path, bundle_resources_dir: Option<PathBuf>) -> Result<Self, String> {
         std::fs::create_dir_all(data_dir)
             .map_err(|e| format!("failed to create app data dir {}: {e}", data_dir.display()))?;
 
@@ -105,6 +109,7 @@ impl RuntimeTranscriptionFactory {
             settings_repo,
             artifacts_repo,
             data_dir: data_dir.to_path_buf(),
+            bundle_resources_dir,
         })
     }
 
@@ -175,18 +180,30 @@ impl RuntimeTranscriptionFactory {
         let transcoder = Arc::new(FfmpegAdapter::new(ffmpeg_path));
         let speech_engine: Arc<dyn sbobino_application::SpeechToTextEngine> =
             Arc::new(WhisperCppEngine::new(whisper_cli_path, models_dir));
+        let speaker_diarizer = match self.build_speaker_diarizer(&settings) {
+            Ok(value) => value,
+            Err(error) => {
+                warn!("speaker diarization disabled for this run: {error}");
+                None
+            }
+        };
 
         let enhancer = self
             .build_active_enhancer()
             .map_err(|error| format!("failed to build AI enhancer: {error}"))?
             .unwrap_or_else(|| Arc::new(NoopEnhancer));
 
-        Ok(Arc::new(TranscriptionService::new(
+        let mut service = TranscriptionService::new(
             transcoder,
             speech_engine,
             enhancer,
             self.artifacts_repo.clone(),
-        )))
+        );
+        if let Some(diarizer) = speaker_diarizer {
+            service = service.with_speaker_diarizer(diarizer);
+        }
+
+        Ok(Arc::new(service))
     }
 
     pub fn settings_service(&self) -> Arc<SettingsService> {
@@ -432,6 +449,44 @@ impl RuntimeTranscriptionFactory {
         Ok(WhisperStreamEngine::new(whisper_stream_path, models_dir))
     }
 
+    fn build_speaker_diarizer(
+        &self,
+        settings: &AppSettings,
+    ) -> Result<Option<Arc<dyn sbobino_application::SpeakerDiarizationEngine>>, String> {
+        let diarization = &settings.transcription.speaker_diarization;
+        if !diarization.enabled {
+            return Ok(None);
+        }
+
+        let Some(python_path) = self.managed_pyannote_python_path() else {
+            return Err(format!(
+                "Pyannote diarization is enabled, but the managed Python runtime is unavailable. Bundle the diarization runtime or ensure 'python3' is installed."
+            ));
+        };
+
+        let script_path = self.ensure_embedded_pyannote_script()?;
+
+        if !PathBuf::from(&script_path).is_file() {
+            return Err(format!(
+                "Pyannote diarization script was not found at '{}'.",
+                script_path
+            ));
+        }
+
+        let Some(model_path) = self.ensure_managed_pyannote_model_dir()? else {
+            return Err(format!(
+                "Pyannote diarization is enabled, but the managed offline model is unavailable. Add the pyannote model bundle to the app-managed runtime."
+            ));
+        };
+
+        Ok(Some(Arc::new(PyannoteSpeakerDiarizationEngine::new(
+            python_path,
+            script_path,
+            model_path,
+            diarization.device.trim().to_string(),
+        ))))
+    }
+
     pub fn load_settings(&self) -> Result<AppSettings, String> {
         let mut settings = self
             .settings_repo
@@ -529,6 +584,161 @@ impl RuntimeTranscriptionFactory {
 
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
+    }
+
+    fn ensure_embedded_pyannote_script(&self) -> Result<String, String> {
+        let runtime_dir = self.managed_pyannote_runtime_dir();
+        std::fs::create_dir_all(&runtime_dir)
+            .map_err(|e| format!("failed to create runtime directory: {e}"))?;
+
+        let script_path = runtime_dir.join(EMBEDDED_HELPER_FILENAME);
+        let script_body = embedded_helper_script();
+        let needs_write = std::fs::read_to_string(&script_path)
+            .map(|current| current != script_body)
+            .unwrap_or(true);
+
+        if needs_write {
+            std::fs::write(&script_path, script_body)
+                .map_err(|e| format!("failed to write embedded pyannote helper: {e}"))?;
+        }
+
+        Ok(script_path.to_string_lossy().to_string())
+    }
+
+    fn managed_pyannote_runtime_dir(&self) -> PathBuf {
+        self.data_dir.join("runtime").join("pyannote")
+    }
+
+    fn managed_pyannote_python_path(&self) -> Option<String> {
+        let runtime_dir = self.managed_pyannote_runtime_dir();
+        let mut bundled_candidates = Vec::new();
+
+        if let Some(resources_dir) = self.bundle_resources_dir.as_ref() {
+            bundled_candidates.extend([
+                resources_dir
+                    .join("pyannote")
+                    .join("python")
+                    .join(target_triple_suffix())
+                    .join("bin")
+                    .join("python3"),
+                resources_dir
+                    .join("pyannote")
+                    .join("python")
+                    .join(target_triple_suffix())
+                    .join("bin")
+                    .join("python"),
+                resources_dir
+                    .join("pyannote")
+                    .join("python")
+                    .join("bin")
+                    .join("python3"),
+                resources_dir
+                    .join("pyannote")
+                    .join("python")
+                    .join("bin")
+                    .join("python"),
+            ]);
+        }
+
+        let dev_resources_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../apps/desktop/src-tauri/resources");
+        bundled_candidates.extend([
+            dev_resources_dir
+                .join("pyannote")
+                .join("python")
+                .join(target_triple_suffix())
+                .join("bin")
+                .join("python3"),
+            dev_resources_dir
+                .join("pyannote")
+                .join("python")
+                .join(target_triple_suffix())
+                .join("bin")
+                .join("python"),
+            dev_resources_dir
+                .join("pyannote")
+                .join("python")
+                .join("bin")
+                .join("python3"),
+            dev_resources_dir
+                .join("pyannote")
+                .join("python")
+                .join("bin")
+                .join("python"),
+        ]);
+
+        bundled_candidates.extend([
+            runtime_dir.join("python").join("bin").join("python3"),
+            runtime_dir.join("python").join("bin").join("python"),
+            runtime_dir.join("venv").join("bin").join("python3"),
+            runtime_dir.join("venv").join("bin").join("python"),
+        ]);
+
+        for candidate in bundled_candidates {
+            if is_runnable_binary_file(&candidate) {
+                return Some(candidate.to_string_lossy().to_string());
+            }
+        }
+
+        let resolved = self.resolve_binary_path("python3", "python3");
+        if self.binary_path_is_runnable(&resolved) {
+            Some(resolved)
+        } else {
+            None
+        }
+    }
+
+    fn ensure_managed_pyannote_model_dir(&self) -> Result<Option<String>, String> {
+        let runtime_dir = self.managed_pyannote_runtime_dir();
+        std::fs::create_dir_all(&runtime_dir)
+            .map_err(|e| format!("failed to create pyannote runtime directory: {e}"))?;
+
+        let destination = runtime_dir.join("model");
+        if is_pyannote_model_dir(&destination) {
+            return Ok(Some(destination.to_string_lossy().to_string()));
+        }
+
+        if let Some(source) = self.find_bundled_pyannote_model_source() {
+            copy_directory_recursive(&source, &destination).map_err(|e| {
+                format!(
+                    "failed to install bundled pyannote model from '{}' to '{}': {e}",
+                    source.display(),
+                    destination.display()
+                )
+            })?;
+            return Ok(Some(destination.to_string_lossy().to_string()));
+        }
+
+        Ok(None)
+    }
+
+    fn find_bundled_pyannote_model_source(&self) -> Option<PathBuf> {
+        let mut candidates = Vec::new();
+
+        if let Some(resources_dir) = self.bundle_resources_dir.as_ref() {
+            candidates.push(resources_dir.join("pyannote").join("model"));
+            candidates.push(resources_dir.join("pyannote-community-1"));
+        }
+
+        candidates.extend([
+            self.data_dir.join("bundled").join("pyannote-community-1"),
+            self.data_dir.join("resources").join("pyannote-community-1"),
+        ]);
+
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(exe_dir) = exe.parent() {
+                candidates.push(exe_dir.join("pyannote-community-1"));
+                candidates.push(exe_dir.join("resources").join("pyannote-community-1"));
+                candidates.push(exe_dir.join("../Resources/pyannote-community-1"));
+            }
+        }
+
+        let dev_resource_dir =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/resources");
+        candidates.push(dev_resource_dir.join("pyannote").join("model"));
+        candidates.push(dev_resource_dir.join("pyannote-community-1"));
+
+        candidates.into_iter().find(|path| is_pyannote_model_dir(path))
     }
 
     fn resolve_binary_details(&self, configured: &str, fallback: &str) -> BinaryResolution {
@@ -907,8 +1117,14 @@ pub struct InfrastructureBundle {
     pub runtime_factory: Arc<RuntimeTranscriptionFactory>,
 }
 
-pub fn bootstrap(data_dir: &Path) -> Result<InfrastructureBundle, String> {
-    let runtime_factory = Arc::new(RuntimeTranscriptionFactory::new(data_dir)?);
+pub fn bootstrap(
+    data_dir: &Path,
+    bundle_resources_dir: Option<PathBuf>,
+) -> Result<InfrastructureBundle, String> {
+    let runtime_factory = Arc::new(RuntimeTranscriptionFactory::new(
+        data_dir,
+        bundle_resources_dir,
+    )?);
     let artifact_service = runtime_factory.artifact_service();
     let settings_service = runtime_factory.settings_service();
 
@@ -1010,6 +1226,28 @@ fn is_executable_file(path: &Path) -> bool {
     {
         true
     }
+}
+
+fn copy_directory_recursive(source: &Path, destination: &Path) -> Result<(), std::io::Error> {
+    std::fs::create_dir_all(destination)?;
+
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let entry_type = entry.file_type()?;
+        let target_path = destination.join(entry.file_name());
+
+        if entry_type.is_dir() {
+            copy_directory_recursive(&entry.path(), &target_path)?;
+        } else if entry_type.is_file() {
+            std::fs::copy(entry.path(), target_path)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn is_pyannote_model_dir(path: &Path) -> bool {
+    path.is_dir() && path.join("config.yaml").is_file()
 }
 
 fn expand_home(path: &str) -> String {

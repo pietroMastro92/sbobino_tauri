@@ -1,6 +1,7 @@
 use std::{fs, path::PathBuf};
 
 use async_trait::async_trait;
+use serde_json::json;
 
 use sbobino_application::{ApplicationError, SettingsRepository};
 use sbobino_domain::AppSettings;
@@ -90,9 +91,9 @@ impl FsSettingsRepository {
 
     pub fn save_sync(&self, settings: &AppSettings) -> Result<(), ApplicationError> {
         let mut normalized = settings.clone();
-        // Repository-level saves keep legacy fields as canonical to remain
-        // backward-compatible with callers that only mutate flat settings.
-        normalized.sync_sections_from_legacy();
+        if should_treat_legacy_fields_as_source(&normalized) {
+            normalized.sync_sections_from_legacy();
+        }
         normalized.sync_legacy_from_sections();
 
         let serialized = serde_json::to_string_pretty(&normalized).map_err(|e| {
@@ -115,6 +116,37 @@ impl FsSettingsRepository {
             ))
         })
     }
+}
+
+fn should_treat_legacy_fields_as_source(settings: &AppSettings) -> bool {
+    let defaults = AppSettings::default();
+
+    let legacy_differs = settings.transcription_engine != defaults.transcription_engine
+        || settings.model != defaults.model
+        || settings.language != defaults.language
+        || settings.ai_post_processing != defaults.ai_post_processing
+        || settings.gemini_model != defaults.gemini_model
+        || settings.gemini_api_key != defaults.gemini_api_key
+        || settings.whisper_cli_path != defaults.whisper_cli_path
+        || settings.whisperkit_cli_path != defaults.whisperkit_cli_path
+        || settings.ffmpeg_path != defaults.ffmpeg_path
+        || settings.models_dir != defaults.models_dir
+        || settings.auto_update_enabled != defaults.auto_update_enabled
+        || settings.auto_update_repo != defaults.auto_update_repo;
+
+    let sections_match_defaults = json!({
+        "general": &settings.general,
+        "transcription": &settings.transcription,
+        "ai": &settings.ai,
+        "prompts": &settings.prompts,
+    }) == json!({
+        "general": &defaults.general,
+        "transcription": &defaults.transcription,
+        "ai": &defaults.ai,
+        "prompts": &defaults.prompts,
+    });
+
+    legacy_differs && sections_match_defaults
 }
 
 #[async_trait]

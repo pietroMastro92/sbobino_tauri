@@ -3,7 +3,8 @@ use std::path::Path;
 use async_trait::async_trait;
 
 use sbobino_domain::{
-    AppSettings, ArtifactKind, TranscriptArtifact, TranscriptionOutput, WhisperOptions,
+    AppSettings, ArtifactKind, SpeakerTurn, TranscriptArtifact, TranscriptionOutput,
+    WhisperOptions,
 };
 
 use crate::{dto::SummaryFaq, ApplicationError};
@@ -25,6 +26,11 @@ pub trait SpeechToTextEngine: Send + Sync {
         emit_partial: std::sync::Arc<dyn Fn(String) + Send + Sync>,
         emit_progress_seconds: std::sync::Arc<dyn Fn(f32) + Send + Sync>,
     ) -> Result<TranscriptionOutput, ApplicationError>;
+}
+
+#[async_trait]
+pub trait SpeakerDiarizationEngine: Send + Sync {
+    async fn diarize(&self, input_wav: &Path) -> Result<Vec<SpeakerTurn>, ApplicationError>;
 }
 
 #[async_trait]

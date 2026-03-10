@@ -8,6 +8,8 @@ pub enum ApplicationError {
     AudioTranscoding(String),
     #[error("speech-to-text failed: {0}")]
     SpeechToText(String),
+    #[error("speaker diarization failed: {0}")]
+    SpeakerDiarization(String),
     #[error("post-processing failed: {0}")]
     PostProcessing(String),
     #[error("persistence failed: {0}")]

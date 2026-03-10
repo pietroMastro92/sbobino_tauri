@@ -1,0 +1,157 @@
+use std::path::Path;
+
+use async_trait::async_trait;
+use serde::Deserialize;
+use tokio::process::Command;
+use tokio::time::{timeout, Duration};
+
+use sbobino_application::{ApplicationError, SpeakerDiarizationEngine};
+use sbobino_domain::SpeakerTurn;
+
+pub const EMBEDDED_HELPER_FILENAME: &str = "pyannote_diarize.py";
+
+pub fn embedded_helper_script() -> &'static str {
+    include_str!("../../../../scripts/pyannote_diarize.py")
+}
+
+#[derive(Debug, Clone)]
+pub struct PyannoteSpeakerDiarizationEngine {
+    python_path: String,
+    script_path: String,
+    model_path: String,
+    device: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PyannoteOutput {
+    #[serde(default)]
+    speakers: Vec<PyannoteSpeakerTurn>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PyannoteSpeakerTurn {
+    speaker_id: String,
+    #[serde(default)]
+    speaker_label: Option<String>,
+    start_seconds: f32,
+    end_seconds: f32,
+}
+
+impl PyannoteSpeakerDiarizationEngine {
+    pub fn new(
+        python_path: String,
+        script_path: String,
+        model_path: String,
+        device: String,
+    ) -> Self {
+        Self {
+            python_path,
+            script_path,
+            model_path,
+            device,
+        }
+    }
+
+    fn parse_turns(stdout: &[u8]) -> Result<Vec<SpeakerTurn>, ApplicationError> {
+        let parsed = serde_json::from_slice::<PyannoteOutput>(stdout).map_err(|error| {
+            ApplicationError::SpeakerDiarization(format!(
+                "pyannote helper produced invalid JSON: {error}"
+            ))
+        })?;
+
+        Ok(parsed
+            .speakers
+            .into_iter()
+            .filter(|turn| {
+                turn.start_seconds.is_finite()
+                    && turn.end_seconds.is_finite()
+                    && turn.end_seconds > turn.start_seconds
+                    && !turn.speaker_id.trim().is_empty()
+            })
+            .map(|turn| SpeakerTurn {
+                speaker_id: turn.speaker_id.trim().to_string(),
+                speaker_label: turn
+                    .speaker_label
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty()),
+                start_seconds: turn.start_seconds.max(0.0),
+                end_seconds: turn.end_seconds.max(0.0),
+            })
+            .collect())
+    }
+}
+
+#[async_trait]
+impl SpeakerDiarizationEngine for PyannoteSpeakerDiarizationEngine {
+    async fn diarize(&self, input_wav: &Path) -> Result<Vec<SpeakerTurn>, ApplicationError> {
+        let mut command = Command::new(&self.python_path);
+        command
+            .arg(&self.script_path)
+            .arg("--audio-path")
+            .arg(input_wav)
+            .arg("--model-path")
+            .arg(&self.model_path)
+            .arg("--device")
+            .arg(if self.device.trim().is_empty() {
+                "cpu"
+            } else {
+                self.device.trim()
+            })
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        let child = command.spawn().map_err(|error| {
+            ApplicationError::SpeakerDiarization(format!(
+                "failed to start pyannote helper with '{}': {error}",
+                self.python_path
+            ))
+        })?;
+
+        let output = timeout(Duration::from_secs(1800), child.wait_with_output())
+            .await
+            .map_err(|_| {
+                ApplicationError::SpeakerDiarization(
+                    "pyannote helper timed out after 1800s".to_string(),
+                )
+            })?
+            .map_err(|error| {
+                ApplicationError::SpeakerDiarization(format!(
+                    "failed to wait for pyannote helper: {error}"
+                ))
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(ApplicationError::SpeakerDiarization(if stderr.is_empty() {
+                format!("pyannote helper exited with status {}", output.status)
+            } else {
+                format!("pyannote helper failed: {stderr}")
+            }));
+        }
+
+        Self::parse_turns(&output.stdout)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PyannoteSpeakerDiarizationEngine;
+
+    #[test]
+    fn parse_turns_discards_invalid_entries() {
+        let output = br#"{
+          "speakers": [
+            {"speaker_id":"speaker_1","speaker_label":"Speaker 1","start_seconds":0.0,"end_seconds":1.2},
+            {"speaker_id":"","speaker_label":"Invalid","start_seconds":1.2,"end_seconds":2.0},
+            {"speaker_id":"speaker_2","start_seconds":3.0,"end_seconds":2.0}
+          ]
+        }"#;
+
+        let turns = PyannoteSpeakerDiarizationEngine::parse_turns(output)
+            .expect("valid payload should parse");
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].speaker_id, "speaker_1");
+        assert_eq!(turns[0].speaker_label.as_deref(), Some("Speaker 1"));
+    }
+}

@@ -81,6 +81,11 @@ export type WhisperOptions = {
     | "cpu_and_neural_engine";
 };
 
+export type SpeakerDiarizationSettings = {
+  enabled: boolean;
+  device: "auto" | "cpu" | "mps" | "cuda";
+};
+
 export type TranscriptionSettings = {
   engine: TranscriptionEngine;
   model: SpeechModel;
@@ -90,6 +95,7 @@ export type TranscriptionSettings = {
   ffmpeg_path: string;
   models_dir: string;
   enable_ai_post_processing: boolean;
+  speaker_diarization: SpeakerDiarizationSettings;
   whisper_options: WhisperOptions;
 };
 

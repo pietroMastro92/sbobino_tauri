@@ -51,6 +51,15 @@ pub struct TimedSegment {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct SpeakerTurn {
+    pub speaker_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_label: Option<String>,
+    pub start_seconds: f32,
+    pub end_seconds: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct TranscriptionOutput {
     pub text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

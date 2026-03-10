@@ -17,6 +17,8 @@ use tracing::warn;
 use sbobino_application::{ApplicationError, SpeechToTextEngine};
 use sbobino_domain::{TimedSegment, TranscriptionOutput, WhisperOptions};
 
+use crate::adapters::transcript_segmentation::normalize_transcript_segments;
+
 #[derive(Debug, Clone)]
 pub struct WhisperKitEngine {
     binary_path: String,
@@ -232,11 +234,16 @@ impl WhisperKitEngine {
         })
     }
 
-    fn output_from_text(transcript: String) -> TranscriptionOutput {
-        let segments = transcript
+    fn output_from_text(
+        transcript: String,
+        total_audio_seconds: Option<f32>,
+    ) -> TranscriptionOutput {
+        let parsed_segments = transcript
             .lines()
             .filter_map(Self::parse_timed_segment_line)
             .collect::<Vec<_>>();
+        let segments =
+            normalize_transcript_segments(&transcript, &parsed_segments, total_audio_seconds);
 
         TranscriptionOutput {
             text: transcript,
@@ -835,7 +842,7 @@ impl WhisperKitEngine {
         })??;
 
         match result {
-            Ok(transcript) => Ok(Self::output_from_text(transcript)),
+            Ok(transcript) => Ok(Self::output_from_text(transcript, total_audio_seconds)),
             Err(error) => {
                 let stderr_output = stderr_lines.join("\n").trim().to_string();
                 let stdout_output = stdout_lines.join("\n").trim().to_string();
@@ -965,7 +972,7 @@ impl WhisperKitEngine {
             }
         }
 
-        Ok(Self::output_from_text(transcript))
+        Ok(Self::output_from_text(transcript, total_audio_seconds))
     }
 }
 

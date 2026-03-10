@@ -17,3 +17,10 @@ apps/desktop/src-tauri/gen
 *.db-wal
 *.log
 .DS_Store
+
+# App-managed pyannote payloads are provisioned locally, not committed.
+apps/desktop/src-tauri/resources/pyannote/python/**
+!apps/desktop/src-tauri/resources/pyannote/python/.gitkeep
+apps/desktop/src-tauri/resources/pyannote/model/**
+!apps/desktop/src-tauri/resources/pyannote/model/.gitkeep
+!apps/desktop/src-tauri/resources/pyannote/model/README.md

@@ -115,6 +115,7 @@ import type {
   RemoteServiceConfig,
   RemoteServiceKind,
   RuntimeHealth,
+  SpeakerDiarizationSettings,
   SpeechModel,
   TimelineV2,
   TranscriptionEngine,
@@ -399,6 +400,13 @@ function getDefaultWhisperOptions(useAppleSiliconDefaults = guessAppleSiliconFro
     chunking_strategy: "vad",
     audio_encoder_compute_units: useAppleSiliconDefaults ? "cpu_and_neural_engine" : "cpu_only",
     text_decoder_compute_units: useAppleSiliconDefaults ? "cpu_and_neural_engine" : "cpu_only",
+  };
+}
+
+function getDefaultSpeakerDiarizationSettings(): SpeakerDiarizationSettings {
+  return {
+    enabled: false,
+    device: "cpu",
   };
 }
 
@@ -835,6 +843,10 @@ function createRemoteServiceId(kind: RemoteServiceKind): string {
 }
 
 function normalizeSettings(settings: AppSettings): AppSettings {
+  const normalizedSpeakerDiarization = sanitizeSpeakerDiarizationSettings({
+    ...getDefaultSpeakerDiarizationSettings(),
+    ...settings.transcription.speaker_diarization,
+  });
   const normalizedWhisperOptions = sanitizeWhisperOptions({
     ...getDefaultWhisperOptions(),
     ...settings.transcription.whisper_options,
@@ -848,6 +860,7 @@ function normalizeSettings(settings: AppSettings): AppSettings {
     },
     transcription: {
       ...settings.transcription,
+      speaker_diarization: normalizedSpeakerDiarization,
       whisper_options: normalizedWhisperOptions,
     },
     ai: {
@@ -892,6 +905,21 @@ function normalizeSettings(settings: AppSettings): AppSettings {
   normalized.gemini_api_key = normalized.ai.providers.gemini.api_key;
 
   return normalized;
+}
+
+function sanitizeSpeakerDiarizationSettings(
+  settings: SpeakerDiarizationSettings,
+): SpeakerDiarizationSettings {
+  const device = settings.device === "auto"
+    || settings.device === "mps"
+    || settings.device === "cuda"
+    ? settings.device
+    : "cpu";
+
+  return {
+    enabled: Boolean(settings.enabled),
+    device,
+  };
 }
 
 function sanitizeWhisperOptions(options: WhisperOptions): WhisperOptions {
@@ -974,6 +1002,7 @@ function DetailCenterModeControl({
 type DetailToolbarProps = {
   leftSidebarOpen: boolean;
   rightSidebarOpen: boolean;
+  rightSidebarForcedCollapsed: boolean;
   detailMode: DetailMode;
   title: string;
   hasArtifact: boolean;
@@ -995,6 +1024,7 @@ type DetailToolbarProps = {
 function DetailToolbar({
   leftSidebarOpen,
   rightSidebarOpen,
+  rightSidebarForcedCollapsed,
   detailMode,
   title,
   hasArtifact,
@@ -1013,12 +1043,17 @@ function DetailToolbar({
   onRetranscribeTrimmedAudio,
 }: DetailToolbarProps): JSX.Element {
   const { t } = useTranslation();
+  const rightSidebarTitle = rightSidebarForcedCollapsed
+    ? t("detail.expandWindowForDetails", "Widen the window to show the details panel")
+    : rightSidebarOpen
+      ? t("detail.hideDetailsPanel", "Hide details panel")
+      : t("detail.showDetailsPanel", "Show details panel");
   return (
     <header
       className={`detail-toolbar ${!leftSidebarOpen ? "sidebar-closed" : ""}`}
       data-tauri-drag-region
     >
-      <div className="detail-toolbar-left" data-tauri-drag-region>
+      <div className="detail-toolbar-edge detail-toolbar-edge-left">
         <button
           className={`icon-button sidebar-toggle-btn sidebar-toggle-left ${leftSidebarOpen ? "is-open" : ""}`}
           onClick={onToggleSidebar}
@@ -1027,73 +1062,82 @@ function DetailToolbar({
           <PanelLeftClose className="icon-close" size={16} />
           <PanelLeftOpen className="icon-open" size={16} />
         </button>
+      </div>
+
+      <div className="detail-toolbar-primary" data-tauri-drag-region>
         <button className="icon-button" onClick={onBack} title={t("detail.backToHistory")}>
           <ArrowLeft size={16} />
         </button>
         <strong className="detail-title" data-tauri-drag-region>{title}</strong>
       </div>
 
-      <div className="detail-toolbar-center">
-        {detailMode === "transcript" && !showRetranscribe && onImproveText && (
-          <button
-            className="optimize-hover-button"
-            onClick={() => void onImproveText()}
-            disabled={isImprovingText || !hasArtifact}
-            title={t("detail.improveText", "Improve Text")}
-          >
-            <div className="button-content">
-              <Sparkles size={14} />
-              <span className="detail-action-label">{t("detail.optimize", "Optimize")}</span>
-            </div>
-          </button>
-        )}
-        {detailMode === "transcript" && showRetranscribe && onRetranscribeTrimmedAudio && (
-          <button
-            className="retranscribe-hover-button"
-            onClick={() => void onRetranscribeTrimmedAudio()}
-            title={t("detail.retranscribeTrimmed", "Retranscribe Trimmed Audio")}
-          >
-            <div className="button-content">
-              <Scissors size={14} />
-              <span className="detail-action-label">{t("detail.retranscribe", "Retranscribe")}</span>
-            </div>
-          </button>
-        )}
-        <DetailCenterModeControl
-          detailMode={detailMode}
-          summaryDisabled={!hasArtifact}
-          chatDisabled={!hasArtifact}
-          onSelect={onSelectMode}
-        />
+      <div className="detail-toolbar-controls">
+        <div className="detail-toolbar-center">
+          <DetailCenterModeControl
+            detailMode={detailMode}
+            summaryDisabled={!hasArtifact}
+            chatDisabled={!hasArtifact}
+            onSelect={onSelectMode}
+          />
+        </div>
+
+        <div className="detail-toolbar-actions">
+          {detailMode === "transcript" && !showRetranscribe && onImproveText && (
+            <button
+              className="optimize-hover-button"
+              onClick={() => void onImproveText()}
+              disabled={isImprovingText || !hasArtifact}
+              title={t("detail.improveText", "Improve Text")}
+            >
+              <div className="button-content">
+                <Sparkles size={14} />
+                <span className="detail-action-label">{t("detail.optimize", "Optimize")}</span>
+              </div>
+            </button>
+          )}
+          {detailMode === "transcript" && showRetranscribe && onRetranscribeTrimmedAudio && (
+            <button
+              className="retranscribe-hover-button"
+              onClick={() => void onRetranscribeTrimmedAudio()}
+              title={t("detail.retranscribeTrimmed", "Retranscribe Trimmed Audio")}
+            >
+              <div className="button-content">
+                <Scissors size={14} />
+                <span className="detail-action-label">{t("detail.retranscribe", "Retranscribe")}</span>
+              </div>
+            </button>
+          )}
+          {hasArtifact ? (
+            <button className="secondary-button export-toolbar-button" onClick={onOpenExport}>
+              {t("detail.export", "Export")}
+              <ChevronDown size={14} />
+            </button>
+          ) : null}
+          {!hasArtifact && hasActiveJob ? (
+            <button className="transcribing-cancel-pill" onClick={onCancel} title={t("detail.cancelTranscription", "Cancel transcription")}>
+              <span className="pill-content default-content">
+                <ProgressRing percentage={transcriptionProgress} size={16} />
+                <span>{t("detail.transcribing")}</span>
+              </span>
+              <span className="pill-content hover-content">
+                <X size={16} />
+                <span>{t("detail.cancelTranscription")}</span>
+              </span>
+            </button>
+          ) : null}
+        </div>
       </div>
 
-      <div className="detail-toolbar-right">
-        {hasArtifact ? (
-          <button className="secondary-button export-toolbar-button" onClick={onOpenExport}>
-            {t("detail.export", "Export")}
-            <ChevronDown size={14} />
-          </button>
-        ) : null}
+      <div className="detail-toolbar-edge detail-toolbar-edge-right">
         <button
           className={`icon-button sidebar-toggle-btn sidebar-toggle-right ${rightSidebarOpen ? "is-open" : ""}`}
           onClick={() => (rightSidebarOpen ? onHideDetailsPanel() : onShowDetailsPanel())}
-          title={rightSidebarOpen ? t("detail.hideDetailsPanel", "Hide details panel") : t("detail.showDetailsPanel", "Show details panel")}
+          title={rightSidebarTitle}
+          disabled={rightSidebarForcedCollapsed}
         >
           <PanelRightClose className="icon-close" size={16} />
           <PanelRightOpen className="icon-open" size={16} />
         </button>
-        {!hasArtifact && hasActiveJob ? (
-          <button className="transcribing-cancel-pill" onClick={onCancel} title={t("detail.cancelTranscription", "Cancel transcription")}>
-            <span className="pill-content default-content">
-              <ProgressRing percentage={transcriptionProgress} size={16} />
-              <span>{t("detail.transcribing")}</span>
-            </span>
-            <span className="pill-content hover-content">
-              <X size={16} />
-              <span>{t("detail.cancelTranscription")}</span>
-            </span>
-          </button>
-        ) : null}
       </div>
     </header>
   );
@@ -1251,12 +1295,19 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   const [rightSidebarOpen, setRightSidebarOpen] = useState<boolean>(() =>
     readStoredFlag("sbobino.layout.rightSidebarOpen", true),
   );
+  const [windowWidth, setWindowWidth] = useState<number>(() => window.innerWidth);
   const [search, setSearch] = useState("");
   const [deletedSearch, setDeletedSearch] = useState("");
   const [historyKind, setHistoryKind] = useState<"all" | ArtifactKind>("all");
   const [deletedArtifacts, setDeletedArtifacts] = useState<TranscriptArtifact[]>([]);
   const [selectedArtifactIds, setSelectedArtifactIds] = useState<string[]>([]);
   const [expandedArtifactIds, setExpandedArtifactIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    const updateWindowWidth = () => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", updateWindowWidth);
+    return () => window.removeEventListener("resize", updateWindowWidth);
+  }, []);
 
   const toggleArtifactExpansion = useCallback((id: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1281,6 +1332,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     () => openArtifacts.find((a) => a.id === activeArtifactId) || null,
     [openArtifacts, activeArtifactId]
   );
+  const rightSidebarForcedCollapsed = section === "detail" && windowWidth <= 900;
+  const effectiveRightSidebarOpen = rightSidebarOpen && !rightSidebarForcedCollapsed;
   
   const setActiveArtifact = (artifact: TranscriptArtifact | null) => {
     if (!artifact) {
@@ -2623,12 +2676,19 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     }));
   }
 
-  async function onToggleAi(enabled: boolean): Promise<void> {
+  async function onPatchSpeakerDiarizationSettings(
+    mutator: (current: SpeakerDiarizationSettings) => SpeakerDiarizationSettings,
+  ): Promise<void> {
     await patchSettings((current) => ({
       ...current,
       transcription: {
         ...current.transcription,
-        enable_ai_post_processing: enabled,
+        speaker_diarization: sanitizeSpeakerDiarizationSettings(
+          mutator(
+            current.transcription.speaker_diarization
+            ?? getDefaultSpeakerDiarizationSettings(),
+          ),
+        ),
       },
     }));
   }
@@ -2705,7 +2765,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           input_path: targetFile,
           language: settings.transcription.language,
           model: settings.transcription.model,
-          enable_ai: settings.transcription.enable_ai_post_processing,
+          enable_ai: false,
           whisper_options: sanitizeWhisperOptions(
             settings.transcription.whisper_options ?? getDefaultWhisperOptions(platformIsAppleSilicon),
           ),
@@ -4772,11 +4832,12 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
   function renderDetail(): JSX.Element {
     return (
-      <div className={rightSidebarOpen ? "detail-layout" : "detail-layout right-collapsed"}>
+      <div className={effectiveRightSidebarOpen ? "detail-layout" : "detail-layout right-collapsed"}>
         <section className="detail-main" ref={detailMainRef}>
           <DetailToolbar
             leftSidebarOpen={leftSidebarOpen}
-            rightSidebarOpen={rightSidebarOpen}
+            rightSidebarOpen={effectiveRightSidebarOpen}
+            rightSidebarForcedCollapsed={rightSidebarForcedCollapsed}
             detailMode={detailMode}
             title={activeArtifact ? activeArtifact.title : (activeJobTitle || "Transcribing")}
             hasArtifact={Boolean(activeArtifact)}
@@ -4888,7 +4949,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           </div>
         </section>
 
-        <aside className={`detail-inspector ${rightSidebarOpen ? "" : "collapsed"}`}>
+        <aside className={`detail-inspector ${effectiveRightSidebarOpen ? "" : "collapsed"}`}>
             <DetailInspectorHeader
               inspectorMode={inspectorMode}
               onInspectorModeChange={setInspectorMode}
@@ -5085,6 +5146,9 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       return <div className="settings-placeholder">{t("settings.unavailable")}</div>;
     }
 
+    const speakerDiarization =
+      settings.transcription.speaker_diarization ?? getDefaultSpeakerDiarizationSettings();
+
     return (
       <div className="settings-stack">
         <section className="settings-panel">
@@ -5151,16 +5215,40 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
           <div className="settings-row">
             <div>
-              <strong>{t("settings.transcription.enableAi", "Enable AI post-processing")}</strong>
-              <small>{t("settings.transcription.enableAiDesc", "Run optimize/summary prompts after transcription.")}</small>
+              <strong>{t("settings.transcription.speakerDiarization", "Enable speaker diarization")}</strong>
+              <small>{t("settings.transcription.speakerDiarizationDesc", "After transcription completes, the app will try its managed offline pyannote diarization runtime and assign speakers into the timeline when this build includes the bundled pyannote assets.")}</small>
             </div>
             <input
               type="checkbox"
-              checked={settings.transcription.enable_ai_post_processing}
+              checked={speakerDiarization.enabled}
               onChange={(event) => {
-                void onToggleAi(event.target.checked);
+                void onPatchSpeakerDiarizationSettings((current) => ({
+                  ...current,
+                  enabled: event.target.checked,
+                }));
               }}
             />
+          </div>
+
+          <div className="settings-row settings-row-block">
+            <div>
+              <strong>{t("settings.transcription.pyannoteDevice", "Pyannote device")}</strong>
+              <small>{t("settings.transcription.pyannoteDeviceDesc", "Use CPU by default for best Intel/Apple Silicon compatibility. `auto` will try MPS when available when the managed runtime supports it.")}</small>
+            </div>
+            <select
+              value={speakerDiarization.device}
+              onChange={(event) => {
+                void onPatchSpeakerDiarizationSettings((current) => ({
+                  ...current,
+                  device: event.target.value as SpeakerDiarizationSettings["device"],
+                }));
+              }}
+            >
+              <option value="cpu">CPU</option>
+              <option value="auto">Auto</option>
+              <option value="mps">MPS</option>
+              <option value="cuda">CUDA</option>
+            </select>
           </div>
         </section>
       </div>

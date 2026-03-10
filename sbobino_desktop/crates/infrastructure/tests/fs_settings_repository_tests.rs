@@ -38,3 +38,23 @@ async fn save_then_load_round_trips_settings() {
     assert!(loaded.ai_post_processing);
     assert_eq!(loaded.gemini_model, "gemini-2.5-pro");
 }
+
+#[tokio::test]
+async fn save_then_load_preserves_structured_transcription_settings() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let settings_path = temp.path().join("settings.json");
+    let repo = FsSettingsRepository::new(settings_path);
+
+    let mut settings = repo.load().await.expect("initial load should succeed");
+    settings.transcription.enable_ai_post_processing = true;
+    settings.transcription.speaker_diarization.enabled = true;
+    settings.transcription.speaker_diarization.device = "mps".to_string();
+
+    repo.save(&settings).await.expect("save should succeed");
+    let loaded = repo.load().await.expect("second load should succeed");
+
+    assert!(loaded.transcription.enable_ai_post_processing);
+    assert!(loaded.ai_post_processing);
+    assert!(loaded.transcription.speaker_diarization.enabled);
+    assert_eq!(loaded.transcription.speaker_diarization.device, "mps");
+}

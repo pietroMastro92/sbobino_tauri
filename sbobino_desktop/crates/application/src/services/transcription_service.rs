@@ -11,18 +11,21 @@ use tokio_util::sync::CancellationToken;
 use tracing::{instrument, warn};
 
 use sbobino_domain::{
-    ArtifactKind, JobProgress, JobStage, TranscriptArtifact, TranscriptionOutput,
+    ArtifactKind, JobProgress, JobStage, SpeakerTurn, TimedSegment, TranscriptArtifact,
+    TranscriptionOutput,
 };
 
 use crate::{
     dto::{RunTranscriptionRequest, SummaryFaq},
-    ApplicationError, ArtifactRepository, AudioTranscoder, SpeechToTextEngine, TranscriptEnhancer,
+    ApplicationError, ArtifactRepository, AudioTranscoder, SpeakerDiarizationEngine,
+    SpeechToTextEngine, TranscriptEnhancer,
 };
 
 #[derive(Clone)]
 pub struct TranscriptionService {
     transcoder: Arc<dyn AudioTranscoder>,
     speech_engine: Arc<dyn SpeechToTextEngine>,
+    speaker_diarizer: Option<Arc<dyn SpeakerDiarizationEngine>>,
     enhancer: Arc<dyn TranscriptEnhancer>,
     artifacts: Arc<dyn ArtifactRepository>,
 }
@@ -37,9 +40,18 @@ impl TranscriptionService {
         Self {
             transcoder,
             speech_engine,
+            speaker_diarizer: None,
             enhancer,
             artifacts,
         }
+    }
+
+    pub fn with_speaker_diarizer(
+        mut self,
+        speaker_diarizer: Arc<dyn SpeakerDiarizationEngine>,
+    ) -> Self {
+        self.speaker_diarizer = Some(speaker_diarizer);
+        self
     }
 
     #[instrument(skip(self, emit_progress, emit_delta), fields(job_id = %request.job_id))]
@@ -144,7 +156,7 @@ impl TranscriptionService {
                 }) as Arc<dyn Fn(f32) + Send + Sync>
             };
 
-            let transcription_output = self
+            let mut transcription_output = self
                 .run_cancellable(
                     &cancellation_token,
                     self.speech_engine.transcribe(
@@ -177,6 +189,26 @@ impl TranscriptionService {
                 );
             }
 
+            if let Some(speaker_diarizer) = &self.speaker_diarizer {
+                match self
+                    .run_cancellable(&cancellation_token, speaker_diarizer.diarize(&wav_path))
+                    .await
+                {
+                    Ok(turns) => {
+                        if !turns.is_empty() && !transcription_output.segments.is_empty() {
+                            transcription_output.segments = Self::assign_speakers_to_segments(
+                                &transcription_output.segments,
+                                &turns,
+                            );
+                        }
+                    }
+                    Err(ApplicationError::Cancelled) => return Err(ApplicationError::Cancelled),
+                    Err(error) => {
+                        warn!("speaker diarization skipped after transcription: {error}");
+                    }
+                }
+            }
+
             let (optimized, summary_faq) = if request.enable_ai {
                 self.emit(
                     &emit_progress,
@@ -188,32 +220,62 @@ impl TranscriptionService {
                     None,
                 );
 
-                let optimized = self
+                match self
                     .run_cancellable(
                         &cancellation_token,
                         self.enhancer
                             .optimize(&raw_transcript, request.language.as_whisper_code()),
                     )
-                    .await?;
+                    .await
+                {
+                    Ok(optimized) => {
+                        self.emit(
+                            &emit_progress,
+                            &request.job_id,
+                            JobStage::Summarizing,
+                            "Generating summary and FAQs",
+                            80,
+                            None,
+                            None,
+                        );
 
-                self.emit(
-                    &emit_progress,
-                    &request.job_id,
-                    JobStage::Summarizing,
-                    "Generating summary and FAQs",
-                    80,
-                    None,
-                    None,
-                );
+                        let summary_faq = match self
+                            .run_cancellable(
+                                &cancellation_token,
+                                self.enhancer.summarize_and_faq(
+                                    &optimized,
+                                    request.language.as_whisper_code(),
+                                ),
+                            )
+                            .await
+                        {
+                            Ok(value) => value,
+                            Err(ApplicationError::Cancelled) => {
+                                return Err(ApplicationError::Cancelled);
+                            }
+                            Err(error) => {
+                                warn!("summary/faq generation skipped after optimization: {error}");
+                                SummaryFaq {
+                                    summary: String::new(),
+                                    faqs: String::new(),
+                                }
+                            }
+                        };
 
-                let summary_faq = self
-                    .run_cancellable(
-                        &cancellation_token,
-                        self.enhancer
-                            .summarize_and_faq(&optimized, request.language.as_whisper_code()),
-                    )
-                    .await?;
-                (optimized, summary_faq)
+                        (optimized, summary_faq)
+                    }
+                    Err(ApplicationError::Cancelled) => return Err(ApplicationError::Cancelled),
+                    Err(error) => {
+                        warn!("ai optimization skipped; keeping raw transcript: {error}");
+                        (
+                            raw_transcript.clone(),
+                            SummaryFaq {
+                                summary: String::new(),
+                                faqs: String::new(),
+                            },
+                        )
+                    }
+                }
             } else {
                 (
                     raw_transcript.clone(),
@@ -414,6 +476,106 @@ impl TranscriptionService {
         }
 
         Some(frames / (spec.sample_rate as f32))
+    }
+
+    fn assign_speakers_to_segments(
+        segments: &[TimedSegment],
+        turns: &[SpeakerTurn],
+    ) -> Vec<TimedSegment> {
+        let sanitized_turns = turns
+            .iter()
+            .filter_map(|turn| {
+                if !turn.start_seconds.is_finite()
+                    || !turn.end_seconds.is_finite()
+                    || turn.end_seconds <= turn.start_seconds
+                    || turn.speaker_id.trim().is_empty()
+                {
+                    return None;
+                }
+
+                Some(SpeakerTurn {
+                    speaker_id: turn.speaker_id.trim().to_string(),
+                    speaker_label: turn
+                        .speaker_label
+                        .as_ref()
+                        .map(|value| value.trim().to_string())
+                        .filter(|value| !value.is_empty()),
+                    start_seconds: turn.start_seconds.max(0.0),
+                    end_seconds: turn.end_seconds.max(0.0),
+                })
+            })
+            .collect::<Vec<_>>();
+
+        if sanitized_turns.is_empty() {
+            return segments.to_vec();
+        }
+
+        segments
+            .iter()
+            .map(|segment| {
+                let Some((segment_start, segment_end)) = Self::segment_bounds(segment) else {
+                    return segment.clone();
+                };
+
+                let midpoint = (segment_start + segment_end) / 2.0;
+                let mut best_overlap = 0.0_f32;
+                let mut best_distance = f32::MAX;
+                let mut best_turn: Option<&SpeakerTurn> = None;
+
+                for turn in &sanitized_turns {
+                    let overlap = (segment_end.min(turn.end_seconds)
+                        - segment_start.max(turn.start_seconds))
+                    .max(0.0);
+                    let distance = if midpoint < turn.start_seconds {
+                        turn.start_seconds - midpoint
+                    } else if midpoint > turn.end_seconds {
+                        midpoint - turn.end_seconds
+                    } else {
+                        0.0
+                    };
+
+                    if overlap > best_overlap + 0.001
+                        || ((overlap - best_overlap).abs() <= 0.001
+                            && distance < best_distance)
+                    {
+                        best_overlap = overlap;
+                        best_distance = distance;
+                        best_turn = Some(turn);
+                    }
+                }
+
+                let Some(turn) = best_turn else {
+                    return segment.clone();
+                };
+
+                let mut next = segment.clone();
+                next.speaker_id = Some(turn.speaker_id.clone());
+                next.speaker_label = turn.speaker_label.clone();
+                next
+            })
+            .collect()
+    }
+
+    fn segment_bounds(segment: &TimedSegment) -> Option<(f32, f32)> {
+        let start = segment.start_seconds.or_else(|| {
+            segment
+                .words
+                .iter()
+                .find_map(|word| word.start_seconds.filter(|value| value.is_finite()))
+        })?;
+        let end = segment.end_seconds.or_else(|| {
+            segment
+                .words
+                .iter()
+                .rev()
+                .find_map(|word| word.end_seconds.filter(|value| value.is_finite()))
+        })?;
+
+        if !start.is_finite() || !end.is_finite() || end <= start {
+            return None;
+        }
+
+        Some((start.max(0.0), end.max(0.0)))
     }
 
     async fn run_cancellable<T, F>(

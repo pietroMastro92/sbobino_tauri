@@ -8,7 +8,8 @@ pub use dto::{
 };
 pub use error::ApplicationError;
 pub use ports::{
-    ArtifactRepository, AudioTranscoder, SettingsRepository, SpeechToTextEngine, TranscriptEnhancer,
+    ArtifactRepository, AudioTranscoder, SettingsRepository, SpeakerDiarizationEngine,
+    SpeechToTextEngine, TranscriptEnhancer,
 };
-pub use sbobino_domain::{TimedSegment, TimedWord, TranscriptionOutput};
+pub use sbobino_domain::{SpeakerTurn, TimedSegment, TimedWord, TranscriptionOutput};
 pub use services::{ArtifactService, SettingsService, TranscriptionService};

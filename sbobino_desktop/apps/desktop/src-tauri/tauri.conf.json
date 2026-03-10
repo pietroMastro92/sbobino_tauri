@@ -33,6 +33,11 @@
     "active": true,
     "createUpdaterArtifacts": true,
     "targets": "all",
+    "resources": {
+      "resources/pyannote/model": "pyannote/model",
+      "resources/pyannote/python": "pyannote/python",
+      "resources/pyannote/README.md": "pyannote/README.md"
+    },
     "externalBin": [
       "binaries/whisper-cli",
       "binaries/whisperkit-cli",

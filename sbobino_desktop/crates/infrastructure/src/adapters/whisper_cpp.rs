@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -10,6 +11,10 @@ use tokio::time::{timeout, Duration};
 
 use sbobino_application::{ApplicationError, SpeechToTextEngine};
 use sbobino_domain::{TimedSegment, TimedWord, TranscriptionOutput, WhisperOptions};
+
+use crate::adapters::transcript_segmentation::normalize_transcript_segments;
+
+static OUTPUT_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone)]
 pub struct WhisperCppEngine {
@@ -216,32 +221,6 @@ impl WhisperCppEngine {
             .join("\n")
     }
 
-    fn segments_from_transcript_text(transcript: &str) -> Vec<TimedSegment> {
-        transcript
-            .lines()
-            .filter_map(|line| {
-                match Self::parse_cli_line(line) {
-                    Some(ParsedCliEvent::Segment(segment)) => Some(segment),
-                    _ => {
-                        let trimmed = line.trim();
-                        if trimmed.is_empty() {
-                            None
-                        } else {
-                            Some(TimedSegment {
-                                text: trimmed.to_string(),
-                                start_seconds: None,
-                                end_seconds: None,
-                                speaker_id: None,
-                                speaker_label: None,
-                                words: Vec::new(),
-                            })
-                        }
-                    }
-                }
-            })
-            .collect::<Vec<_>>()
-    }
-
     async fn consume_stream<R>(
         reader: R,
         collector: Arc<Mutex<TranscriptCollector>>,
@@ -306,12 +285,13 @@ impl WhisperCppEngine {
         emit_progress_seconds: Arc<dyn Fn(f32) + Send + Sync>,
     ) -> Result<TranscriptionOutput, ApplicationError> {
         let output_base = std::env::temp_dir().join(format!(
-            "sbobino-whisper-{}-{}",
+            "sbobino-whisper-{}-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|duration| duration.as_millis())
-                .unwrap_or(0)
+                .unwrap_or(0),
+            OUTPUT_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         let output_txt_path = output_base.with_extension("txt");
 
@@ -506,11 +486,7 @@ impl WhisperCppEngine {
             ));
         }
 
-        let segments = if segments.is_empty() {
-            Self::segments_from_transcript_text(&transcript)
-        } else {
-            segments
-        };
+        let segments = normalize_transcript_segments(&transcript, &segments, total_audio_seconds);
 
         Ok(TranscriptionOutput {
             text: transcript,

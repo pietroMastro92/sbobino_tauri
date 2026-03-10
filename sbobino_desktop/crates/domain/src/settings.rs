@@ -235,6 +235,22 @@ impl Default for WhisperOptions {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+pub struct SpeakerDiarizationSettings {
+    pub enabled: bool,
+    pub device: String,
+}
+
+impl Default for SpeakerDiarizationSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            device: "cpu".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TranscriptionSettings {
     pub engine: TranscriptionEngine,
     pub model: SpeechModel,
@@ -245,6 +261,7 @@ pub struct TranscriptionSettings {
     pub ffmpeg_path: String,
     pub models_dir: String,
     pub enable_ai_post_processing: bool,
+    pub speaker_diarization: SpeakerDiarizationSettings,
     pub whisper_options: WhisperOptions,
 }
 
@@ -259,6 +276,7 @@ impl Default for TranscriptionSettings {
             ffmpeg_path: "ffmpeg".to_string(),
             models_dir: "models".to_string(),
             enable_ai_post_processing: false,
+            speaker_diarization: SpeakerDiarizationSettings::default(),
             whisper_options: WhisperOptions::default(),
         }
     }

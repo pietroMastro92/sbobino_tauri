@@ -10,11 +10,12 @@ use tokio_util::sync::CancellationToken;
 
 use sbobino_application::{
     dto::SummaryFaq, ApplicationError, ArtifactRepository, AudioTranscoder,
-    RunTranscriptionRequest, SpeechToTextEngine, TranscriptEnhancer, TranscriptionService,
+    RunTranscriptionRequest, SpeakerDiarizationEngine, SpeechToTextEngine, TranscriptEnhancer,
+    TranscriptionService,
 };
 use sbobino_domain::{
-    ArtifactKind, JobProgress, JobStage, LanguageCode, SpeechModel, TranscriptArtifact,
-    TranscriptionOutput, WhisperOptions,
+    ArtifactKind, JobProgress, JobStage, LanguageCode, SpeakerTurn, SpeechModel, TimedSegment,
+    TranscriptArtifact, TranscriptionOutput, WhisperOptions,
 };
 
 #[derive(Default)]
@@ -33,6 +34,7 @@ impl AudioTranscoder for MockTranscoder {
 
 struct MockSpeechEngine {
     transcript: String,
+    segments: Vec<TimedSegment>,
 }
 
 #[async_trait]
@@ -47,7 +49,22 @@ impl SpeechToTextEngine for MockSpeechEngine {
         _emit_partial: Arc<dyn Fn(String) + Send + Sync>,
         _emit_progress_seconds: Arc<dyn Fn(f32) + Send + Sync>,
     ) -> Result<TranscriptionOutput, ApplicationError> {
-        Ok(TranscriptionOutput::from_text(self.transcript.clone()))
+        Ok(TranscriptionOutput {
+            text: self.transcript.clone(),
+            segments: self.segments.clone(),
+        })
+    }
+}
+
+#[derive(Default)]
+struct MockSpeakerDiarizer {
+    turns: Vec<SpeakerTurn>,
+}
+
+#[async_trait]
+impl SpeakerDiarizationEngine for MockSpeakerDiarizer {
+    async fn diarize(&self, _input_wav: &Path) -> Result<Vec<SpeakerTurn>, ApplicationError> {
+        Ok(self.turns.clone())
     }
 }
 
@@ -55,6 +72,8 @@ impl SpeechToTextEngine for MockSpeechEngine {
 struct MockEnhancer {
     optimize_calls: Mutex<usize>,
     summarize_calls: Mutex<usize>,
+    fail_optimize: bool,
+    fail_summarize: bool,
 }
 
 #[async_trait]
@@ -65,6 +84,11 @@ impl TranscriptEnhancer for MockEnhancer {
             .lock()
             .expect("enhancer optimize lock poisoned");
         *optimize_calls += 1;
+        if self.fail_optimize {
+            return Err(ApplicationError::PostProcessing(
+                "optimize failed".to_string(),
+            ));
+        }
         Ok(format!("optimized::{text}"))
     }
 
@@ -78,6 +102,11 @@ impl TranscriptEnhancer for MockEnhancer {
             .lock()
             .expect("enhancer summarize lock poisoned");
         *summarize_calls += 1;
+        if self.fail_summarize {
+            return Err(ApplicationError::PostProcessing(
+                "summary failed".to_string(),
+            ));
+        }
         Ok(SummaryFaq {
             summary: format!("summary::{text}"),
             faqs: format!("faqs::{text}"),
@@ -326,6 +355,7 @@ async fn run_file_transcription_without_ai_emits_expected_stages_and_persists() 
     let transcoder = Arc::new(MockTranscoder::default());
     let speech = Arc::new(MockSpeechEngine {
         transcript: "raw transcript".to_string(),
+        segments: Vec::new(),
     });
     let enhancer = Arc::new(MockEnhancer::default());
     let repo = Arc::new(InMemoryArtifactRepository::default());
@@ -345,6 +375,8 @@ async fn run_file_transcription_without_ai_emits_expected_stages_and_persists() 
                 model: SpeechModel::Base,
                 enable_ai: false,
                 whisper_options: WhisperOptions::default(),
+                title: None,
+                parent_id: None,
             },
             Arc::new(move |event| {
                 emitted_clone
@@ -417,6 +449,7 @@ async fn run_file_transcription_with_ai_runs_enhancer_steps() {
     let transcoder = Arc::new(MockTranscoder::default());
     let speech = Arc::new(MockSpeechEngine {
         transcript: "meeting raw".to_string(),
+        segments: Vec::new(),
     });
     let enhancer = Arc::new(MockEnhancer::default());
     let repo = Arc::new(InMemoryArtifactRepository::default());
@@ -435,6 +468,8 @@ async fn run_file_transcription_with_ai_runs_enhancer_steps() {
                 model: SpeechModel::Small,
                 enable_ai: true,
                 whisper_options: WhisperOptions::default(),
+                title: None,
+                parent_id: None,
             },
             Arc::new(move |event| {
                 emitted_clone
@@ -483,6 +518,7 @@ async fn run_file_transcription_rejects_missing_input_path() {
     let transcoder = Arc::new(MockTranscoder::default());
     let speech = Arc::new(MockSpeechEngine {
         transcript: "raw transcript".to_string(),
+        segments: Vec::new(),
     });
     let enhancer = Arc::new(MockEnhancer::default());
     let repo = Arc::new(InMemoryArtifactRepository::default());
@@ -498,6 +534,8 @@ async fn run_file_transcription_rejects_missing_input_path() {
                 model: SpeechModel::Base,
                 enable_ai: false,
                 whisper_options: WhisperOptions::default(),
+                title: None,
+                parent_id: None,
             },
             Arc::new(|_| {}),
             Arc::new(|_text: String| {}),
@@ -512,4 +550,133 @@ async fn run_file_transcription_rejects_missing_input_path() {
         }
         other => panic!("expected validation error, got: {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn run_file_transcription_assigns_speakers_into_timeline_metadata() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let input_path = temp.path().join("interview.wav");
+    tokio::fs::write(&input_path, b"fake wav content")
+        .await
+        .expect("failed to create wav file");
+
+    let transcoder = Arc::new(MockTranscoder::default());
+    let speech = Arc::new(MockSpeechEngine {
+        transcript: "Hello there.\nGeneral Kenobi.".to_string(),
+        segments: vec![
+            TimedSegment {
+                text: "Hello there.".to_string(),
+                start_seconds: Some(0.0),
+                end_seconds: Some(1.8),
+                ..TimedSegment::default()
+            },
+            TimedSegment {
+                text: "General Kenobi.".to_string(),
+                start_seconds: Some(2.0),
+                end_seconds: Some(3.8),
+                ..TimedSegment::default()
+            },
+        ],
+    });
+    let enhancer = Arc::new(MockEnhancer::default());
+    let repo = Arc::new(InMemoryArtifactRepository::default());
+    let diarizer = Arc::new(MockSpeakerDiarizer {
+        turns: vec![
+            SpeakerTurn {
+                speaker_id: "speaker_1".to_string(),
+                speaker_label: Some("Speaker 1".to_string()),
+                start_seconds: 0.0,
+                end_seconds: 2.0,
+            },
+            SpeakerTurn {
+                speaker_id: "speaker_2".to_string(),
+                speaker_label: Some("Speaker 2".to_string()),
+                start_seconds: 2.0,
+                end_seconds: 4.0,
+            },
+        ],
+    });
+
+    let service = TranscriptionService::new(transcoder, speech, enhancer, repo)
+        .with_speaker_diarizer(diarizer);
+
+    let artifact = service
+        .run_file_transcription(
+            RunTranscriptionRequest {
+                job_id: "job-004".to_string(),
+                input_path: input_path.to_string_lossy().to_string(),
+                language: LanguageCode::En,
+                model: SpeechModel::Base,
+                enable_ai: false,
+                whisper_options: WhisperOptions::default(),
+                title: None,
+                parent_id: None,
+            },
+            Arc::new(|_| {}),
+            Arc::new(|_text: String| {}),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("transcription with diarization should succeed");
+
+    let timeline = artifact
+        .metadata
+        .get("timeline_v2")
+        .expect("timeline metadata should be present");
+    assert!(timeline.contains("\"speaker_id\":\"speaker_1\""));
+    assert!(timeline.contains("\"speaker_label\":\"Speaker 1\""));
+    assert!(timeline.contains("\"speaker_id\":\"speaker_2\""));
+}
+
+#[tokio::test]
+async fn run_file_transcription_keeps_raw_transcript_when_ai_fails() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let input_path = temp.path().join("meeting.wav");
+    tokio::fs::write(&input_path, b"fake wav content")
+        .await
+        .expect("failed to create wav file");
+
+    let transcoder = Arc::new(MockTranscoder::default());
+    let speech = Arc::new(MockSpeechEngine {
+        transcript: "meeting raw".to_string(),
+        segments: Vec::new(),
+    });
+    let enhancer = Arc::new(MockEnhancer {
+        fail_optimize: true,
+        ..MockEnhancer::default()
+    });
+    let repo = Arc::new(InMemoryArtifactRepository::default());
+
+    let service = TranscriptionService::new(transcoder, speech, enhancer.clone(), repo);
+
+    let artifact = service
+        .run_file_transcription(
+            RunTranscriptionRequest {
+                job_id: "job-005".to_string(),
+                input_path: input_path.to_string_lossy().to_string(),
+                language: LanguageCode::En,
+                model: SpeechModel::Small,
+                enable_ai: true,
+                whisper_options: WhisperOptions::default(),
+                title: None,
+                parent_id: None,
+            },
+            Arc::new(|_| {}),
+            Arc::new(|_text: String| {}),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("transcription should still succeed when ai fails");
+
+    assert_eq!(artifact.raw_transcript, "meeting raw");
+    assert_eq!(artifact.optimized_transcript, "meeting raw");
+    assert!(artifact.summary.is_empty());
+    assert!(artifact.faqs.is_empty());
+    assert_eq!(
+        *enhancer
+            .optimize_calls
+            .lock()
+            .expect("enhancer optimize lock poisoned"),
+        1
+    );
 }

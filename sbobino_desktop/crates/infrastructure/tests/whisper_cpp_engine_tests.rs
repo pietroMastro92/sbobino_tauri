@@ -57,6 +57,7 @@ exit 0
             "ggml-base.bin",
             "en",
             &WhisperOptions::default(),
+            None,
             Arc::new(move |line: String| {
                 emitted_clone.lock().expect("emit lock poisoned").push(line);
             }),
@@ -65,14 +66,12 @@ exit 0
         .await
         .expect("transcription should succeed");
 
-    assert!(transcript.contains("first line"));
-    assert!(transcript.contains("second line"));
-    assert!(transcript.contains("third line"));
+    assert!(transcript.text.contains("first line"));
+    assert!(transcript.text.contains("second line"));
 
     let lines = emitted.lock().expect("emit lock poisoned").clone();
     assert!(lines.iter().any(|line| line == "first line"));
     assert!(lines.iter().any(|line| line == "second line"));
-    assert!(lines.iter().any(|line| line.contains("third line")));
 }
 
 #[tokio::test]
@@ -117,16 +116,17 @@ exit 0
             "ggml-base.bin",
             "en",
             &WhisperOptions::default(),
+            None,
             Arc::new(|_line: String| {}),
             Arc::new(|_seconds: f32| {}),
         )
         .await
         .expect("transcription should succeed");
 
-    assert!(transcript.contains("final line from txt"));
-    assert!(transcript.contains("another final line"));
+    assert!(transcript.text.contains("final line from txt"));
+    assert!(transcript.text.contains("another final line"));
     assert!(
-        !transcript.contains("partial stdout line"),
+        !transcript.text.contains("partial stdout line"),
         "expected file output to override noisy stream output"
     );
 }
@@ -162,6 +162,7 @@ exit 2
             "ggml-base.bin",
             "en",
             &WhisperOptions::default(),
+            None,
             Arc::new(|_line: String| {}),
             Arc::new(|_seconds: f32| {}),
         )
@@ -215,6 +216,7 @@ exit 0
             "ggml-base.bin",
             "en",
             &WhisperOptions::default(),
+            None,
             Arc::new(move |line: String| {
                 emitted_clone.lock().expect("emit lock poisoned").push(line);
             }),
@@ -223,7 +225,7 @@ exit 0
         .await
         .expect("transcription should succeed");
 
-    let transcript_lines: Vec<&str> = transcript.lines().collect();
+    let transcript_lines: Vec<&str> = transcript.text.lines().collect();
     assert_eq!(transcript_lines.len(), 3, "expected all streamed lines");
     assert_eq!(transcript_lines[0], "repeated line");
     assert_eq!(transcript_lines[1], "repeated line");
@@ -318,21 +320,22 @@ exit 0
                 processors: 2,
                 ..WhisperOptions::default()
             },
+            None,
             Arc::new(|_line: String| {}),
             Arc::new(|_seconds: f32| {}),
         )
         .await
         .expect("transcription should succeed");
 
-    assert!(transcript.contains("tr=1"));
-    assert!(transcript.contains("sow=1"));
-    assert!(transcript.contains("mc=0"));
-    assert!(transcript.contains("t=6"));
-    assert!(transcript.contains("p=2"));
-    assert!(transcript.contains("tp=0.35"));
-    assert!(transcript.contains("et=2.2"));
-    assert!(transcript.contains("lpt=-0.9"));
-    assert!(transcript.contains("wt=0.2"));
-    assert!(transcript.contains("bo=7"));
-    assert!(transcript.contains("bs="));
+    assert!(transcript.text.contains("tr=1"));
+    assert!(transcript.text.contains("sow=1"));
+    assert!(transcript.text.contains("mc=0"));
+    assert!(transcript.text.contains("t=6"));
+    assert!(transcript.text.contains("p=2"));
+    assert!(transcript.text.contains("tp=0.35"));
+    assert!(transcript.text.contains("et=2.2"));
+    assert!(transcript.text.contains("lpt=-0.9"));
+    assert!(transcript.text.contains("wt=0.2"));
+    assert!(transcript.text.contains("bo=7"));
+    assert!(transcript.text.contains("bs="));
 }

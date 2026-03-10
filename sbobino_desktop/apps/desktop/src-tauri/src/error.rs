@@ -23,6 +23,7 @@ impl From<ApplicationError> for CommandError {
             ApplicationError::Validation(_) => "validation",
             ApplicationError::AudioTranscoding(_) => "audio_transcoding",
             ApplicationError::SpeechToText(_) => "speech_to_text",
+            ApplicationError::SpeakerDiarization(_) => "speaker_diarization",
             ApplicationError::PostProcessing(_) => "post_processing",
             ApplicationError::Persistence(_) => "persistence",
             ApplicationError::Settings(_) => "settings",
