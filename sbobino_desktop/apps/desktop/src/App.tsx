@@ -60,6 +60,7 @@ import {
   emptyDeletedArtifacts,
   ensureTranscriptionRuntime,
   exportArtifact,
+  fetchAiCapabilityStatus,
   fetchTranscriptionStartPreflight,
   fetchRuntimeHealth,
   fetchSettingsSnapshot,
@@ -106,8 +107,11 @@ import {
   formatProvisioningAssetLabel,
   shouldOfferLocalModelsCta,
 } from "./lib/provisioningUi";
+import { stripAnsi } from "./lib/ansiText";
+import { buildConfidenceTranscript } from "./lib/whisperConfidence";
 import { useAppStore } from "./state/useAppStore";
 import type {
+  AiCapabilityStatus,
   AppearanceMode,
   AppSettings,
   ArtifactKind,
@@ -130,14 +134,17 @@ import type {
   WhisperOptions,
 } from "./types";
 import { AudioPlayer, type TrimRegion } from "./components/AudioPlayer";
+import { ConfidenceTranscript } from "./components/ConfidenceTranscript";
 import { ExportSheet, type ExportRequest } from "./components/ExportSheet";
 import { ModelManagerSheet } from "./components/ModelManagerSheet";
 import { LoadingAnimation } from "./components/LoadingAnimation";
 import { t, useTranslation, changeLanguage, type AppLanguage } from "./i18n";
 import { shouldStartWindowDrag } from "./lib/windowDrag";
 import {
+  aiActionsAvailable,
   buildChatArtifactPayload,
   buildSummaryArtifactPayload,
+  defaultSummaryControls,
   shouldAutostartSummary,
 } from "./lib/artifactAi";
 
@@ -851,21 +858,48 @@ function activeJobPercentage(
   return clampPercentage(Math.max(queuePercentage, livePercentage));
 }
 
+function TranscriptionPreview({
+  text,
+  fontSize,
+  previewRef,
+}: {
+  text: string;
+  fontSize: number;
+  previewRef: React.RefObject<HTMLDivElement>;
+}): JSX.Element {
+  return (
+    <div
+      ref={previewRef}
+      className="detail-editor transcription-preview"
+      style={{ fontSize: `${fontSize}px` }}
+    >
+      {stripAnsi(text)}
+    </div>
+  );
+}
+
 function mergeTranscriptionPreview(previous: string, incoming: string): string {
   const next = incoming.trim();
   if (!next) return previous;
 
   const current = previous.trimEnd();
-  if (!current) return next;
-  if (current === next) return previous;
-  if (current.includes(next)) return previous;
-  if (next.startsWith(current)) return next;
+  const currentPlain = stripAnsi(current);
+  const nextPlain = stripAnsi(next);
 
-  const overlapLimit = Math.min(current.length, next.length);
-  for (let size = overlapLimit; size > 0; size -= 1) {
-    if (current.slice(-size) === next.slice(0, size)) {
-      return `${current}${next.slice(size)}`;
+  if (!current) return next;
+  if (currentPlain === nextPlain) return previous;
+  if (currentPlain.includes(nextPlain)) return previous;
+  if (nextPlain.startsWith(currentPlain)) return next;
+
+  if (current === currentPlain && next === nextPlain) {
+    const overlapLimit = Math.min(current.length, next.length);
+    for (let size = overlapLimit; size > 0; size -= 1) {
+      if (current.slice(-size) === next.slice(0, size)) {
+        return `${current}${next.slice(size)}`;
+      }
     }
+
+    return `${current}\n${next}`;
   }
 
   return `${current}\n${next}`;
@@ -1212,6 +1246,9 @@ type DetailToolbarProps = {
   onCancel: () => void;
   isImprovingText?: boolean;
   onImproveText?: () => void;
+  chatDisabled?: boolean;
+  optimizeDisabled?: boolean;
+  optimizeDisabledTitle?: string;
   showRetranscribe?: boolean;
   onRetranscribeTrimmedAudio?: () => void;
 };
@@ -1235,6 +1272,9 @@ function DetailToolbar({
   onCancel,
   isImprovingText,
   onImproveText,
+  chatDisabled,
+  optimizeDisabled,
+  optimizeDisabledTitle,
   showRetranscribe,
   onRetranscribeTrimmedAudio,
 }: DetailToolbarProps): JSX.Element {
@@ -1289,7 +1329,7 @@ function DetailToolbar({
           <DetailCenterModeControl
             detailMode={detailMode}
             summaryDisabled={!hasArtifact}
-            chatDisabled={!hasArtifact}
+            chatDisabled={chatDisabled || !hasArtifact}
             onSelect={onSelectMode}
           />
         </div>
@@ -1299,8 +1339,8 @@ function DetailToolbar({
             <button
               className="optimize-hover-button"
               onClick={() => void onImproveText()}
-              disabled={isImprovingText || !hasArtifact}
-              title={t("detail.improveText", "Improve Text")}
+              disabled={optimizeDisabled || isImprovingText || !hasArtifact}
+              title={optimizeDisabled ? optimizeDisabledTitle : t("detail.improveText", "Improve Text")}
             >
               <div className="button-content">
                 <Sparkles size={14} />
@@ -1580,6 +1620,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   const [draftTranscript, setDraftTranscript] = useState("");
   const [optimizedTranscriptAvailable, setOptimizedTranscriptAvailable] = useState(false);
   const [transcriptViewMode, setTranscriptViewMode] = useState<TranscriptViewMode>("optimized");
+  const [showConfidenceColors, setShowConfidenceColors] = useState(false);
   const [draftSummary, setDraftSummary] = useState("");
   const [draftFaqs, setDraftFaqs] = useState("");
   const [showExportSheet, setShowExportSheet] = useState(false);
@@ -1642,6 +1683,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   const [installingUpdate, setInstallingUpdate] = useState(false);
   const [updateDownloadPercent, setUpdateDownloadPercent] = useState<number | null>(null);
   const [updateStatusMessage, setUpdateStatusMessage] = useState<string | null>(null);
+  const [aiCapabilityStatus, setAiCapabilityStatus] = useState<AiCapabilityStatus | null>(null);
   const [aiServicesAcknowledged, setAiServicesAcknowledged] = useState(false);
   const [aiServiceConfigOpen, setAiServiceConfigOpen] = useState<string | null>(null);
   const [geminiModelChoices, setGeminiModelChoices] = useState<string[]>(fallbackGeminiModelOptions);
@@ -1660,14 +1702,14 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [groupSegmentsWithoutSpeakers, setGroupSegmentsWithoutSpeakers] = useState(true);
   const copiedChatResetTimerRef = useRef<number | null>(null);
-  const [summaryIncludeTimestamps, setSummaryIncludeTimestamps] = useState(true);
-  const [summaryIncludeSpeakers, setSummaryIncludeSpeakers] = useState(false);
+  const [summaryIncludeTimestamps, setSummaryIncludeTimestamps] = useState(defaultSummaryControls.includeTimestamps);
+  const [summaryIncludeSpeakers, setSummaryIncludeSpeakers] = useState(defaultSummaryControls.includeSpeakers);
   const [summaryAutostart, setSummaryAutostart] = useState(false);
-  const [summarySections, setSummarySections] = useState(true);
-  const [summaryBulletPoints, setSummaryBulletPoints] = useState(false);
-  const [summaryActionItems, setSummaryActionItems] = useState(true);
-  const [summaryKeyPointsOnly, setSummaryKeyPointsOnly] = useState(true);
-  const [summaryLanguage, setSummaryLanguage] = useState<LanguageCode>("en");
+  const [summarySections, setSummarySections] = useState(defaultSummaryControls.sections);
+  const [summaryBulletPoints, setSummaryBulletPoints] = useState(defaultSummaryControls.bulletPoints);
+  const [summaryActionItems, setSummaryActionItems] = useState(defaultSummaryControls.actionItems);
+  const [summaryKeyPointsOnly, setSummaryKeyPointsOnly] = useState(defaultSummaryControls.keyPointsOnly);
+  const [summaryLanguage, setSummaryLanguage] = useState<LanguageCode>(defaultSummaryControls.language);
   const [summaryCustomPrompt, setSummaryCustomPrompt] = useState("");
   const [chatIncludeTimestamps, setChatIncludeTimestamps] = useState(true);
   const [chatIncludeSpeakers, setChatIncludeSpeakers] = useState(false);
@@ -1680,7 +1722,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
   const activeJobIdRef = useRef<string | null>(activeJobId);
   const activeJobDeltaSequenceRef = useRef<number>(-1);
-  const activeJobPreviewTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const activeJobPreviewTextareaRef = useRef<HTMLDivElement>(null);
   const detailMainRef = useRef<HTMLElement | null>(null);
   const mainAreaRef = useRef<HTMLElement | null>(null);
   const leftSidebarRef = useRef<HTMLElement | null>(null);
@@ -1763,12 +1805,12 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     if (!activeJobId) {
       return;
     }
-    const textarea = activeJobPreviewTextareaRef.current;
-    if (!textarea) {
+    const previewContainer = activeJobPreviewTextareaRef.current;
+    if (!previewContainer) {
       return;
     }
     const frame = window.requestAnimationFrame(() => {
-      textarea.scrollTop = textarea.scrollHeight;
+      previewContainer.scrollTop = previewContainer.scrollHeight;
     });
     return () => window.cancelAnimationFrame(frame);
   }, [activeJobId, activeJobPreviewText]);
@@ -1776,6 +1818,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   useEffect(() => {
     setSelectedSegmentSourceIndex(null);
     setSpeakerDraft("");
+    setShowConfidenceColors(false);
   }, [activeArtifactId]);
 
   useEffect(() => {
@@ -2042,6 +2085,30 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       unlisten?.();
     };
   }, [setSettings]);
+
+  useEffect(() => {
+    if (!settings) {
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const status = await fetchAiCapabilityStatus();
+        if (!cancelled) {
+          setAiCapabilityStatus(status);
+        }
+      } catch {
+        if (!cancelled) {
+          setAiCapabilityStatus(null);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [settings]);
 
   const resetPreparedImportAudio = useCallback(() => {
     setPreparedImportTrimDraft(null);
@@ -2441,6 +2508,14 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     [provisioning.ready, realtimeState, settings],
   );
 
+  const aiFeaturesAvailable = useMemo(
+    () => aiActionsAvailable(aiCapabilityStatus),
+    [aiCapabilityStatus],
+  );
+
+  const aiUnavailableReason = aiCapabilityStatus?.unavailable_reason?.trim()
+    || "No usable AI provider is available. Configure it in Settings > AI Services.";
+
   useEffect(() => {
     if (section === "home" || section === "history") {
       return;
@@ -2643,6 +2718,15 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     return draftTranscript;
   }, [activeRawTranscript, draftTranscript, hasOptimizedTranscript, transcriptViewMode]);
   const transcriptReadOnly = transcriptViewMode === "original" && hasOptimizedTranscript;
+  const confidenceTranscriptDocument = useMemo(
+    () => buildConfidenceTranscript(activeRawTranscript, activeArtifact?.metadata?.timeline_v2),
+    [activeArtifact?.metadata?.timeline_v2, activeRawTranscript],
+  );
+  const confidenceColorsAvailable = Boolean(confidenceTranscriptDocument);
+  const showingConfidenceTranscript =
+    showConfidenceColors
+    && transcriptViewMode === "original"
+    && Boolean(confidenceTranscriptDocument);
 
   const transcriptWordCount = useMemo(
     () => visibleTranscript.split(/\s+/).filter(Boolean).length,
@@ -2695,6 +2779,18 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       setTranscriptViewMode("original");
     }
   }, [hasOptimizedTranscript, transcriptViewMode]);
+
+  useEffect(() => {
+    if (!confidenceColorsAvailable && showConfidenceColors) {
+      setShowConfidenceColors(false);
+    }
+  }, [confidenceColorsAvailable, showConfidenceColors]);
+
+  useEffect(() => {
+    if (showConfidenceColors && transcriptViewMode !== "original") {
+      setTranscriptViewMode("original");
+    }
+  }, [showConfidenceColors, transcriptViewMode]);
 
   useEffect(() => {
     if (!activeJobId) {
@@ -2874,6 +2970,9 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   }, []);
 
   useEffect(() => {
+    if (!aiFeaturesAvailable) {
+      return;
+    }
     const artifactId = activeArtifact?.id ?? null;
     const persistedSummary = activeArtifact?.summary ?? "";
     if (!shouldAutostartSummary({
@@ -2896,6 +2995,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     activeArtifact?.id,
     activeArtifact?.summary,
     activeJobId,
+    aiFeaturesAvailable,
     draftSummary,
     isGeneratingSummary,
     summaryAutostart,
@@ -3993,6 +4093,10 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
   async function onGenerateSummary(revealOnSuccess = true): Promise<void> {
     if (!activeArtifact || isGeneratingSummary) return;
+    if (!aiFeaturesAvailable) {
+      setError(aiUnavailableReason);
+      return;
+    }
 
     setIsGeneratingSummary(true);
     try {
@@ -4027,6 +4131,10 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
   async function onImproveText(): Promise<void> {
     if (!activeArtifact || isImprovingText) return;
+    if (!aiFeaturesAvailable) {
+      setError(aiUnavailableReason);
+      return;
+    }
 
     const transcriptToOptimize = transcriptViewMode === "original"
       ? activeRawTranscript
@@ -4061,6 +4169,10 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
   async function onSendChat(prefilledPrompt?: string): Promise<void> {
     if (!activeArtifact || isAskingChat) return;
+    if (!aiFeaturesAvailable) {
+      setError(aiUnavailableReason);
+      return;
+    }
 
     const prompt = (prefilledPrompt ?? chatInput).trim();
     if (!prompt) return;
@@ -4798,13 +4910,10 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           return <LoadingAnimation />;
         }
         return (
-          <textarea
-            ref={activeJobPreviewTextareaRef}
-            className="detail-editor"
-            value={activeJobPreviewText}
-            readOnly
-            placeholder="Transcribing... text will appear here while Whisper is running."
-            style={{ fontSize: `${fontSize}px` }}
+          <TranscriptionPreview
+            text={activeJobPreviewText}
+            fontSize={fontSize}
+            previewRef={activeJobPreviewTextareaRef}
           />
         );
       }
@@ -4892,11 +5001,12 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             <input
               placeholder={t("detail.chatPlaceholder")}
               value={chatInput}
+              disabled={!aiFeaturesAvailable}
               onChange={(event) => setChatInput(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
-                  if (!isAskingChat && chatInput.trim().length > 0) {
+                  if (aiFeaturesAvailable && !isAskingChat && chatInput.trim().length > 0) {
                     void onSendChat();
                   }
                 }
@@ -4917,7 +5027,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             <button 
               className="chat-submit-button" 
               onClick={() => void onSendChat()} 
-              disabled={isAskingChat || chatInput.trim().length === 0}
+              disabled={!aiFeaturesAvailable || isAskingChat || chatInput.trim().length === 0}
+              title={!aiFeaturesAvailable ? aiUnavailableReason : undefined}
               aria-label={t("detail.submitChat")}
             >
               <ArrowUp size={20} />
@@ -4993,29 +5104,36 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             <HighlightMatch text={visibleTranscript} search={search} />
           </div>
         ) : null}
-        <textarea
-          className="detail-editor"
-          value={visibleTranscript}
-          onChange={(event) => setDraftTranscript(event.target.value)}
-          readOnly={transcriptReadOnly}
-          title={transcriptReadOnly
-            ? t(
-              "detail.originalTranscriptReadonly",
-              "Original transcript is read-only. Switch back to the optimized version to edit.",
-            )
-            : undefined}
-          style={{
-            fontSize: `${fontSize}px`,
-            position: search.trim() ? "absolute" : "relative",
-            top: 0,
-            left: 0,
-            width: "100%",
-            height: "100%",
-            background: search.trim() ? "transparent" : undefined,
-            color: search.trim() ? "black" : undefined,
-            opacity: search.trim() ? 0.7 : 1,
-          }}
-        />
+        {showingConfidenceTranscript && confidenceTranscriptDocument ? (
+          <ConfidenceTranscript
+            document={confidenceTranscriptDocument}
+            fontSize={fontSize}
+          />
+        ) : (
+          <textarea
+            className="detail-editor"
+            value={visibleTranscript}
+            onChange={(event) => setDraftTranscript(event.target.value)}
+            readOnly={transcriptReadOnly}
+            title={transcriptReadOnly
+              ? t(
+                "detail.originalTranscriptReadonly",
+                "Original transcript is read-only. Switch back to the optimized version to edit.",
+              )
+              : undefined}
+            style={{
+              fontSize: `${fontSize}px`,
+              position: search.trim() ? "absolute" : "relative",
+              top: 0,
+              left: 0,
+              width: "100%",
+              height: "100%",
+              background: search.trim() ? "transparent" : undefined,
+              color: search.trim() ? "black" : undefined,
+              opacity: search.trim() ? 0.7 : 1,
+            }}
+          />
+        )}
       </div>
     );
   }
@@ -5042,7 +5160,10 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
               <button
                 type="button"
                 className={transcriptViewMode === "optimized" ? "seg active" : "seg"}
-                onClick={() => setTranscriptViewMode("optimized")}
+                onClick={() => {
+                  setShowConfidenceColors(false);
+                  setTranscriptViewMode("optimized");
+                }}
                 title={t("detail.showOptimizedTranscript", "Show optimized transcript")}
               >
                 {t("detail.showOptimized", "Show optimized")}
@@ -5056,6 +5177,35 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                 {t("detail.showOriginal", "Show original")}
               </button>
             </div>
+          </div>
+        ) : null}
+
+        {detailMode === "transcript" && confidenceColorsAvailable ? (
+          <div className="inspector-block confidence-toggle-block">
+            <label className="confidence-toggle-card">
+              <div className="confidence-toggle-copy">
+                <span className="confidence-toggle-title">
+                  {t("sidebar.confidenceColors", "Confidence colors")}
+                </span>
+                <span className="confidence-toggle-note">
+                  {t(
+                    "sidebar.confidenceColorsHint",
+                    "Uses the original Whisper transcript. Hover words to inspect confidence.",
+                  )}
+                </span>
+              </div>
+              <input
+                type="checkbox"
+                checked={showConfidenceColors}
+                onChange={(event) => {
+                  const enabled = event.target.checked;
+                  setShowConfidenceColors(enabled);
+                  if (enabled) {
+                    setTranscriptViewMode("original");
+                  }
+                }}
+              />
+            </label>
           </div>
         ) : null}
 
@@ -5208,10 +5358,16 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         <button className="secondary-button" onClick={() => void navigator.clipboard.writeText(draftSummary || visibleTranscript)}>
           Copy
         </button>
-        <button className="secondary-button" onClick={() => void onGenerateSummary()} disabled={isGeneratingSummary || !activeArtifact}>
+        <button
+          className="secondary-button"
+          onClick={() => void onGenerateSummary()}
+          disabled={isGeneratingSummary || !activeArtifact || !aiFeaturesAvailable}
+          title={!aiFeaturesAvailable ? aiUnavailableReason : undefined}
+        >
           {isGeneratingSummary ? "Summarizing..." : "Summarize"}
         </button>
         <button className="secondary-button" onClick={() => setDraftSummary("")}>{t("summary.clear")}</button>
+        {!aiFeaturesAvailable ? <p className="muted">{aiUnavailableReason}</p> : null}
 
         <label className="toggle-row">
           <span>{t("summary.includeTimestamps")}</span>
@@ -5308,7 +5464,13 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         <h4>{t("chat.prompts")}</h4>
         <div className="prompt-list">
           {settings?.prompts.templates.map((prompt) => (
-            <button key={prompt.id} className="prompt-item" onClick={() => void onSendChat(prompt.body)}>
+            <button
+              key={prompt.id}
+              className="prompt-item"
+              onClick={() => void onSendChat(prompt.body)}
+              disabled={!aiFeaturesAvailable}
+              title={!aiFeaturesAvailable ? aiUnavailableReason : undefined}
+            >
               {prompt.name}
             </button>
           ))}
@@ -5321,6 +5483,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         >
           Manage Prompts
         </button>
+        {!aiFeaturesAvailable ? <p className="muted">{aiUnavailableReason}</p> : null}
 
         <div className="inspector-block">
           <h4>{t("inspector.options")}</h4>
@@ -5401,7 +5564,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           <div className="inspector-body">
             <button
               className="secondary-button"
-              onClick={() => void navigator.clipboard.writeText(activeJobPreviewText)}
+              onClick={() => void navigator.clipboard.writeText(stripAnsi(activeJobPreviewText))}
               disabled={!activeJobPreviewText}
             >
               Copy
@@ -5454,6 +5617,9 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             onCancel={() => void onCancel()}
             isImprovingText={isImprovingText}
             onImproveText={onImproveText}
+            chatDisabled={!aiFeaturesAvailable}
+            optimizeDisabled={!aiFeaturesAvailable}
+            optimizeDisabledTitle={aiUnavailableReason}
             showRetranscribe={Boolean(effectiveTrimmedAudioDraft && !activeJobId)}
             onRetranscribeTrimmedAudio={() => {
               if (effectiveTrimmedAudioDraft) {

@@ -120,6 +120,12 @@ export type AiSettings = {
   remote_services: RemoteServiceConfig[];
 };
 
+export type AiCapabilityStatus = {
+  available: boolean;
+  fallback_available: boolean;
+  unavailable_reason?: string | null;
+};
+
 export type RemoteServiceConfig = {
   id: string;
   kind: RemoteServiceKind;

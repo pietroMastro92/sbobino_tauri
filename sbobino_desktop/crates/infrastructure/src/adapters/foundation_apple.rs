@@ -176,12 +176,12 @@ fn build_optimize_prompt(
         })
     {
         return format!(
-            "{template}\n\nLanguage: {language_instruction}\n\nAdditional cleanup rules:\n- Preserve the original wording and order of the transcript.\n- Only improve punctuation, capitalization, spacing, and paragraph breaks.\n- Remove obvious accidental repetitions, duplicated lines, and looped sentences.\n- Keep only one occurrence when the same sentence is repeated in sequence by mistake.\n- Do not paraphrase, summarize, rewrite, fix wording, or add any words that are not already present in the transcript.\n- Do not invent missing content.\n\nTranscript:\n{text}\n\nReturn only the cleaned transcript."
+            "{template}\n\nLanguage: {language_instruction}\n\nAdditional cleanup rules:\n- Preserve the original wording, structure, and order of the transcript as much as possible.\n- Improve punctuation, capitalization, spacing, and paragraph breaks.\n- Remove obvious accidental repetitions, duplicated lines, and looped sentences.\n- Keep only one occurrence when the same sentence is repeated in sequence by mistake.\n- Correct isolated words or short phrases that are clearly wrong ASR/transcription mistakes when the surrounding context makes the intended meaning highly likely.\n- Prefer minimal local corrections, especially for technical terms, acronyms, library names, product names, and domain-specific jargon.\n- If you are not confident about a correction, keep the original wording.\n- Do not paraphrase whole sentences, summarize, reorder ideas, or invent missing facts.\n\nTranscript:\n{text}\n\nReturn only the cleaned transcript."
         );
     }
 
     format!(
-        "Clean this transcript while preserving the same language as the source text ({language_instruction}). Preserve the original wording and order. Only improve punctuation, capitalization, spacing, and paragraph breaks, and remove obvious transcription glitches such as consecutive duplicated lines, repeated phrases, looped sentences, and hallucinated filler. When the same sentence is repeated accidentally in sequence, keep only the single best occurrence. Do not paraphrase, summarize, rewrite, fix wording, or add any words that are not already present in the transcript. Do not invent missing content. Return only the cleaned transcript.\n\n{text}"
+        "Clean this transcript while preserving the same language as the source text ({language_instruction}). Preserve the original wording, structure, and order as much as possible. Improve punctuation, capitalization, spacing, and paragraph breaks, and remove obvious transcription glitches such as consecutive duplicated lines, repeated phrases, looped sentences, and hallucinated filler. When the same sentence is repeated accidentally in sequence, keep only the single best occurrence. You may correct isolated words or short phrases that are clearly wrong ASR/transcription mistakes when the surrounding context makes the intended term highly likely, especially for technical terms, acronyms, library names, product names, and domain-specific jargon. Prefer minimal local corrections. If uncertain, keep the original wording. Do not paraphrase whole sentences, summarize, reorder ideas, or invent missing facts. Return only the cleaned transcript.\n\n{text}"
     )
 }
 
@@ -215,7 +215,7 @@ fn build_summary_prompt(
     }
 
     format!(
-        "Generate in language {language_code}:\n1) Summary\n2) Exactly 3 FAQs with answers.\nFormat:\nSummary:\n...\nFAQs:\nQ:...\nA:...\n\nText:\n{text}"
+        "Generate in language {language_code}:\n1) Summary\n2) Exactly 3 FAQs with answers.\n\nSummary requirements:\n- Write a detailed, sectioned briefing note, not a terse recap.\n- Cover all major topics, technical details, examples, numbers, and decisions.\n- Preserve how the ideas relate to each other and explain why they matter.\n- Keep the summary self-contained for a reader who has not heard the recording.\n\nFormat:\nSummary:\n...\nFAQs:\nQ:...\nA:...\n\nText:\n{text}"
     )
 }
 

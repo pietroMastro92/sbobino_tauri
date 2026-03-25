@@ -9,7 +9,11 @@ use uuid::Uuid;
 use sbobino_application::RealtimeDelta;
 use sbobino_domain::{ArtifactKind, LanguageCode, SpeechModel, TranscriptArtifact};
 
-use crate::{error::CommandError, state::AppState};
+use crate::{
+    ai_support::run_with_enhancer_fallback,
+    error::CommandError,
+    state::AppState,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct StartRealtimePayload {
@@ -214,19 +218,27 @@ pub async fn stop_realtime(
     let mut faqs = String::new();
 
     if settings.transcription.enable_ai_post_processing {
-        if let Some(enhancer) = state
+        let enhancers = state
             .runtime_factory
-            .build_active_enhancer()
-            .map_err(|e| CommandError::new("runtime_factory", e))?
-        {
-            if let Ok(next_optimized) = enhancer.optimize(&consolidated, &language_code).await {
+            .build_enhancer_candidates()
+            .map_err(|e| CommandError::new("runtime_factory", e))?;
+        if !enhancers.is_empty() {
+            if let Ok((next_optimized, summary_faq)) =
+                run_with_enhancer_fallback(&enhancers, "realtime post-processing", |enhancer| {
+                    let consolidated = consolidated.clone();
+                    let language_code = language_code.clone();
+                    Box::pin(async move {
+                        let next_optimized = enhancer.optimize(&consolidated, &language_code).await?;
+                        let summary_faq =
+                            enhancer.summarize_and_faq(&next_optimized, &language_code).await?;
+                        Ok((next_optimized, summary_faq))
+                    })
+                })
+                .await
+            {
                 optimized = next_optimized;
-                if let Ok(summary_faq) =
-                    enhancer.summarize_and_faq(&optimized, &language_code).await
-                {
-                    summary = summary_faq.summary;
-                    faqs = summary_faq.faqs;
-                }
+                summary = summary_faq.summary;
+                faqs = summary_faq.faqs;
             }
         }
     }

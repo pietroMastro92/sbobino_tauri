@@ -2,6 +2,7 @@ pub mod adapters;
 pub mod repositories;
 
 use chrono::Utc;
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
@@ -130,6 +131,43 @@ struct BinaryResolution {
     resolved_path: String,
 }
 
+#[derive(Clone)]
+pub struct AiEnhancerCandidate {
+    pub key: String,
+    pub label: String,
+    pub fallback: bool,
+    pub enhancer: Arc<dyn TranscriptEnhancer>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AiCapabilityStatus {
+    pub available: bool,
+    pub fallback_available: bool,
+    pub unavailable_reason: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct EnhancerOverrides {
+    model_override: Option<String>,
+    optimize_prompt_override: Option<String>,
+    summary_prompt_override: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+enum EnhancerSource {
+    FoundationApple,
+    LegacyGemini,
+    RemoteService(String),
+}
+
+#[derive(Debug, Clone)]
+struct EnhancerCandidateSpec {
+    key: String,
+    label: String,
+    fallback: bool,
+    source: EnhancerSource,
+}
+
 impl RuntimeTranscriptionFactory {
     pub fn new(data_dir: &Path, bundle_resources_dir: Option<PathBuf>) -> Result<Self, String> {
         std::fs::create_dir_all(data_dir)
@@ -221,17 +259,26 @@ impl RuntimeTranscriptionFactory {
             Arc::new(WhisperCppEngine::new(whisper_cli_path, models_dir));
         let speaker_diarizer = self.build_speaker_diarizer(&settings)?;
 
-        let enhancer = self
-            .build_active_enhancer()
-            .map_err(|error| format!("failed to build AI enhancer: {error}"))?
+        let enhancer_candidates = self
+            .build_enhancer_candidates()
+            .map_err(|error| format!("failed to build AI enhancer chain: {error}"))?;
+        let enhancer = enhancer_candidates
+            .first()
+            .map(|candidate| candidate.enhancer.clone())
             .unwrap_or_else(|| Arc::new(NoopEnhancer));
+        let fallback_enhancers = enhancer_candidates
+            .iter()
+            .skip(1)
+            .map(|candidate| candidate.enhancer.clone())
+            .collect::<Vec<_>>();
 
         let mut service = TranscriptionService::new(
             transcoder,
             speech_engine,
             enhancer,
             self.artifacts_repo.clone(),
-        );
+        )
+        .with_fallback_enhancers(fallback_enhancers);
         if let Some(diarizer) = speaker_diarizer {
             service = service.with_speaker_diarizer(diarizer);
         }
@@ -296,71 +343,253 @@ impl RuntimeTranscriptionFactory {
         }
 
         let settings = self.load_settings()?;
-        if !settings.ai.providers.foundation_apple.enabled {
+        self.build_foundation_enhancer_from_settings(
+            &settings,
+            &EnhancerOverrides {
+                model_override: None,
+                optimize_prompt_override,
+                summary_prompt_override,
+            },
+        )
+    }
+
+    pub fn build_active_enhancer(&self) -> Result<Option<Arc<dyn TranscriptEnhancer>>, String> {
+        Ok(self
+            .build_enhancer_candidates()?
+            .into_iter()
+            .next()
+            .map(|candidate| candidate.enhancer))
+    }
+
+    pub fn build_enhancer_candidates(&self) -> Result<Vec<AiEnhancerCandidate>, String> {
+        self.build_enhancer_candidates_with_overrides(None, None, None)
+    }
+
+    pub fn build_enhancer_candidates_with_overrides(
+        &self,
+        model_override: Option<String>,
+        optimize_prompt_override: Option<String>,
+        summary_prompt_override: Option<String>,
+    ) -> Result<Vec<AiEnhancerCandidate>, String> {
+        let settings = self.load_settings()?;
+        let overrides = EnhancerOverrides {
+            model_override,
+            optimize_prompt_override,
+            summary_prompt_override,
+        };
+
+        let mut seen_keys = HashSet::new();
+        let mut candidates = Vec::new();
+
+        for spec in self.ordered_enhancer_candidate_specs(&settings) {
+            if !seen_keys.insert(spec.key.clone()) {
+                continue;
+            }
+
+            if let Some(candidate) =
+                self.build_enhancer_candidate_from_spec(&settings, &spec, &overrides)?
+            {
+                candidates.push(candidate);
+            }
+        }
+
+        Ok(candidates)
+    }
+
+    pub fn ai_capability_status(&self) -> Result<AiCapabilityStatus, String> {
+        let candidates = self.build_enhancer_candidates()?;
+        if !candidates.is_empty() {
+            return Ok(AiCapabilityStatus {
+                available: true,
+                fallback_available: candidates.len() > 1,
+                unavailable_reason: None,
+            });
+        }
+
+        let unavailable_reason = if is_apple_silicon_host() {
+            "No usable AI provider is available. Configure an external AI service, enable Apple Foundation, or configure a local model in Settings > AI Services.".to_string()
+        } else {
+            "No usable AI provider is available. Configure an external AI service or a local model in Settings > AI Services.".to_string()
+        };
+
+        Ok(AiCapabilityStatus {
+            available: false,
+            fallback_available: false,
+            unavailable_reason: Some(unavailable_reason),
+        })
+    }
+
+    fn ordered_enhancer_candidate_specs(&self, settings: &AppSettings) -> Vec<EnhancerCandidateSpec> {
+        let mut specs = Vec::new();
+
+        if settings.ai.active_provider == AiProvider::FoundationApple {
+            specs.push(EnhancerCandidateSpec {
+                key: "foundation_apple".to_string(),
+                label: "Apple Foundation".to_string(),
+                fallback: false,
+                source: EnhancerSource::FoundationApple,
+            });
+        } else if let Some(active_id) = settings.ai.active_remote_service_id.as_ref() {
+            specs.push(self.remote_service_candidate_spec(settings, active_id, false));
+        } else if settings.ai.active_provider == AiProvider::Gemini {
+            if let Some(google_service) = settings
+                .ai
+                .remote_services
+                .iter()
+                .find(|service| service.kind == RemoteServiceKind::Google && service.enabled)
+            {
+                specs.push(self.remote_service_candidate_spec(settings, &google_service.id, false));
+            } else {
+                specs.push(EnhancerCandidateSpec {
+                    key: "legacy_gemini".to_string(),
+                    label: "Gemini".to_string(),
+                    fallback: false,
+                    source: EnhancerSource::LegacyGemini,
+                });
+            }
+        }
+
+        if is_apple_silicon_host() && settings.ai.providers.foundation_apple.enabled {
+            specs.push(EnhancerCandidateSpec {
+                key: "foundation_apple".to_string(),
+                label: "Apple Foundation".to_string(),
+                fallback: true,
+                source: EnhancerSource::FoundationApple,
+            });
+        }
+
+        for service in settings
+            .ai
+            .remote_services
+            .iter()
+            .filter(|service| self.is_local_fallback_service(service))
+        {
+            specs.push(self.remote_service_candidate_spec(settings, &service.id, true));
+        }
+
+        specs
+    }
+
+    fn remote_service_candidate_spec(
+        &self,
+        settings: &AppSettings,
+        service_id: &str,
+        fallback: bool,
+    ) -> EnhancerCandidateSpec {
+        let label = settings
+            .ai
+            .remote_services
+            .iter()
+            .find(|service| service.id == service_id)
+            .map(|service| self.service_display_label(settings, service))
+            .unwrap_or_else(|| format!("AI service {service_id}"));
+
+        EnhancerCandidateSpec {
+            key: format!("remote:{service_id}"),
+            label,
+            fallback,
+            source: EnhancerSource::RemoteService(service_id.to_string()),
+        }
+    }
+
+    fn build_enhancer_candidate_from_spec(
+        &self,
+        settings: &AppSettings,
+        spec: &EnhancerCandidateSpec,
+        overrides: &EnhancerOverrides,
+    ) -> Result<Option<AiEnhancerCandidate>, String> {
+        let enhancer: Option<Arc<dyn TranscriptEnhancer>> = match &spec.source {
+            EnhancerSource::FoundationApple => self
+                .build_foundation_enhancer_from_settings(settings, overrides)?
+                .map(|value| Arc::new(value) as Arc<dyn TranscriptEnhancer>),
+            EnhancerSource::LegacyGemini => self
+                .build_gemini_enhancer_from_settings(settings, overrides)?
+                .map(|value| Arc::new(value) as Arc<dyn TranscriptEnhancer>),
+            EnhancerSource::RemoteService(service_id) => self
+                .build_remote_service_enhancer_from_settings(settings, service_id, overrides)?
+                .map(Arc::from),
+        };
+
+        Ok(enhancer.map(|enhancer| AiEnhancerCandidate {
+            key: spec.key.clone(),
+            label: spec.label.clone(),
+            fallback: spec.fallback,
+            enhancer,
+        }))
+    }
+
+    fn build_gemini_enhancer_from_settings(
+        &self,
+        settings: &AppSettings,
+        overrides: &EnhancerOverrides,
+    ) -> Result<Option<GeminiEnhancer>, String> {
+        let Some(api_key) = settings.ai.providers.gemini.api_key.clone() else {
+            return Ok(None);
+        };
+
+        let model = overrides
+            .model_override
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| settings.ai.providers.gemini.model.clone());
+
+        Ok(Some(GeminiEnhancer::new(
+            api_key,
+            model,
+            overrides
+                .optimize_prompt_override
+                .clone()
+                .or_else(|| settings.prompt_for_task(PromptTask::Optimize)),
+            overrides
+                .summary_prompt_override
+                .clone()
+                .or_else(|| settings.prompt_for_task(PromptTask::Summary)),
+        )))
+    }
+
+    fn build_foundation_enhancer_from_settings(
+        &self,
+        settings: &AppSettings,
+        overrides: &EnhancerOverrides,
+    ) -> Result<Option<FoundationAppleEnhancer>, String> {
+        if !is_apple_silicon_host() || !settings.ai.providers.foundation_apple.enabled {
             return Ok(None);
         }
 
         Ok(Some(FoundationAppleEnhancer::new(
-            optimize_prompt_override.or_else(|| settings.prompt_for_task(PromptTask::Optimize)),
-            summary_prompt_override.or_else(|| settings.prompt_for_task(PromptTask::Summary)),
+            overrides
+                .optimize_prompt_override
+                .clone()
+                .or_else(|| settings.prompt_for_task(PromptTask::Optimize)),
+            overrides
+                .summary_prompt_override
+                .clone()
+                .or_else(|| settings.prompt_for_task(PromptTask::Summary)),
         )))
     }
 
-    pub fn build_active_enhancer(&self) -> Result<Option<Arc<dyn TranscriptEnhancer>>, String> {
-        let settings = self.load_settings()?;
-        if settings.ai.active_provider == AiProvider::FoundationApple {
-            let enhancer = self.build_foundation_enhancer_with_overrides(
-                settings.prompt_for_task(PromptTask::Optimize),
-                settings.prompt_for_task(PromptTask::Summary),
-            )?;
-            if enhancer.is_some() {
-                return Ok(enhancer.map(|value| Arc::new(value) as Arc<dyn TranscriptEnhancer>));
-            }
-        }
-
-        if let Some(active_id) = settings.ai.active_remote_service_id.as_ref() {
-            if let Some(enhancer) = self.build_remote_service_enhancer(&settings, active_id)? {
-                let enhancer: Arc<dyn TranscriptEnhancer> = enhancer.into();
-                return Ok(Some(enhancer));
-            }
-            return Err(format!(
-                "Active AI service '{active_id}' is missing or disabled. Reconfigure it in Settings > AI Services."
-            ));
-        }
-
-        match settings.ai.active_provider {
-            AiProvider::Gemini => {
-                let enhancer = self.build_gemini_enhancer_with_overrides(
-                    None,
-                    settings.prompt_for_task(PromptTask::Optimize),
-                    settings.prompt_for_task(PromptTask::Summary),
-                )?;
-                Ok(enhancer.map(|value| Arc::new(value) as Arc<dyn TranscriptEnhancer>))
-            }
-            AiProvider::FoundationApple | AiProvider::None => Ok(None),
-        }
-    }
-
-    fn build_remote_service_enhancer(
+    fn build_remote_service_enhancer_from_settings(
         &self,
         settings: &AppSettings,
-        active_id: &str,
+        service_id: &str,
+        overrides: &EnhancerOverrides,
     ) -> Result<Option<Box<dyn TranscriptEnhancer>>, String> {
         let Some(service) = settings
             .ai
             .remote_services
             .iter()
-            .find(|entry| entry.id == active_id && entry.enabled)
+            .find(|entry| entry.id == service_id && entry.enabled)
         else {
             return Ok(None);
         };
 
         if service.kind == RemoteServiceKind::Google {
-            let enhancer = self.build_gemini_for_service(settings, service)?;
+            let enhancer = self.build_gemini_for_service(settings, service, overrides)?;
             return Ok(enhancer.map(|value| Box::new(value) as Box<dyn TranscriptEnhancer>));
         }
 
-        let enhancer = self.build_openai_compatible_for_service(settings, service)?;
+        let enhancer = self.build_openai_compatible_for_service(settings, service, overrides)?;
         Ok(enhancer.map(|value| Box::new(value) as Box<dyn TranscriptEnhancer>))
     }
 
@@ -368,6 +597,7 @@ impl RuntimeTranscriptionFactory {
         &self,
         settings: &AppSettings,
         service: &RemoteServiceConfig,
+        overrides: &EnhancerOverrides,
     ) -> Result<Option<GeminiEnhancer>, String> {
         let api_key = service
             .api_key
@@ -388,18 +618,31 @@ impl RuntimeTranscriptionFactory {
             return Err("Google service requires a Gemini API key".to_string());
         };
 
-        let model = service
-            .model
+        let model = overrides
+            .model_override
             .as_ref()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
+            .or_else(|| {
+                service
+                    .model
+                    .as_ref()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+            })
             .unwrap_or_else(|| settings.ai.providers.gemini.model.clone());
 
         Ok(Some(GeminiEnhancer::new(
             api_key,
             model,
-            settings.prompt_for_task(PromptTask::Optimize),
-            settings.prompt_for_task(PromptTask::Summary),
+            overrides
+                .optimize_prompt_override
+                .clone()
+                .or_else(|| settings.prompt_for_task(PromptTask::Optimize)),
+            overrides
+                .summary_prompt_override
+                .clone()
+                .or_else(|| settings.prompt_for_task(PromptTask::Summary)),
         )))
     }
 
@@ -407,6 +650,7 @@ impl RuntimeTranscriptionFactory {
         &self,
         settings: &AppSettings,
         service: &RemoteServiceConfig,
+        overrides: &EnhancerOverrides,
     ) -> Result<Option<OpenAiCompatibleEnhancer>, String> {
         let Some(base_url) = service
             .base_url
@@ -420,11 +664,18 @@ impl RuntimeTranscriptionFactory {
             return Err(format!("{} service requires a base URL", service.label));
         };
 
-        let Some(model) = service
-            .model
+        let Some(model) = overrides
+            .model_override
             .as_ref()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
+            .or_else(|| {
+                service
+                    .model
+                    .as_ref()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+            })
             .or_else(|| {
                 default_model_for_service_kind(&service.kind).map(|value| value.to_string())
             })
@@ -461,11 +712,75 @@ impl RuntimeTranscriptionFactory {
             model,
             service.api_key.clone(),
             auth_style,
-            settings.prompt_for_task(PromptTask::Optimize),
-            settings.prompt_for_task(PromptTask::Summary),
+            overrides
+                .optimize_prompt_override
+                .clone()
+                .or_else(|| settings.prompt_for_task(PromptTask::Optimize)),
+            overrides
+                .summary_prompt_override
+                .clone()
+                .or_else(|| settings.prompt_for_task(PromptTask::Summary)),
         )
         .map_err(|error| format!("{error}"))?;
         Ok(Some(enhancer))
+    }
+
+    fn is_local_fallback_service(&self, service: &RemoteServiceConfig) -> bool {
+        if !service.enabled {
+            return false;
+        }
+
+        if !matches!(
+            service.kind,
+            RemoteServiceKind::LmStudio | RemoteServiceKind::Ollama | RemoteServiceKind::Custom
+        ) {
+            return false;
+        }
+
+        let has_model = service
+            .model
+            .as_ref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+        if !has_model {
+            return false;
+        }
+
+        let base_url = service
+            .base_url
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                default_base_url_for_service_kind(&service.kind).map(|value| value.to_string())
+            });
+
+        base_url
+            .as_deref()
+            .map(is_loopback_base_url)
+            .unwrap_or(false)
+    }
+
+    fn service_display_label(
+        &self,
+        settings: &AppSettings,
+        service: &RemoteServiceConfig,
+    ) -> String {
+        if service.kind == RemoteServiceKind::Google {
+            let model = service
+                .model
+                .as_ref()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .unwrap_or(&settings.ai.providers.gemini.model);
+            return format!("Google ({model})");
+        }
+
+        if service.label.trim().is_empty() {
+            format!("{:?}", service.kind)
+        } else {
+            service.label.trim().to_string()
+        }
     }
 
     pub fn build_whisper_stream_engine(&self) -> Result<WhisperStreamEngine, String> {
@@ -1411,6 +1726,14 @@ fn default_model_for_service_kind(kind: &RemoteServiceKind) -> Option<&'static s
     }
 }
 
+fn is_loopback_base_url(value: &str) -> bool {
+    let Ok(url) = Url::parse(value.trim()) else {
+        return false;
+    };
+
+    matches!(url.host_str(), Some("localhost") | Some("127.0.0.1") | Some("::1"))
+}
+
 fn missing_models(models_dir: &Path) -> Vec<String> {
     REQUIRED_MODEL_FILES
         .iter()
@@ -1516,7 +1839,7 @@ fn expand_home(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{ManagedPyannoteManifest, RuntimeTranscriptionFactory, PYANNOTE_STATUS_FILENAME};
-    use sbobino_domain::AppSettings;
+    use sbobino_domain::{AiProvider, AppSettings, RemoteServiceConfig, RemoteServiceKind};
     use tempfile::tempdir;
 
     fn build_factory() -> (tempfile::TempDir, RuntimeTranscriptionFactory) {
@@ -1532,6 +1855,13 @@ mod tests {
         factory
             .settings_repo
             .save_sync(&settings)
+            .expect("settings should persist");
+    }
+
+    fn persist_settings(factory: &RuntimeTranscriptionFactory, settings: &AppSettings) {
+        factory
+            .settings_repo
+            .save_sync(settings)
             .expect("settings should persist");
     }
 
@@ -1635,5 +1965,96 @@ mod tests {
             Err(error) => error,
         };
         assert!(error.contains("Pyannote diarization runtime is not installed"));
+    }
+
+    #[test]
+    fn enhancer_candidates_prefer_active_remote_then_foundation_then_local() {
+        let (_temp, factory) = build_factory();
+        let mut settings = AppSettings::default();
+        settings.ai.active_provider = AiProvider::Gemini;
+        settings.ai.active_remote_service_id = Some("remote-google".to_string());
+        settings.ai.providers.gemini.api_key = Some("test-key".to_string());
+        settings.ai.providers.foundation_apple.enabled = true;
+        settings.ai.remote_services = vec![
+            RemoteServiceConfig {
+                id: "remote-google".to_string(),
+                kind: RemoteServiceKind::Google,
+                label: "Google".to_string(),
+                enabled: true,
+                api_key: Some("test-key".to_string()),
+                model: Some("gemini-2.5-flash".to_string()),
+                base_url: None,
+            },
+            RemoteServiceConfig {
+                id: "local-ollama".to_string(),
+                kind: RemoteServiceKind::Ollama,
+                label: "Local Ollama".to_string(),
+                enabled: true,
+                api_key: None,
+                model: Some("llama3.1".to_string()),
+                base_url: Some("http://127.0.0.1:11434/v1".to_string()),
+            },
+        ];
+        persist_settings(&factory, &settings);
+
+        let candidates = factory
+            .build_enhancer_candidates()
+            .expect("candidate chain should build");
+        let labels = candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(labels.first().copied(), Some("Google (gemini-2.5-flash)"));
+        if super::is_apple_silicon_host() {
+            assert_eq!(labels.get(1).copied(), Some("Apple Foundation"));
+            assert_eq!(labels.get(2).copied(), Some("Local Ollama"));
+        } else {
+            assert_eq!(labels.get(1).copied(), Some("Local Ollama"));
+        }
+    }
+
+    #[test]
+    fn enhancer_candidates_allow_local_only_chain() {
+        let (_temp, factory) = build_factory();
+        let mut settings = AppSettings::default();
+        settings.ai.active_provider = AiProvider::None;
+        settings.ai.providers.foundation_apple.enabled = false;
+        settings.ai.remote_services = vec![RemoteServiceConfig {
+            id: "local-custom".to_string(),
+            kind: RemoteServiceKind::Custom,
+            label: "Local Custom".to_string(),
+            enabled: true,
+            api_key: None,
+            model: Some("qwen2.5".to_string()),
+            base_url: Some("http://localhost:8080/v1".to_string()),
+        }];
+        persist_settings(&factory, &settings);
+
+        let candidates = factory
+            .build_enhancer_candidates()
+            .expect("local candidate should build");
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].label, "Local Custom");
+    }
+
+    #[test]
+    fn ai_capability_status_reports_unavailable_when_no_candidate_exists() {
+        let (_temp, factory) = build_factory();
+        let mut settings = AppSettings::default();
+        settings.ai.active_provider = AiProvider::None;
+        settings.ai.providers.foundation_apple.enabled = false;
+        settings.ai.remote_services = Vec::new();
+        persist_settings(&factory, &settings);
+
+        let status = factory
+            .ai_capability_status()
+            .expect("capability status should load");
+        assert!(!status.available);
+        assert!(!status.fallback_available);
+        assert!(status
+            .unavailable_reason
+            .expect("reason should exist")
+            .contains("Settings > AI Services"));
     }
 }

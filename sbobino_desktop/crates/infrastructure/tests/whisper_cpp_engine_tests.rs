@@ -72,8 +72,12 @@ exit 0
     assert!(transcript.text.contains("second line"));
 
     let lines = emitted.lock().expect("emit lock poisoned").clone();
-    assert!(lines.iter().any(|line| line == &format!("{DELTA_REPLACE_PREFIX}first line")));
-    assert!(lines.iter().any(|line| line.contains("first line\nsecond line")));
+    assert!(lines
+        .iter()
+        .any(|line| line == &format!("{DELTA_REPLACE_PREFIX}first line")));
+    assert!(lines
+        .iter()
+        .any(|line| line.contains("first line\nsecond line")));
 }
 
 #[tokio::test]
@@ -237,8 +241,12 @@ exit 0
     assert_eq!(transcript_lines[1], "final line");
 
     let lines = emitted.lock().expect("emit lock poisoned").clone();
-    assert!(lines.iter().any(|line| line == &format!("{DELTA_REPLACE_PREFIX}repeated line")));
-    assert!(lines.iter().any(|line| line.contains("repeated line\nrepeated line")));
+    assert!(lines
+        .iter()
+        .any(|line| line == &format!("{DELTA_REPLACE_PREFIX}repeated line")));
+    assert!(lines
+        .iter()
+        .any(|line| line.contains("repeated line\nrepeated line")));
     assert!(lines.last().is_some_and(|line| line.contains("final line")));
 }
 
@@ -291,7 +299,10 @@ exit 0
 
     assert!(transcript.text.contains("first segment"));
     assert_eq!(
-        progress_updates.lock().expect("progress lock poisoned").as_slice(),
+        progress_updates
+            .lock()
+            .expect("progress lock poisoned")
+            .as_slice(),
         &[4.0],
         "expected progress to advance only from finalized segment timing",
     );
@@ -315,6 +326,8 @@ async fn transcribe_passes_whisper_options_to_cli() {
 out=""
 translate=0
 split_on_word=0
+print_colors=0
+json_full=0
 max_context=""
 threads=""
 processors=""
@@ -333,6 +346,8 @@ while [ $# -gt 0 ]; do
     -of) shift; out="$1" ;;
     -tr) translate=1 ;;
     -sow) split_on_word=1 ;;
+    -pc) print_colors=1 ;;
+    -ojf) json_full=1 ;;
     -mc) shift; max_context="$1" ;;
     -t) shift; threads="$1" ;;
     -p) shift; processors="$1" ;;
@@ -350,8 +365,8 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -n "$out" ]; then
-  printf "tr=%s sow=%s mc=%s t=%s p=%s tp=%s tpi=%s et=%s lpt=%s nth=%s wt=%s bo=%s bs=%s prompt=%s\n" \
-    "$translate" "$split_on_word" "$max_context" "$threads" "$processors" \
+  printf "tr=%s sow=%s pc=%s ojf=%s mc=%s t=%s p=%s tp=%s tpi=%s et=%s lpt=%s nth=%s wt=%s bo=%s bs=%s prompt=%s\n" \
+    "$translate" "$split_on_word" "$print_colors" "$json_full" "$max_context" "$threads" "$processors" \
     "$temp" "$temp_inc" "$entropy" "$logprob" "$no_speech" "$word" "$best_of" "$beam_size" "$prompt" > "${out}.txt"
 fi
 exit 0
@@ -394,6 +409,8 @@ exit 0
 
     assert!(transcript.text.contains("tr=1"));
     assert!(transcript.text.contains("sow=1"));
+    assert!(transcript.text.contains("pc=1"));
+    assert!(transcript.text.contains("ojf=1"));
     assert!(transcript.text.contains("mc=0"));
     assert!(transcript.text.contains("t=6"));
     assert!(transcript.text.contains("p=2"));
@@ -406,4 +423,154 @@ exit 0
     assert!(transcript.text.contains("bo=7"));
     assert!(transcript.text.contains("bs="));
     assert!(transcript.text.contains("prompt=Meeting about launch"));
+}
+
+#[tokio::test]
+async fn transcribe_emits_colorized_preview_without_polluting_final_text() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let script_path = temp.path().join("whisper-cli");
+    let models_dir = temp.path().join("models");
+    let input_wav = temp.path().join("audio.wav");
+
+    std::fs::create_dir_all(&models_dir).expect("failed to create models dir");
+    std::fs::write(models_dir.join("ggml-base.bin"), b"fake model")
+        .expect("failed to create model");
+    std::fs::write(&input_wav, b"RIFF....WAVE").expect("failed to create input wav");
+
+    write_executable_script(
+        &script_path,
+        r#"#!/bin/sh
+printf '[00:00:00.000 --> 00:00:01.000] \033[32mconfident\033[0m\n'
+printf '[00:00:01.000 --> 00:00:02.000] \033[33mcareful\033[0m\n'
+exit 0
+"#,
+    );
+
+    let engine = WhisperCppEngine::new(
+        script_path.to_string_lossy().to_string(),
+        models_dir.to_string_lossy().to_string(),
+    );
+
+    let emitted: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let emitted_clone = emitted.clone();
+
+    let transcript = engine
+        .transcribe(
+            &input_wav,
+            "ggml-base.bin",
+            "en",
+            &WhisperOptions::default(),
+            None,
+            Arc::new(move |line: String| {
+                emitted_clone.lock().expect("emit lock poisoned").push(line);
+            }),
+            Arc::new(|_seconds: f32| {}),
+        )
+        .await
+        .expect("transcription should succeed");
+
+    assert_eq!(transcript.text, "confident\ncareful");
+
+    let lines = emitted.lock().expect("emit lock poisoned").clone();
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("\u{001b}[32mconfident\u{001b}[0m")),
+        "expected ANSI-colored preview output"
+    );
+    assert!(
+        lines
+            .last()
+            .is_some_and(|line| line.contains("\u{001b}[33mcareful\u{001b}[0m")),
+        "expected latest preview snapshot to keep color escapes"
+    );
+}
+
+#[tokio::test]
+async fn transcribe_prefers_json_full_tokens_for_confidence_and_word_offsets() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let script_path = temp.path().join("whisper-cli");
+    let models_dir = temp.path().join("models");
+    let input_wav = temp.path().join("audio.wav");
+
+    std::fs::create_dir_all(&models_dir).expect("failed to create models dir");
+    std::fs::write(models_dir.join("ggml-base.bin"), b"fake model")
+        .expect("failed to create model");
+    std::fs::write(&input_wav, b"RIFF....WAVE").expect("failed to create input wav");
+
+    write_executable_script(
+        &script_path,
+        r#"#!/bin/sh
+out=""
+while [ $# -gt 0 ]; do
+  if [ "$1" = "-of" ]; then
+    shift
+    out="$1"
+  fi
+  shift
+done
+
+if [ -n "$out" ]; then
+  printf "hello world\n" > "${out}.txt"
+  cat > "${out}.json" <<'EOF'
+{
+  "transcription": [
+    {
+      "offsets": { "from": 0, "to": 1200 },
+      "text": "hello world",
+      "tokens": [
+        {
+          "text": "hello",
+          "offsets": { "from": 0, "to": 500 },
+          "p": 0.91
+        },
+        {
+          "text": "world",
+          "offsets": { "from": 600, "to": 1200 },
+          "p": 0.42
+        }
+      ]
+    }
+  ]
+}
+EOF
+fi
+exit 0
+"#,
+    );
+
+    let engine = WhisperCppEngine::new(
+        script_path.to_string_lossy().to_string(),
+        models_dir.to_string_lossy().to_string(),
+    );
+
+    let transcript = engine
+        .transcribe(
+            &input_wav,
+            "ggml-base.bin",
+            "en",
+            &WhisperOptions::default(),
+            None,
+            Arc::new(|_line: String| {}),
+            Arc::new(|_seconds: f32| {}),
+        )
+        .await
+        .expect("transcription should succeed");
+
+    assert_eq!(transcript.text, "hello world");
+    assert_eq!(transcript.segments.len(), 1);
+
+    let segment = &transcript.segments[0];
+    assert_eq!(segment.text, "hello world");
+    assert_eq!(segment.start_seconds, Some(0.0));
+    assert_eq!(segment.end_seconds, Some(1.2));
+    assert_eq!(segment.words.len(), 2);
+    assert_eq!(segment.words[0].text, "hello");
+    assert_eq!(segment.words[0].start_seconds, Some(0.0));
+    assert_eq!(segment.words[0].end_seconds, Some(0.5));
+    assert_eq!(segment.words[0].confidence, Some(0.91));
+    assert_eq!(segment.words[1].text, "world");
+    assert_eq!(segment.words[1].start_seconds, Some(0.6));
+    assert_eq!(segment.words[1].end_seconds, Some(1.2));
+    assert_eq!(segment.words[1].confidence, Some(0.42));
 }

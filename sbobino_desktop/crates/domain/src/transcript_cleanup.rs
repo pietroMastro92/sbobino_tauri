@@ -1,8 +1,15 @@
+use std::collections::HashMap;
+
 use crate::TimedSegment;
 
 const MIN_DUPLICATE_WORDS: usize = 4;
 const MIN_DUPLICATE_CHARS: usize = 12;
 const MAX_DUPLICATE_GAP_SECONDS: f32 = 1.5;
+const MAX_CONTEXTUAL_TOKEN_DELTA_RATIO: f32 = 0.18;
+const MIN_CONTEXTUAL_TOKEN_OVERLAP_RATIO: f32 = 0.58;
+const MIN_CONTEXTUAL_BIGRAM_OVERLAP_RATIO: f32 = 0.42;
+const MAX_CONTEXTUAL_NOVEL_TOKEN_RATIO: f32 = 0.12;
+const MIN_CONTEXTUAL_TOKEN_ALLOWANCE: usize = 3;
 
 pub fn minimize_transcript_repetitions(text: &str) -> String {
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
@@ -49,10 +56,12 @@ pub fn constrain_transcript_edit(source: &str, edited: &str) -> String {
         return normalized_source;
     }
 
-    if is_token_subsequence(
-        &tokenize_transcript_content(&normalized_source),
-        &tokenize_transcript_content(&normalized_edited),
-    ) {
+    let source_tokens = tokenize_transcript_content(&normalized_source);
+    let edited_tokens = tokenize_transcript_content(&normalized_edited);
+
+    if is_token_subsequence(&source_tokens, &edited_tokens)
+        || is_safe_contextual_transcript_edit(&source_tokens, &edited_tokens)
+    {
         normalized_edited
     } else {
         normalized_source
@@ -204,6 +213,84 @@ fn is_token_subsequence(source: &[String], candidate: &[String]) -> bool {
     }
 
     true
+}
+
+fn is_safe_contextual_transcript_edit(source: &[String], candidate: &[String]) -> bool {
+    if source.is_empty() || candidate.is_empty() {
+        return false;
+    }
+
+    if candidate.len() > source.len() && is_token_subsequence(candidate, source) {
+        return false;
+    }
+
+    let allowed_token_delta = ((source.len() as f32) * MAX_CONTEXTUAL_TOKEN_DELTA_RATIO).ceil()
+        as usize
+        + MIN_CONTEXTUAL_TOKEN_ALLOWANCE;
+    let token_delta = source.len().abs_diff(candidate.len());
+    if token_delta > allowed_token_delta {
+        return false;
+    }
+
+    let token_overlap = multiset_overlap_count(source, candidate);
+    let min_overlap_source =
+        ((source.len() as f32) * MIN_CONTEXTUAL_TOKEN_OVERLAP_RATIO).ceil() as usize;
+    let min_overlap_candidate =
+        ((candidate.len() as f32) * MIN_CONTEXTUAL_TOKEN_OVERLAP_RATIO).ceil() as usize;
+    if token_overlap < min_overlap_source || token_overlap < min_overlap_candidate {
+        return false;
+    }
+
+    let max_novel_tokens = ((candidate.len() as f32) * MAX_CONTEXTUAL_NOVEL_TOKEN_RATIO).ceil()
+        as usize
+        + MIN_CONTEXTUAL_TOKEN_ALLOWANCE;
+    let novel_tokens = candidate.len().saturating_sub(token_overlap);
+    if novel_tokens > max_novel_tokens {
+        return false;
+    }
+
+    let source_bigrams = build_token_ngrams(source, 2);
+    let candidate_bigrams = build_token_ngrams(candidate, 2);
+    if !source_bigrams.is_empty() && !candidate_bigrams.is_empty() {
+        let bigram_overlap = multiset_overlap_count(&source_bigrams, &candidate_bigrams);
+        let min_bigram_overlap =
+            ((source_bigrams.len() as f32) * MIN_CONTEXTUAL_BIGRAM_OVERLAP_RATIO).ceil() as usize;
+        if bigram_overlap < min_bigram_overlap {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn multiset_overlap_count(source: &[String], candidate: &[String]) -> usize {
+    let mut counts = HashMap::<&str, usize>::new();
+    for token in source {
+        *counts.entry(token.as_str()).or_insert(0) += 1;
+    }
+
+    let mut overlap = 0_usize;
+    for token in candidate {
+        if let Some(count) = counts.get_mut(token.as_str()) {
+            if *count > 0 {
+                *count -= 1;
+                overlap += 1;
+            }
+        }
+    }
+
+    overlap
+}
+
+fn build_token_ngrams(tokens: &[String], size: usize) -> Vec<String> {
+    if size == 0 || tokens.len() < size {
+        return Vec::new();
+    }
+
+    tokens
+        .windows(size)
+        .map(|window| window.join("\u{1f}"))
+        .collect()
 }
 
 fn tokenize_with_spans(value: &str) -> Vec<(String, usize, usize)> {
@@ -394,6 +481,23 @@ mod tests {
     fn constrain_transcript_edit_rejects_added_content() {
         let source = "hello world this is a test";
         let edited = "Hello world, this is a test. Added conclusion here.";
+
+        assert_eq!(constrain_transcript_edit(source, edited), source);
+    }
+
+    #[test]
+    fn constrain_transcript_edit_allows_contextual_term_fixes() {
+        let source = "ho usato la libreria keras tuner e scikit larn per preparare le pipeline e i modelli di deep lurning";
+        let edited = "Ho usato la libreria Keras Tuner e scikit-learn per preparare le pipeline e i modelli di deep learning.";
+
+        assert_eq!(constrain_transcript_edit(source, edited), edited);
+    }
+
+    #[test]
+    fn constrain_transcript_edit_rejects_large_rewrites() {
+        let source = "the candidate describes the research workflow with python keras and remote sensing data";
+        let edited =
+            "The speaker presents a polished summary of the project, its outcomes, and the future roadmap.";
 
         assert_eq!(constrain_transcript_edit(source, edited), source);
     }

@@ -16,7 +16,11 @@ use sbobino_domain::{
     minimize_transcript_repetitions, ArtifactKind, TranscriptArtifact,
 };
 
-use crate::{error::CommandError, state::AppState};
+use crate::{
+    ai_support::{missing_ai_provider_command_error, run_with_enhancer_fallback},
+    error::CommandError,
+    state::AppState,
+};
 
 fn default_true() -> bool {
     true
@@ -35,7 +39,7 @@ fn default_summary_action_items() -> bool {
 }
 
 fn default_summary_key_points_only() -> bool {
-    true
+    false
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -518,7 +522,9 @@ pub async fn export_artifact(
     let language = normalize_export_language(payload.language.as_deref());
     let segments = match payload.segments {
         Some(entries) if !entries.is_empty() => entries,
-        Some(_) if payload.content_override.is_some() => build_segments_from_text(&base_transcription),
+        Some(_) if payload.content_override.is_some() => {
+            build_segments_from_text(&base_transcription)
+        }
         _ => build_export_segments(&artifact, &base_transcription),
     };
     let export_content = build_export_content(
@@ -591,14 +597,16 @@ pub async fn chat_artifact(
 
     let enhancer = state
         .runtime_factory
-        .build_active_enhancer()
-        .map_err(|e| CommandError::new("runtime_factory", e))?
-        .ok_or_else(|| {
-            CommandError::new(
-                "missing_ai_provider",
-                "No AI provider is configured in Settings > AI Services.",
-            )
-        })?;
+        .build_enhancer_candidates()
+        .map_err(|e| CommandError::new("runtime_factory", e))?;
+    if enhancer.is_empty() {
+        let reason = state
+            .runtime_factory
+            .ai_capability_status()
+            .ok()
+            .and_then(|status| status.unavailable_reason);
+        return Err(missing_ai_provider_command_error(reason.as_deref()));
+    }
 
     let prompt = payload.prompt.trim();
     if prompt.is_empty() {
@@ -609,7 +617,10 @@ pub async fn chat_artifact(
     }
 
     let candidates = build_chat_context_candidates(&artifact, prompt, payload.context);
-    ask_with_overflow_fallback(enhancer.as_ref(), candidates)
+    run_with_enhancer_fallback(&enhancer, "chat", |active_enhancer| {
+        let candidates = candidates.clone();
+        Box::pin(async move { ask_with_overflow_fallback(active_enhancer, candidates).await })
+    })
         .await
         .map_err(CommandError::from)
 }
@@ -640,19 +651,25 @@ pub async fn optimize_artifact(
         .map(String::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or("");
+        .unwrap_or("")
+        .to_string();
 
-    let enhancer = state
+    let enhancers = state
         .runtime_factory
-        .build_active_enhancer()
+        .build_enhancer_candidates()
         .map_err(|e| CommandError::new("runtime_factory", e))?;
 
-    match enhancer {
-        Some(enhancer) => optimize_with_rag(enhancer.as_ref(), &text, language_code)
-            .await
-            .map_err(CommandError::from),
-        None => Ok(text),
+    if enhancers.is_empty() {
+        return Ok(text);
     }
+
+    run_with_enhancer_fallback(&enhancers, "optimize transcript", |enhancer| {
+        let text = text.clone();
+        let language_code = language_code.clone();
+        Box::pin(async move { optimize_with_rag(enhancer, &text, &language_code).await })
+    })
+    .await
+    .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -667,16 +684,18 @@ pub async fn summarize_artifact(
         .map_err(CommandError::from)?
         .ok_or_else(|| CommandError::new("not_found", "artifact not found"))?;
 
-    let enhancer = state
+    let enhancers = state
         .runtime_factory
-        .build_active_enhancer()
-        .map_err(|e| CommandError::new("runtime_factory", e))?
-        .ok_or_else(|| {
-            CommandError::new(
-                "missing_ai_provider",
-                "No AI provider is configured in Settings > AI Services.",
-            )
-        })?;
+        .build_enhancer_candidates()
+        .map_err(|e| CommandError::new("runtime_factory", e))?;
+    if enhancers.is_empty() {
+        let reason = state
+            .runtime_factory
+            .ai_capability_status()
+            .ok()
+            .and_then(|status| status.unavailable_reason);
+        return Err(missing_ai_provider_command_error(reason.as_deref()));
+    }
 
     let transcript = build_artifact_context_transcript(&artifact, payload.context);
     if transcript.trim().is_empty() {
@@ -688,7 +707,11 @@ pub async fn summarize_artifact(
 
     let instructions = build_summary_instructions(&payload);
 
-    summarize_with_rag(enhancer.as_ref(), &transcript, &instructions)
+    run_with_enhancer_fallback(&enhancers, "summarize transcript", |enhancer| {
+        let transcript = transcript.clone();
+        let instructions = instructions.clone();
+        Box::pin(async move { summarize_with_rag(enhancer, &transcript, &instructions).await })
+    })
         .await
         .map_err(CommandError::from)
 }
@@ -1002,7 +1025,7 @@ fn build_chat_context_candidates(
 fn build_summary_instructions(payload: &SummarizeArtifactPayload) -> String {
     let mut lines = vec![
         format!(
-            "Write a comprehensive, self-contained summary in {}.",
+            "Write a detailed, self-contained brief in {}.",
             language_display_name(&payload.language)
         ),
         format!(
@@ -1010,6 +1033,7 @@ fn build_summary_instructions(payload: &SummarizeArtifactPayload) -> String {
             language_display_name(&payload.language)
         ),
         "Produce only the final summary text. Do not add meta-commentary about the summarization process.".to_string(),
+        "Assume the reader has not listened to the recording. The summary must stand on its own and preserve the substance of the discussion.".to_string(),
     ];
 
     match (payload.sections, payload.bullet_points) {
@@ -1038,7 +1062,11 @@ fn build_summary_instructions(payload: &SummarizeArtifactPayload) -> String {
         );
     } else {
         lines.push(
-            "Be thorough and cover all major topics with supporting details, examples, and context."
+            "Be thorough and cover all major topics with supporting details, technical explanations, examples, numbers, named entities, and the relationships between ideas."
+                .to_string(),
+        );
+        lines.push(
+            "Do not settle for a terse recap: explain what was discussed, why it mattered, and how the different topics connect."
                 .to_string(),
         );
     }
@@ -1257,11 +1285,14 @@ fn build_direct_summary_prompt(transcript: &str, user_instructions: &str) -> Str
          User instructions (follow these exactly — including language, structure, and formatting preferences):\n\
          {user_instructions}\n\n\
          Requirements for the final summary:\n\
-         - Produce a substantive, polished document — not an abbreviated list of topics.\n\
+         - Produce a dense, polished document — not a terse recap or a sparse outline.\n\
          - Cover all major subjects discussed in the transcript with enough depth that a reader \
-         who has not heard the original audio would gain a clear understanding.\n\
+         who has not heard the original audio would understand the goals, reasoning, evidence, and outcomes.\n\
+         - Preserve specific details that matter: names, numbers, dates, technical terms, examples, constraints, and decisions.\n\
+         - Explain how topics relate to one another instead of listing them in isolation.\n\
+         - When the transcript is technical, keep the technical content explicit and accurate rather than generalizing it away.\n\
+         - If there are debates, alternatives, uncertainties, or tradeoffs, describe them clearly.\n\
          - Maintain logical flow between topics: use transitions and group related ideas together.\n\
-         - Preserve specific details (names, numbers, examples) that support the main points.\n\
          - Respect the user's language, structural, and formatting preferences exactly.\n\
          - Output ONLY the summary text. Do not add meta-commentary or labels like \"Summary:\".\n\n\
          Full transcript:\n{transcript}"
@@ -1275,19 +1306,19 @@ fn build_chunk_note_prompt(
     chunk: &str,
 ) -> String {
     format!(
-        "You are extracting detailed notes from a transcript chunk to support a comprehensive summary.\n\
-         Your goal is to capture ALL substantive content — not just bullet-point keywords.\n\n\
+        "You are extracting detailed notes from a transcript chunk to support a comprehensive final brief.\n\
+         Your goal is to capture ALL substantive content — not just keywords.\n\n\
          User instructions (follow these exactly):\n{user_instructions}\n\n\
          This is chunk {chunk_index}/{total_chunks} of the full transcript.\n\n\
          Extract the following from this chunk:\n\
-         - Main topics and arguments discussed, with enough context to understand them\n\
-         - Key facts, statistics, names, dates, and specific claims\n\
-         - Explanations, reasoning, and cause-effect relationships\n\
-         - Decisions made, action items, or next steps mentioned\n\
-         - Notable quotes or strong statements\n\
+         - Main topics, subtopics, and arguments discussed, with enough context to understand them\n\
+         - Key facts, statistics, names, dates, technical terminology, and specific claims\n\
+         - Explanations, reasoning, comparisons, and cause-effect relationships\n\
+         - Decisions made, open questions, risks, action items, or next steps mentioned\n\
+         - Examples, evidence, or concrete scenarios used by the speakers\n\
          - Any speaker attributions if present\n\n\
-         Write thorough, self-contained notes (not single-word bullets). \
-         Each note should be understandable on its own without the original transcript.\n\n\
+         Write thorough, self-contained notes, preferably in short prose bullets or compact paragraphs. \
+         Each note should be understandable on its own without the original transcript, and should preserve dense technical detail where present.\n\n\
          Transcript chunk:\n{chunk}"
     )
 }
@@ -1298,11 +1329,14 @@ fn build_summary_synthesis_prompt(chunk_notes: &str, user_instructions: &str) ->
          User instructions (follow these exactly — including language, structure, and formatting preferences):\n\
          {user_instructions}\n\n\
          Requirements for the final summary:\n\
-         - Produce a substantive, polished document — not an abbreviated list of topics.\n\
+         - Produce a dense, polished document — not a terse recap or a sparse outline.\n\
          - Cover all major subjects discussed in the transcript with enough depth that a reader \
-         who has not heard the original audio would gain a clear understanding.\n\
+         who has not heard the original audio would understand the goals, reasoning, evidence, and outcomes.\n\
+         - Preserve specific details that matter: names, numbers, dates, technical terms, examples, constraints, and decisions.\n\
+         - Explain how topics relate to one another instead of listing them in isolation.\n\
+         - When the transcript is technical, keep the technical content explicit and accurate rather than generalizing it away.\n\
+         - If there are debates, alternatives, uncertainties, or tradeoffs, describe them clearly.\n\
          - Maintain logical flow between topics: use transitions and group related ideas together.\n\
-         - Preserve specific details (names, numbers, examples) that support the main points.\n\
          - Respect the user's language, structural, and formatting preferences exactly.\n\
          - Output ONLY the summary text. Do not add meta-commentary or labels like \"Summary:\".\n\n\
          Chunk notes:\n{chunk_notes}"
@@ -2129,11 +2163,11 @@ mod tests {
 
     use super::{
         build_artifact_context_transcript, build_chat_context_candidates, build_export_content,
-        build_export_document, build_export_segments, build_summary_instructions,
-        chunk_text_by_words, is_context_window_error, optimize_with_rag,
-        render_plain_text_document, summarize_with_rag, ApplicationError, ArtifactAiContextOptions,
-        ArtifactKind, ExportStyle, SummarizeArtifactPayload, TranscriptArtifact,
-        TranscriptEnhancer,
+        build_chunk_note_prompt, build_direct_summary_prompt, build_export_document,
+        build_export_segments, build_summary_instructions, build_summary_synthesis_prompt,
+        chunk_text_by_words, is_context_window_error, optimize_with_rag, render_plain_text_document,
+        summarize_with_rag, ApplicationError, ArtifactAiContextOptions, ArtifactKind, ExportStyle,
+        SummarizeArtifactPayload, TranscriptArtifact, TranscriptEnhancer,
     };
 
     struct TrackingEnhancer {
@@ -2479,6 +2513,54 @@ mod tests {
         assert!(instructions.contains("Do not include timestamps in the final summary."));
         assert!(instructions.contains("Attribute statements to named speakers"));
         assert!(instructions.contains("Focus on hiring decisions."));
+    }
+
+    #[test]
+    fn summary_instructions_default_to_detailed_prose() {
+        let instructions = build_summary_instructions(&SummarizeArtifactPayload {
+            id: "artifact-2".to_string(),
+            language: "en".to_string(),
+            context: ArtifactAiContextOptions {
+                include_timestamps: false,
+                include_speakers: false,
+            },
+            sections: true,
+            bullet_points: false,
+            action_items: true,
+            key_points_only: false,
+            custom_prompt: None,
+        });
+
+        assert!(instructions.contains("Write a detailed, self-contained brief in English."));
+        assert!(instructions.contains("cover all major topics with supporting details, technical explanations, examples, numbers"));
+        assert!(instructions.contains("Do not settle for a terse recap"));
+        assert!(instructions.contains("Do not include timestamps in the final summary."));
+    }
+
+    #[test]
+    fn summary_prompts_require_dense_coverage_for_direct_and_chunked_paths() {
+        let direct_prompt = build_direct_summary_prompt(
+            "Technical transcript",
+            "Write in English with sections.",
+        );
+        assert!(direct_prompt.contains("dense, polished document"));
+        assert!(direct_prompt.contains("technical terms, examples, constraints, and decisions"));
+
+        let chunk_prompt = build_chunk_note_prompt(
+            1,
+            3,
+            "Write in English with sections.",
+            "Chunk transcript",
+        );
+        assert!(chunk_prompt.contains("technical terminology"));
+        assert!(chunk_prompt.contains("Examples, evidence, or concrete scenarios"));
+
+        let synthesis_prompt = build_summary_synthesis_prompt(
+            "Chunk 1 notes:\nDetails",
+            "Write in English with sections.",
+        );
+        assert!(synthesis_prompt.contains("dense, polished document"));
+        assert!(synthesis_prompt.contains("technical terms, examples, constraints, and decisions"));
     }
 
     #[test]

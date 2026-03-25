@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
   AiSettings,
+  AiCapabilityStatus,
   AppSettings,
   ChatArtifactPayload,
   ArtifactKind,
@@ -46,6 +47,10 @@ export async function saveSettingsPartial(
 
 export async function fetchAiProviders(): Promise<AiSettings> {
   return invoke<AiSettings>("get_ai_providers");
+}
+
+export async function fetchAiCapabilityStatus(): Promise<AiCapabilityStatus> {
+  return invoke<AiCapabilityStatus>("get_ai_capability_status");
 }
 
 export async function updateAiProviders(

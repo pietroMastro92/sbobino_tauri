@@ -9,7 +9,11 @@ use sbobino_domain::{
     PromptTemplate, TranscriptionSettings,
 };
 
-use crate::{error::CommandError, state::AppState};
+use crate::{
+    ai_support::{missing_ai_provider_command_error, run_with_enhancer_fallback},
+    error::CommandError,
+    state::AppState,
+};
 
 fn emit_settings_updated(app: &tauri::AppHandle, settings: &AppSettings) {
     let _ = app.emit("settings://updated", settings);
@@ -359,6 +363,16 @@ pub async fn reset_prompts(
 }
 
 #[tauri::command]
+pub async fn get_ai_capability_status(
+    state: State<'_, AppState>,
+) -> Result<sbobino_infrastructure::AiCapabilityStatus, CommandError> {
+    state
+        .runtime_factory
+        .ai_capability_status()
+        .map_err(|e| CommandError::new("runtime_factory", e))
+}
+
+#[tauri::command]
 pub async fn test_prompt(
     state: State<'_, AppState>,
     payload: TestPromptPayload,
@@ -388,67 +402,37 @@ pub async fn test_prompt(
         .unwrap_or(settings.transcription.language)
         .as_whisper_code()
         .to_string();
-    let active_provider = settings.ai.active_provider.clone();
-
-    let enhancer = match active_provider.clone() {
-        AiProvider::Gemini => state
-            .runtime_factory
-            .build_gemini_enhancer_with_overrides(Some(model.clone()), None, None)
-            .map_err(|e| CommandError::new("runtime_factory", e))?
-            .ok_or_else(|| {
-                CommandError::new(
-                    "validation",
-                    "Gemini API key is required to test prompts",
-                )
-            })
-            .map(|value| Box::new(value) as Box<dyn sbobino_application::TranscriptEnhancer>)?,
-        AiProvider::FoundationApple => state
-            .runtime_factory
-            .build_foundation_enhancer_with_overrides(None, None)
-            .map_err(|e| CommandError::new("runtime_factory", e))?
-            .ok_or_else(|| {
-                CommandError::new(
-                    "validation",
-                    "Foundation Model is unavailable. Verify Apple Intelligence is enabled on this Mac.",
-                )
-            })
-            .map(|value| Box::new(value) as Box<dyn sbobino_application::TranscriptEnhancer>)?,
-        AiProvider::None => {
-            return Err(CommandError::new(
-                "validation",
-                "Select an AI provider in Settings > AI Services before testing prompts.",
-            ));
-        }
-    };
-
-    let prompt_override = payload.prompt_override.as_deref();
     let task = payload.task.unwrap_or(PromptTask::Optimize);
+    let (optimize_prompt_override, summary_prompt_override) = match task {
+        PromptTask::Optimize => (payload.prompt_override.clone(), None),
+        PromptTask::Summary | PromptTask::Faq => (None, payload.prompt_override.clone()),
+    };
+    let enhancers = state
+        .runtime_factory
+        .build_enhancer_candidates_with_overrides(
+            Some(model.clone()),
+            optimize_prompt_override,
+            summary_prompt_override,
+        )
+        .map_err(|e| CommandError::new("runtime_factory", e))?;
+    if enhancers.is_empty() {
+        let reason = state
+            .runtime_factory
+            .ai_capability_status()
+            .ok()
+            .and_then(|status| status.unavailable_reason);
+        return Err(missing_ai_provider_command_error(reason.as_deref()));
+    }
 
     match task {
         PromptTask::Optimize => {
-            let output = match active_provider.clone() {
-                AiProvider::Gemini => {
-                    // Gemini supports direct prompt override in optimize.
-                    let gemini = state
-                        .runtime_factory
-                        .build_gemini_enhancer_with_overrides(Some(model.clone()), None, None)
-                        .map_err(|e| CommandError::new("runtime_factory", e))?
-                        .ok_or_else(|| {
-                            CommandError::new(
-                                "validation",
-                                "Gemini API key is required to test prompts",
-                            )
-                        })?;
-                    gemini
-                        .optimize_with_prompt(&input, &language, prompt_override)
-                        .await
-                        .map_err(CommandError::from)?
-                }
-                _ => enhancer
-                    .optimize(&input, &language)
-                    .await
-                    .map_err(CommandError::from)?,
-            };
+            let output = run_with_enhancer_fallback(&enhancers, "test optimize prompt", |enhancer| {
+                let input = input.clone();
+                let language = language.clone();
+                Box::pin(async move { enhancer.optimize(&input, &language).await })
+            })
+            .await
+            .map_err(CommandError::from)?;
 
             Ok(TestPromptResponse {
                 output: output.clone(),
@@ -458,28 +442,13 @@ pub async fn test_prompt(
             })
         }
         PromptTask::Summary | PromptTask::Faq => {
-            let output = match active_provider.clone() {
-                AiProvider::Gemini => {
-                    let gemini = state
-                        .runtime_factory
-                        .build_gemini_enhancer_with_overrides(Some(model.clone()), None, None)
-                        .map_err(|e| CommandError::new("runtime_factory", e))?
-                        .ok_or_else(|| {
-                            CommandError::new(
-                                "validation",
-                                "Gemini API key is required to test prompts",
-                            )
-                        })?;
-                    gemini
-                        .summarize_and_faq_with_prompt(&input, &language, prompt_override)
-                        .await
-                        .map_err(CommandError::from)?
-                }
-                _ => enhancer
-                    .summarize_and_faq(&input, &language)
-                    .await
-                    .map_err(CommandError::from)?,
-            };
+            let output = run_with_enhancer_fallback(&enhancers, "test summary prompt", |enhancer| {
+                let input = input.clone();
+                let language = language.clone();
+                Box::pin(async move { enhancer.summarize_and_faq(&input, &language).await })
+            })
+            .await
+            .map_err(CommandError::from)?;
 
             Ok(TestPromptResponse {
                 output: format!("Summary:\n{}\n\nFAQs:\n{}", output.summary, output.faqs),

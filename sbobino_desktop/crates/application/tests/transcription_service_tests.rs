@@ -120,6 +120,46 @@ impl TranscriptEnhancer for MockEnhancer {
     }
 }
 
+struct RetryableEnhancer {
+    label: &'static str,
+    optimize_calls: Arc<Mutex<usize>>,
+    summarize_calls: Arc<Mutex<usize>>,
+    fail_optimize_retryably: bool,
+}
+
+#[async_trait]
+impl TranscriptEnhancer for RetryableEnhancer {
+    async fn optimize(&self, text: &str, _language_code: &str) -> Result<String, ApplicationError> {
+        let mut optimize_calls = self
+            .optimize_calls
+            .lock()
+            .expect("retryable enhancer optimize lock poisoned");
+        *optimize_calls += 1;
+        if self.fail_optimize_retryably {
+            return Err(ApplicationError::PostProcessing(
+                "AI request failed: connection refused".to_string(),
+            ));
+        }
+        Ok(format!("{text}."))
+    }
+
+    async fn summarize_and_faq(
+        &self,
+        text: &str,
+        _language_code: &str,
+    ) -> Result<SummaryFaq, ApplicationError> {
+        let mut summarize_calls = self
+            .summarize_calls
+            .lock()
+            .expect("retryable enhancer summarize lock poisoned");
+        *summarize_calls += 1;
+        Ok(SummaryFaq {
+            summary: format!("{}::summary::{text}", self.label),
+            faqs: String::new(),
+        })
+    }
+}
+
 #[derive(Default)]
 struct InMemoryArtifactRepository {
     artifacts: Mutex<Vec<TranscriptArtifact>>,
@@ -224,7 +264,9 @@ impl ArtifactRepository for InMemoryArtifactRepository {
         artifact.summary = summary.to_string();
         artifact.faqs = faqs.to_string();
         if optimized_transcript.trim().is_empty() {
-            artifact.metadata.remove(HAS_OPTIMIZED_TRANSCRIPT_METADATA_KEY);
+            artifact
+                .metadata
+                .remove(HAS_OPTIMIZED_TRANSCRIPT_METADATA_KEY);
         } else {
             artifact.metadata.insert(
                 HAS_OPTIMIZED_TRANSCRIPT_METADATA_KEY.to_string(),
@@ -423,11 +465,9 @@ async fn run_file_transcription_without_ai_emits_expected_stages_and_persists() 
 
     assert_eq!(artifact.raw_transcript, "raw transcript");
     assert!(artifact.optimized_transcript.is_empty());
-    assert!(
-        !artifact
-            .metadata
-            .contains_key(HAS_OPTIMIZED_TRANSCRIPT_METADATA_KEY)
-    );
+    assert!(!artifact
+        .metadata
+        .contains_key(HAS_OPTIMIZED_TRANSCRIPT_METADATA_KEY));
     assert!(artifact.summary.is_empty());
     assert!(artifact.faqs.is_empty());
 
@@ -571,7 +611,7 @@ async fn run_file_transcription_with_ai_runs_enhancer_steps() {
             .metadata
             .get(HAS_OPTIMIZED_TRANSCRIPT_METADATA_KEY)
             .map(String::as_str),
-        Some("true")
+        None
     );
     assert_eq!(artifact.summary, "summary::meeting raw");
     assert_eq!(artifact.faqs, "faqs::meeting raw");
@@ -820,11 +860,9 @@ async fn run_file_transcription_keeps_raw_transcript_when_ai_fails() {
 
     assert_eq!(artifact.raw_transcript, "meeting raw");
     assert!(artifact.optimized_transcript.is_empty());
-    assert!(
-        !artifact
-            .metadata
-            .contains_key(HAS_OPTIMIZED_TRANSCRIPT_METADATA_KEY)
-    );
+    assert!(!artifact
+        .metadata
+        .contains_key(HAS_OPTIMIZED_TRANSCRIPT_METADATA_KEY));
     assert!(artifact.summary.is_empty());
     assert!(artifact.faqs.is_empty());
     assert_eq!(
@@ -832,6 +870,94 @@ async fn run_file_transcription_keeps_raw_transcript_when_ai_fails() {
             .optimize_calls
             .lock()
             .expect("enhancer optimize lock poisoned"),
+        1
+    );
+}
+
+#[tokio::test]
+async fn run_file_transcription_falls_back_to_secondary_ai_provider() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let input_path = temp.path().join("fallback.wav");
+    tokio::fs::write(&input_path, b"fake wav content")
+        .await
+        .expect("failed to create wav file");
+
+    let first_optimize_calls = Arc::new(Mutex::new(0));
+    let first_summarize_calls = Arc::new(Mutex::new(0));
+    let second_optimize_calls = Arc::new(Mutex::new(0));
+    let second_summarize_calls = Arc::new(Mutex::new(0));
+
+    let primary = Arc::new(RetryableEnhancer {
+        label: "remote",
+        optimize_calls: first_optimize_calls.clone(),
+        summarize_calls: first_summarize_calls.clone(),
+        fail_optimize_retryably: true,
+    });
+    let fallback = Arc::new(RetryableEnhancer {
+        label: "foundation",
+        optimize_calls: second_optimize_calls.clone(),
+        summarize_calls: second_summarize_calls.clone(),
+        fail_optimize_retryably: false,
+    });
+
+    let service = TranscriptionService::new(
+        Arc::new(MockTranscoder::default()),
+        Arc::new(MockSpeechEngine {
+            transcript: "meeting raw".to_string(),
+            segments: Vec::new(),
+        }),
+        primary,
+        Arc::new(InMemoryArtifactRepository::default()),
+    )
+    .with_fallback_enhancers(vec![fallback]);
+
+    let artifact = service
+        .run_file_transcription(
+            RunTranscriptionRequest {
+                job_id: "job-006".to_string(),
+                input_path: input_path.to_string_lossy().to_string(),
+                language: LanguageCode::En,
+                model: SpeechModel::Small,
+                enable_ai: true,
+                whisper_options: WhisperOptions::default(),
+                title: None,
+                parent_id: None,
+            },
+            Arc::new(|_| {}),
+            Arc::new(|_text: String| {}),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("transcription should succeed through fallback");
+
+    assert_eq!(artifact.raw_transcript, "meeting raw");
+    assert_eq!(artifact.optimized_transcript, "meeting raw.");
+    assert_eq!(
+        artifact.summary,
+        "foundation::summary::meeting raw."
+    );
+    assert_eq!(
+        *first_optimize_calls
+            .lock()
+            .expect("first optimize lock poisoned"),
+        1
+    );
+    assert_eq!(
+        *first_summarize_calls
+            .lock()
+            .expect("first summarize lock poisoned"),
+        0
+    );
+    assert_eq!(
+        *second_optimize_calls
+            .lock()
+            .expect("second optimize lock poisoned"),
+        1
+    );
+    assert_eq!(
+        *second_summarize_calls
+            .lock()
+            .expect("second summarize lock poisoned"),
         1
     );
 }

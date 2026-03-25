@@ -515,8 +515,29 @@ impl AppSettings {
     }
 
     pub fn ensure_prompt_integrity(&mut self) {
+        let default_templates = default_prompt_templates();
         if self.prompts.templates.is_empty() {
-            self.prompts.templates = default_prompt_templates();
+            self.prompts.templates = default_templates.clone();
+        } else {
+            for default_template in &default_templates {
+                if !default_template.builtin {
+                    continue;
+                }
+
+                if let Some(existing) = self
+                    .prompts
+                    .templates
+                    .iter_mut()
+                    .find(|template| template.id == default_template.id && template.builtin)
+                {
+                    existing.name = default_template.name.clone();
+                    existing.icon = default_template.icon.clone();
+                    existing.category = default_template.category.clone();
+                    existing.body = default_template.body.clone();
+                } else {
+                    self.prompts.templates.push(default_template.clone());
+                }
+            }
         }
 
         let has_optimize = self
@@ -566,21 +587,21 @@ pub fn default_prompt_templates() -> Vec<PromptTemplate> {
     vec![
         PromptTemplate {
             id: "builtin_bullet_points".to_string(),
-            name: "Bullet Points".to_string(),
-            icon: "list".to_string(),
+            name: "Detailed Brief".to_string(),
+            icon: "notebook".to_string(),
             category: PromptCategory::Summary,
-            body: "Turn this transcript into a concise bullet-point summary with key takeaways."
+            body: "Create a detailed, sectioned summary that reads like a high-quality briefing note. Preserve all major topics, technical details, examples, numbers, decisions, risks, and next steps, and explain how the ideas connect. Prefer polished prose sections over terse bullets unless bullets materially improve clarity."
                 .to_string(),
             builtin: true,
             updated_at: "".to_string(),
         },
         PromptTemplate {
             id: "builtin_improve_grammar".to_string(),
-            name: "Improve Grammar & Punctuation".to_string(),
+            name: "Improve Transcript".to_string(),
             icon: "abc".to_string(),
             category: PromptCategory::Cleanup,
             body:
-                "Preserve the original wording. Only improve punctuation, capitalization, spacing, and paragraph breaks, and remove obvious accidental repetitions, looped sentences, and duplicated lines. Do not add new text."
+                "Preserve the original wording, structure, and order as much as possible. Improve punctuation, capitalization, spacing, and paragraph breaks, remove obvious accidental repetitions, and correct isolated ASR/transcription mistakes when the intended term is highly likely from context, especially for technical words and domain-specific jargon. If unsure, keep the original wording. Do not paraphrase whole sentences or invent new facts."
                     .to_string(),
             builtin: true,
             updated_at: "".to_string(),

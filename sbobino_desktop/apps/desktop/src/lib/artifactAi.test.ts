@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  aiActionsAvailable,
   buildChatArtifactPayload,
   buildSummaryArtifactPayload,
+  defaultSummaryControls,
   shouldAutostartSummary,
 } from "./artifactAi";
 
@@ -43,6 +45,18 @@ describe("artifactAi helpers", () => {
       keyPointsOnly: false,
       customPrompt: "   ",
     }).custom_prompt).toBeNull();
+  });
+
+  it("exposes detailed summary defaults", () => {
+    expect(defaultSummaryControls).toEqual({
+      includeTimestamps: false,
+      includeSpeakers: false,
+      sections: true,
+      bulletPoints: false,
+      actionItems: true,
+      keyPointsOnly: false,
+      language: "en",
+    });
   });
 
   it("builds chat payloads that preserve context toggles", () => {
@@ -89,5 +103,19 @@ describe("artifactAi helpers", () => {
       isGeneratingSummary: false,
       triggeredArtifactIds: new Set<string>(),
     })).toBe(false);
+  });
+
+  it("reports AI actions availability from backend capability status", () => {
+    expect(aiActionsAvailable(null)).toBe(false);
+    expect(aiActionsAvailable({
+      available: false,
+      fallback_available: false,
+      unavailable_reason: "No provider",
+    })).toBe(false);
+    expect(aiActionsAvailable({
+      available: true,
+      fallback_available: true,
+      unavailable_reason: null,
+    })).toBe(true);
   });
 });

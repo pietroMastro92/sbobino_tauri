@@ -17,8 +17,8 @@ use sbobino_domain::{
 
 use crate::{
     dto::{RunTranscriptionRequest, SummaryFaq},
-    ApplicationError, ArtifactRepository, AudioTranscoder, SpeakerDiarizationEngine,
-    SpeechToTextEngine, TranscriptEnhancer,
+    is_retryable_ai_provider_error, ApplicationError, ArtifactRepository, AudioTranscoder,
+    SpeakerDiarizationEngine, SpeechToTextEngine, TranscriptEnhancer,
 };
 
 const HAS_OPTIMIZED_TRANSCRIPT_METADATA_KEY: &str = "has_optimized_transcript";
@@ -29,6 +29,7 @@ pub struct TranscriptionService {
     speech_engine: Arc<dyn SpeechToTextEngine>,
     speaker_diarizer: Option<Arc<dyn SpeakerDiarizationEngine>>,
     enhancer: Arc<dyn TranscriptEnhancer>,
+    fallback_enhancers: Vec<Arc<dyn TranscriptEnhancer>>,
     artifacts: Arc<dyn ArtifactRepository>,
 }
 
@@ -44,6 +45,7 @@ impl TranscriptionService {
             speech_engine,
             speaker_diarizer: None,
             enhancer,
+            fallback_enhancers: Vec::new(),
             artifacts,
         }
     }
@@ -53,6 +55,14 @@ impl TranscriptionService {
         speaker_diarizer: Arc<dyn SpeakerDiarizationEngine>,
     ) -> Self {
         self.speaker_diarizer = Some(speaker_diarizer);
+        self
+    }
+
+    pub fn with_fallback_enhancers(
+        mut self,
+        fallback_enhancers: Vec<Arc<dyn TranscriptEnhancer>>,
+    ) -> Self {
+        self.fallback_enhancers = fallback_enhancers;
         self
     }
 
@@ -239,53 +249,27 @@ impl TranscriptionService {
                     None,
                     None,
                 );
+                self.emit(
+                    &emit_progress,
+                    &request.job_id,
+                    JobStage::Summarizing,
+                    "Generating summary and FAQs",
+                    80,
+                    None,
+                    None,
+                );
 
                 match self
                     .run_cancellable(
                         &cancellation_token,
-                        self.enhancer
-                            .optimize(&raw_transcript, request.language.as_whisper_code()),
+                        self.run_ai_post_processing(
+                            &raw_transcript,
+                            request.language.as_whisper_code(),
+                        ),
                     )
                     .await
                 {
-                    Ok(optimized) => {
-                        let constrained_optimized =
-                            constrain_transcript_edit(&raw_transcript, &optimized);
-                        self.emit(
-                            &emit_progress,
-                            &request.job_id,
-                            JobStage::Summarizing,
-                            "Generating summary and FAQs",
-                            80,
-                            None,
-                            None,
-                        );
-
-                        let summary_faq = match self
-                            .run_cancellable(
-                                &cancellation_token,
-                                self.enhancer.summarize_and_faq(
-                                    &constrained_optimized,
-                                    request.language.as_whisper_code(),
-                                ),
-                            )
-                            .await
-                        {
-                            Ok(value) => value,
-                            Err(ApplicationError::Cancelled) => {
-                                return Err(ApplicationError::Cancelled);
-                            }
-                            Err(error) => {
-                                warn!("summary/faq generation skipped after optimization: {error}");
-                                SummaryFaq {
-                                    summary: String::new(),
-                                    faqs: String::new(),
-                                }
-                            }
-                        };
-
-                        (constrained_optimized, summary_faq, true)
-                    }
+                    Ok(result) => result,
                     Err(ApplicationError::Cancelled) => return Err(ApplicationError::Cancelled),
                     Err(error) => {
                         warn!("ai optimization skipped; keeping raw transcript: {error}");
@@ -424,6 +408,61 @@ impl TranscriptionService {
         }
 
         result
+    }
+
+    async fn run_ai_post_processing(
+        &self,
+        raw_transcript: &str,
+        language_code: &str,
+    ) -> Result<(String, SummaryFaq, bool), ApplicationError> {
+        let mut last_retryable_error: Option<ApplicationError> = None;
+
+        for enhancer in self.ordered_enhancers() {
+            let optimized = match enhancer.optimize(raw_transcript, language_code).await {
+                Ok(value) => value,
+                Err(error) if is_retryable_ai_provider_error(&error) => {
+                    last_retryable_error = Some(error);
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+
+            let constrained_optimized = constrain_transcript_edit(raw_transcript, &optimized);
+            let has_optimized_transcript = constrained_optimized != raw_transcript;
+
+            let summary_faq = match enhancer
+                .summarize_and_faq(&constrained_optimized, language_code)
+                .await
+            {
+                Ok(value) => value,
+                Err(error) if is_retryable_ai_provider_error(&error) => {
+                    last_retryable_error = Some(error);
+                    continue;
+                }
+                Err(error) => {
+                    warn!("summary/faq generation skipped after optimization: {error}");
+                    SummaryFaq {
+                        summary: String::new(),
+                        faqs: String::new(),
+                    }
+                }
+            };
+
+            return Ok((constrained_optimized, summary_faq, has_optimized_transcript));
+        }
+
+        Err(last_retryable_error.unwrap_or_else(|| {
+            ApplicationError::PostProcessing(
+                "no AI provider was able to process the transcript".to_string(),
+            )
+        }))
+    }
+
+    fn ordered_enhancers(&self) -> Vec<Arc<dyn TranscriptEnhancer>> {
+        let mut enhancers = Vec::with_capacity(1 + self.fallback_enhancers.len());
+        enhancers.push(self.enhancer.clone());
+        enhancers.extend(self.fallback_enhancers.iter().cloned());
+        enhancers
     }
 
     pub async fn list_recent_artifacts(

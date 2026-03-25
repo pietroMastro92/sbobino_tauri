@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use serde::Deserialize;
 use tokio::fs;
 use tokio::io::AsyncRead;
 use tokio::process::Command;
@@ -29,11 +30,49 @@ pub struct WhisperCppEngine {
 #[derive(Default)]
 struct TranscriptCollector {
     segments: Vec<TimedSegment>,
+    preview_lines: Vec<String>,
 }
 
 enum ParsedCliEvent {
-    Segment(TimedSegment),
+    Segment {
+        segment: TimedSegment,
+        preview_text: String,
+    },
     ProgressPercent(f32),
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct WhisperCliJsonOutput {
+    #[serde(default)]
+    transcription: Vec<WhisperCliJsonSegment>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct WhisperCliJsonSegment {
+    text: String,
+    #[serde(default)]
+    offsets: Option<WhisperCliJsonOffsets>,
+    #[serde(default)]
+    tokens: Vec<WhisperCliJsonToken>,
+    #[serde(default)]
+    speaker: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct WhisperCliJsonOffsets {
+    #[serde(default)]
+    from: Option<i64>,
+    #[serde(default)]
+    to: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct WhisperCliJsonToken {
+    text: String,
+    #[serde(default)]
+    offsets: Option<WhisperCliJsonOffsets>,
+    #[serde(default)]
+    p: Option<f32>,
 }
 
 impl WhisperCppEngine {
@@ -104,15 +143,49 @@ impl WhisperCppEngine {
             .map(|parsed| parsed.clamp(0.0, 100.0))
     }
 
-    fn parse_cli_line(raw_line: &str) -> Option<ParsedCliEvent> {
-        let cleaned = raw_line
+    fn clean_cli_display_line(raw_line: &str) -> String {
+        raw_line
             .replace("\u{001b}[2K", "")
-            .replace("\u{001b}[0m", "")
             .replace("[2K]", "")
             .replace("[BLANK_AUDIO]", "")
             .split('\r')
             .last()
             .unwrap_or("")
+            .trim()
+            .to_string()
+    }
+
+    fn strip_ansi_escape_codes(value: &str) -> String {
+        let mut output = String::with_capacity(value.len());
+        let mut chars = value.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            if ch == '\u{001b}' && chars.peek() == Some(&'[') {
+                let _ = chars.next();
+                while let Some(next) = chars.next() {
+                    if next == 'm' {
+                        break;
+                    }
+                    if !matches!(next, '0'..='9' | ';') {
+                        break;
+                    }
+                }
+                continue;
+            }
+
+            output.push(ch);
+        }
+
+        output
+    }
+
+    fn parse_cli_line(raw_line: &str) -> Option<ParsedCliEvent> {
+        let display_line = Self::clean_cli_display_line(raw_line);
+        if display_line.is_empty() {
+            return None;
+        }
+
+        let cleaned = Self::strip_ansi_escape_codes(&display_line)
             .trim()
             .to_string();
 
@@ -150,6 +223,7 @@ impl WhisperCppEngine {
         }
 
         let end_index = cleaned.find(']')?;
+        let display_end_index = display_line.find(']')?;
         let bracket_content = cleaned[1..end_index].trim();
         let (start_value, end_value) = bracket_content.split_once("-->")?;
         let start_seconds = Self::parse_timecode_seconds(start_value.trim());
@@ -162,6 +236,8 @@ impl WhisperCppEngine {
             return None;
         }
 
+        let preview_text = display_line[display_end_index + 1..].trim().to_string();
+
         let words = Self::build_word_candidates(&normalized, start_seconds, end_seconds);
         let segment = TimedSegment {
             text: normalized,
@@ -172,7 +248,10 @@ impl WhisperCppEngine {
             words,
         };
 
-        Some(ParsedCliEvent::Segment(segment))
+        Some(ParsedCliEvent::Segment {
+            segment,
+            preview_text,
+        })
     }
 
     fn build_word_candidates(
@@ -208,16 +287,18 @@ impl WhisperCppEngine {
         collector: &Arc<Mutex<TranscriptCollector>>,
         emit_partial: &Arc<dyn Fn(String) + Send + Sync>,
         segment: TimedSegment,
+        preview_text: String,
     ) {
-        let mut snapshot: Option<String> = None;
+        let mut preview_snapshot: Option<String> = None;
         if let Ok(mut state) = collector.lock() {
             state.segments.push(segment.clone());
-            snapshot = Some(Self::join_segment_text(&state.segments));
+            state.preview_lines.push(preview_text.clone());
+            preview_snapshot = Some(Self::join_preview_text(&state.preview_lines));
         }
 
         emit_partial(format!(
             "{DELTA_REPLACE_PREFIX}{}",
-            snapshot.unwrap_or(segment.text)
+            preview_snapshot.unwrap_or(preview_text)
         ));
     }
 
@@ -228,6 +309,90 @@ impl WhisperCppEngine {
             .filter(|segment| !segment.is_empty())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn join_preview_text(lines: &[String]) -> String {
+        lines
+            .iter()
+            .map(|line| line.trim())
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn milliseconds_to_seconds(value: Option<i64>) -> Option<f32> {
+        value.and_then(|milliseconds| {
+            if milliseconds < 0 {
+                None
+            } else {
+                Some(milliseconds as f32 / 1000.0)
+            }
+        })
+    }
+
+    fn parse_segments_from_output_json(
+        raw_json: &str,
+    ) -> Result<Vec<TimedSegment>, ApplicationError> {
+        let parsed: WhisperCliJsonOutput = serde_json::from_str(raw_json).map_err(|error| {
+            ApplicationError::SpeechToText(format!(
+                "failed to parse whisper-cli JSON output: {error}"
+            ))
+        })?;
+
+        Ok(parsed
+            .transcription
+            .into_iter()
+            .filter_map(|segment| {
+                let text = segment.text.trim().to_string();
+                if text.is_empty() {
+                    return None;
+                }
+
+                let start_seconds = Self::milliseconds_to_seconds(
+                    segment.offsets.as_ref().and_then(|offsets| offsets.from),
+                );
+                let end_seconds = Self::milliseconds_to_seconds(
+                    segment.offsets.as_ref().and_then(|offsets| offsets.to),
+                );
+                let speaker_label = segment
+                    .speaker
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string);
+
+                let words = segment
+                    .tokens
+                    .into_iter()
+                    .filter_map(|token| {
+                        let text = token.text.trim().to_string();
+                        if text.is_empty() {
+                            return None;
+                        }
+
+                        Some(TimedWord {
+                            text,
+                            start_seconds: Self::milliseconds_to_seconds(
+                                token.offsets.as_ref().and_then(|offsets| offsets.from),
+                            ),
+                            end_seconds: Self::milliseconds_to_seconds(
+                                token.offsets.as_ref().and_then(|offsets| offsets.to),
+                            ),
+                            confidence: token.p.filter(|value| value.is_finite()),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+
+                Some(TimedSegment {
+                    text,
+                    start_seconds,
+                    end_seconds,
+                    speaker_id: speaker_label.clone(),
+                    speaker_label,
+                    words,
+                })
+            })
+            .collect())
     }
 
     async fn consume_stream<R>(
@@ -249,11 +414,14 @@ impl WhisperCppEngine {
             raw_lines.push(raw.clone());
             if let Some(parsed_line) = Self::parse_cli_line(&raw) {
                 match parsed_line {
-                    ParsedCliEvent::Segment(segment) => {
+                    ParsedCliEvent::Segment {
+                        segment,
+                        preview_text,
+                    } => {
                         if let Some(end_seconds) = segment.end_seconds {
                             emit_progress_seconds(end_seconds);
                         }
-                        Self::collect_segment(&collector, &emit_partial, segment);
+                        Self::collect_segment(&collector, &emit_partial, segment, preview_text);
                     }
                     // The CLI prints internal progress updates that can run
                     // well ahead of the finalized segments we have actually
@@ -306,6 +474,7 @@ impl WhisperCppEngine {
             OUTPUT_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         let output_txt_path = output_base.with_extension("txt");
+        let output_json_path = output_base.with_extension("json");
 
         let mut command = Command::new(&self.binary_path);
 
@@ -402,6 +571,8 @@ impl WhisperCppEngine {
 
         command
             .arg("-otxt")
+            .arg("-ojf")
+            .arg("-pc")
             .arg("-pp")
             .arg("-of")
             .arg(&output_base)
@@ -476,18 +647,27 @@ impl WhisperCppEngine {
         })??;
         let stderr_output = stderr_lines.join("\n");
 
-        let segments = if let Ok(state) = collected.lock() {
-            collapse_consecutive_repeated_segments(&state.segments)
-        } else {
-            Vec::new()
-        };
-
         if !status.success() {
             return Err(ApplicationError::SpeechToText(format!(
                 "whisper-cli failed: {}",
                 stderr_output.trim()
             )));
         }
+
+        let streamed_segments = if let Ok(state) = collected.lock() {
+            collapse_consecutive_repeated_segments(&state.segments)
+        } else {
+            Vec::new()
+        };
+
+        let json_segments = match fs::read_to_string(&output_json_path).await {
+            Ok(content) => match Self::parse_segments_from_output_json(&content) {
+                Ok(segments) if !segments.is_empty() => Some(segments),
+                Ok(_) => None,
+                Err(_) => None,
+            },
+            Err(_) => None,
+        };
 
         let transcript_from_file = match fs::read_to_string(&output_txt_path).await {
             Ok(content) => {
@@ -501,10 +681,13 @@ impl WhisperCppEngine {
             Err(_) => None,
         };
 
-        let transcript = transcript_from_file.unwrap_or_else(|| Self::join_segment_text(&segments));
+        let transcript = transcript_from_file.unwrap_or_else(|| {
+            Self::join_segment_text(json_segments.as_deref().unwrap_or(&streamed_segments))
+        });
         let transcript = minimize_transcript_repetitions(&transcript);
 
         let _ = fs::remove_file(&output_txt_path).await;
+        let _ = fs::remove_file(&output_json_path).await;
 
         if transcript.is_empty() {
             return Err(ApplicationError::SpeechToText(
@@ -512,7 +695,11 @@ impl WhisperCppEngine {
             ));
         }
 
-        let segments = normalize_transcript_segments(&transcript, &segments, total_audio_seconds);
+        let segments = normalize_transcript_segments(
+            &transcript,
+            json_segments.as_deref().unwrap_or(&streamed_segments),
+            total_audio_seconds,
+        );
 
         Ok(TranscriptionOutput {
             text: transcript,

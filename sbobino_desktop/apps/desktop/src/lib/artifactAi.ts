@@ -1,8 +1,23 @@
 import type {
+  AiCapabilityStatus,
   ChatArtifactPayload,
   LanguageCode,
   SummarizeArtifactPayload,
 } from "../types";
+
+export const defaultSummaryControls = {
+  includeTimestamps: false,
+  includeSpeakers: false,
+  sections: true,
+  bulletPoints: false,
+  actionItems: true,
+  keyPointsOnly: false,
+  language: "en" as LanguageCode,
+};
+
+export function aiActionsAvailable(status: AiCapabilityStatus | null): boolean {
+  return Boolean(status?.available);
+}
 
 export function buildSummaryArtifactPayload(params: {
   id: string;

@@ -6,7 +6,7 @@ pub mod services;
 pub use dto::{
     ArtifactQuery, RealtimeDelta, RealtimeDeltaKind, RunTranscriptionRequest, SummaryFaq,
 };
-pub use error::ApplicationError;
+pub use error::{is_retryable_ai_provider_error, ApplicationError};
 pub use ports::{
     ArtifactRepository, AudioTranscoder, SettingsRepository, SpeakerDiarizationEngine,
     SpeechToTextEngine, TranscriptEnhancer,

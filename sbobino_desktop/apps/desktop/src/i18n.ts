@@ -309,7 +309,7 @@ const translations: AllTranslations = {
     "detail.chatCopyFailed": "Copy failed. Please try again.",
     "detail.noSegments": "No segments yet",
     "detail.improvingText": "Improving Text...",
-    "detail.improvingTextDesc": "AI is optimizing semantics and punctuation...",
+    "detail.improvingTextDesc": "AI is correcting punctuation and likely transcription mistakes...",
 
     // Inspector
     "inspector.copy": "Copy",
@@ -743,7 +743,7 @@ const translations: AllTranslations = {
     "detail.chatCopyFailed": "Copia non riuscita. Riprova.",
     "detail.noSegments": "Nessun segmento",
     "detail.improvingText": "Miglioramento testo...",
-    "detail.improvingTextDesc": "L'AI sta ottimizzando semantica e punteggiatura...",
+    "detail.improvingTextDesc": "L'AI sta correggendo punteggiatura e probabili errori di trascrizione...",
     "inspector.copy": "Copia",
     "inspector.audio": "Audio",
     "inspector.file": "File",
@@ -1187,7 +1187,7 @@ const translations: AllTranslations = {
     "detail.chatCopyFailed": "No se pudo copiar. Inténtalo de nuevo.",
     "detail.noSegments": "Aún no hay segmentos",
     "detail.improvingText": "Mejorando el texto...",
-    "detail.improvingTextDesc": "La IA está optimizando la semántica y la puntuación...",
+    "detail.improvingTextDesc": "La IA está corrigiendo la puntuacion y los probables errores de transcripcion...",
 
     // Inspector
     "inspector.copy": "Copiar",
@@ -1655,7 +1655,7 @@ const translations: AllTranslations = {
     "detail.chatCopyFailed": "Kopieren fehlgeschlagen. Bitte erneut versuchen.",
     "detail.noSegments": "Noch keine Segmente",
     "detail.improvingText": "Text wird verbessert...",
-    "detail.improvingTextDesc": "KI optimiert Semantik und Interpunktion...",
+    "detail.improvingTextDesc": "KI korrigiert Zeichensetzung und wahrscheinliche Transkriptionsfehler...",
 
     // Inspector
     "inspector.copy": "Kopieren",
