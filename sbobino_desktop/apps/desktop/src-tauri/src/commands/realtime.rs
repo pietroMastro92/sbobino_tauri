@@ -9,11 +9,7 @@ use uuid::Uuid;
 use sbobino_application::RealtimeDelta;
 use sbobino_domain::{ArtifactKind, LanguageCode, SpeechModel, TranscriptArtifact};
 
-use crate::{
-    ai_support::run_with_enhancer_fallback,
-    error::CommandError,
-    state::AppState,
-};
+use crate::{ai_support::run_with_enhancer_fallback, error::CommandError, state::AppState};
 
 #[derive(Debug, Deserialize)]
 pub struct StartRealtimePayload {
@@ -228,9 +224,11 @@ pub async fn stop_realtime(
                     let consolidated = consolidated.clone();
                     let language_code = language_code.clone();
                     Box::pin(async move {
-                        let next_optimized = enhancer.optimize(&consolidated, &language_code).await?;
-                        let summary_faq =
-                            enhancer.summarize_and_faq(&next_optimized, &language_code).await?;
+                        let next_optimized =
+                            enhancer.optimize(&consolidated, &language_code).await?;
+                        let summary_faq = enhancer
+                            .summarize_and_faq(&next_optimized, &language_code)
+                            .await?;
                         Ok((next_optimized, summary_faq))
                     })
                 })

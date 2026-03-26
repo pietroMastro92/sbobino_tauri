@@ -932,10 +932,7 @@ async fn run_file_transcription_falls_back_to_secondary_ai_provider() {
 
     assert_eq!(artifact.raw_transcript, "meeting raw");
     assert_eq!(artifact.optimized_transcript, "meeting raw.");
-    assert_eq!(
-        artifact.summary,
-        "foundation::summary::meeting raw."
-    );
+    assert_eq!(artifact.summary, "foundation::summary::meeting raw.");
     assert_eq!(
         *first_optimize_calls
             .lock()

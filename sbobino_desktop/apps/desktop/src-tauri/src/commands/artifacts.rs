@@ -13,7 +13,7 @@ use uuid::Uuid;
 use sbobino_application::{ApplicationError, ArtifactQuery, TranscriptEnhancer};
 use sbobino_domain::{
     constrain_transcript_edit, merge_optimized_transcript_sections,
-    minimize_transcript_repetitions, ArtifactKind, TranscriptArtifact,
+    minimize_transcript_repetitions, ArtifactKind, PromptTask, TranscriptArtifact,
 };
 
 use crate::{
@@ -121,6 +121,10 @@ const SUMMARY_CHUNK_TARGET_CHARS: usize = 4000;
 const SUMMARY_CHUNK_OVERLAP_WORDS: usize = 30;
 const SUMMARY_CHUNK_CONCURRENCY_LIMIT: usize = 3;
 const SUMMARY_SYNTHESIS_BUDGETS: &[usize] = &[12_000, 8_000, 5_000, 3_000];
+const LOW_CONFIDENCE_WORD_THRESHOLD: f32 = 0.58;
+const LOW_CONFIDENCE_SPAN_CONTINUATION_THRESHOLD: f32 = 0.72;
+const LOW_CONFIDENCE_CONTEXT_RADIUS_WORDS: usize = 3;
+const MAX_LOW_CONFIDENCE_PROMPT_SPANS: usize = 10;
 const SUMMARY_CONTEXT_OVERFLOW_MESSAGE: &str =
     "Exceeded model context window size. The app now uses chunked retrieval, but this request is still too large. Try a shorter custom prompt or fewer summary constraints.";
 
@@ -149,9 +153,13 @@ struct TimelineV2Segment {
 #[derive(Debug, Clone, Deserialize, Default)]
 struct TimelineV2Word {
     #[serde(default)]
+    text: String,
+    #[serde(default)]
     start_seconds: Option<f32>,
     #[serde(default)]
     end_seconds: Option<f32>,
+    #[serde(default)]
+    confidence: Option<f32>,
 }
 
 #[derive(Debug, Clone)]
@@ -159,6 +167,14 @@ struct TimelineContextSegment {
     text: String,
     time_label: Option<String>,
     speaker_label: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct LowConfidenceSpan {
+    suspect_text: String,
+    excerpt: String,
+    avg_confidence: f32,
+    time_label: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -621,8 +637,8 @@ pub async fn chat_artifact(
         let candidates = candidates.clone();
         Box::pin(async move { ask_with_overflow_fallback(active_enhancer, candidates).await })
     })
-        .await
-        .map_err(CommandError::from)
+    .await
+    .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -654,9 +670,19 @@ pub async fn optimize_artifact(
         .unwrap_or("")
         .to_string();
 
+    let settings = state
+        .settings_service
+        .snapshot()
+        .await
+        .map_err(CommandError::from)?;
+    let optimize_prompt_override = build_confidence_aware_optimize_prompt(
+        &artifact,
+        settings.prompt_for_task(PromptTask::Optimize),
+    );
+
     let enhancers = state
         .runtime_factory
-        .build_enhancer_candidates()
+        .build_enhancer_candidates_with_overrides(None, optimize_prompt_override, None)
         .map_err(|e| CommandError::new("runtime_factory", e))?;
 
     if enhancers.is_empty() {
@@ -712,8 +738,8 @@ pub async fn summarize_artifact(
         let instructions = instructions.clone();
         Box::pin(async move { summarize_with_rag(enhancer, &transcript, &instructions).await })
     })
-        .await
-        .map_err(CommandError::from)
+    .await
+    .map_err(CommandError::from)
 }
 
 fn effective_transcript(artifact: &TranscriptArtifact) -> String {
@@ -777,6 +803,190 @@ fn parse_timeline_context_segments(artifact: &TranscriptArtifact) -> Vec<Timelin
             })
         })
         .collect()
+}
+
+fn parse_timeline_document(artifact: &TranscriptArtifact) -> Option<TimelineV2Document> {
+    let raw = artifact
+        .metadata
+        .get("timeline_v2")
+        .map(String::as_str)
+        .unwrap_or_default()
+        .trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    serde_json::from_str::<TimelineV2Document>(raw).ok()
+}
+
+fn build_confidence_aware_optimize_prompt(
+    artifact: &TranscriptArtifact,
+    base_prompt: Option<String>,
+) -> Option<String> {
+    let low_confidence_spans = extract_low_confidence_spans(artifact);
+    let normalized_base_prompt = base_prompt
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    if low_confidence_spans.is_empty() {
+        return normalized_base_prompt;
+    }
+
+    let mut sections = Vec::new();
+    if let Some(base_prompt) = normalized_base_prompt {
+        sections.push(base_prompt);
+    }
+
+    sections.push(
+        "Confidence-aware guidance: Whisper provided word-level confidence scores. Treat the suspect spans below as soft evidence about where ASR mistakes are most likely. Be more willing to locally repair garbled or nonsensical wording inside these spans when the surrounding context makes the intended term highly likely. Outside these spans, stay conservative. If a suspect span is still ambiguous, keep the original wording."
+            .to_string(),
+    );
+
+    let low_confidence_lines = low_confidence_spans
+        .iter()
+        .map(|span| {
+            let percent = (span.avg_confidence * 100.0).round().clamp(0.0, 100.0) as i32;
+            match span.time_label.as_deref() {
+                Some(time_label) => format!(
+                    "- {percent}% confidence near {time_label}: suspect phrase \"{}\" in context \"{}\"",
+                    span.suspect_text, span.excerpt
+                ),
+                None => format!(
+                    "- {percent}% confidence: suspect phrase \"{}\" in context \"{}\"",
+                    span.suspect_text, span.excerpt
+                ),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    sections.push(format!(
+        "Low-confidence suspect spans from the original Whisper transcript:\n{low_confidence_lines}"
+    ));
+
+    Some(sections.join("\n\n"))
+}
+
+fn extract_low_confidence_spans(artifact: &TranscriptArtifact) -> Vec<LowConfidenceSpan> {
+    let Some(document) = parse_timeline_document(artifact) else {
+        return Vec::new();
+    };
+
+    let mut spans = Vec::new();
+    for segment in document.segments {
+        let segment_start = segment.start_seconds.filter(|value| value.is_finite());
+        let words: Vec<(String, Option<f32>, Option<f32>)> = segment
+            .words
+            .into_iter()
+            .filter_map(|word| {
+                normalize_timeline_word_text(&word.text).map(|text| {
+                    (
+                        text,
+                        word.confidence.filter(|value| value.is_finite()),
+                        word.start_seconds
+                            .filter(|value| value.is_finite())
+                            .or(segment_start),
+                    )
+                })
+            })
+            .collect();
+
+        if words.is_empty() {
+            continue;
+        }
+
+        let mut index = 0usize;
+        while index < words.len() {
+            let Some(confidence) = words[index].1 else {
+                index += 1;
+                continue;
+            };
+            if confidence > LOW_CONFIDENCE_WORD_THRESHOLD {
+                index += 1;
+                continue;
+            }
+
+            let span_start = index;
+            let mut span_end = index + 1;
+            let mut confidence_total = confidence;
+            let mut confidence_count = 1usize;
+
+            while span_end < words.len() {
+                let Some(next_confidence) = words[span_end].1 else {
+                    break;
+                };
+                if next_confidence > LOW_CONFIDENCE_SPAN_CONTINUATION_THRESHOLD {
+                    break;
+                }
+                confidence_total += next_confidence;
+                confidence_count += 1;
+                span_end += 1;
+            }
+
+            let context_start = span_start.saturating_sub(LOW_CONFIDENCE_CONTEXT_RADIUS_WORDS);
+            let context_end = (span_end + LOW_CONFIDENCE_CONTEXT_RADIUS_WORDS).min(words.len());
+            let suspect_text = words[span_start..span_end]
+                .iter()
+                .map(|(text, _, _)| text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let excerpt = words[context_start..context_end]
+                .iter()
+                .map(|(text, _, _)| text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let time_label = words[span_start]
+                .2
+                .map(format_mm_ss)
+                .filter(|value| !value.is_empty());
+
+            spans.push(LowConfidenceSpan {
+                suspect_text,
+                excerpt,
+                avg_confidence: confidence_total / confidence_count as f32,
+                time_label,
+            });
+
+            index = span_end;
+        }
+    }
+
+    spans.sort_by(|left, right| {
+        left.avg_confidence
+            .partial_cmp(&right.avg_confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut deduped = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for span in spans {
+        let key = format!(
+            "{}::{}",
+            span.suspect_text.to_lowercase(),
+            span.excerpt.to_lowercase()
+        );
+        if !seen.insert(key) {
+            continue;
+        }
+        deduped.push(span);
+        if deduped.len() >= MAX_LOW_CONFIDENCE_PROMPT_SPANS {
+            break;
+        }
+    }
+
+    deduped
+}
+
+fn normalize_timeline_word_text(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || is_whisper_control_token(trimmed) {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn is_whisper_control_token(token_text: &str) -> bool {
+    token_text.starts_with("[_") && token_text.ends_with(']')
 }
 
 fn resolve_timeline_segment_seconds(segment: &TimelineV2Segment) -> Option<f32> {
@@ -2162,11 +2372,12 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        build_artifact_context_transcript, build_chat_context_candidates, build_export_content,
-        build_chunk_note_prompt, build_direct_summary_prompt, build_export_document,
-        build_export_segments, build_summary_instructions, build_summary_synthesis_prompt,
-        chunk_text_by_words, is_context_window_error, optimize_with_rag, render_plain_text_document,
-        summarize_with_rag, ApplicationError, ArtifactAiContextOptions, ArtifactKind, ExportStyle,
+        build_artifact_context_transcript, build_chat_context_candidates, build_chunk_note_prompt,
+        build_confidence_aware_optimize_prompt, build_direct_summary_prompt, build_export_content,
+        build_export_document, build_export_segments, build_summary_instructions,
+        build_summary_synthesis_prompt, chunk_text_by_words, extract_low_confidence_spans,
+        is_context_window_error, optimize_with_rag, render_plain_text_document, summarize_with_rag,
+        ApplicationError, ArtifactAiContextOptions, ArtifactKind, ExportStyle,
         SummarizeArtifactPayload, TranscriptArtifact, TranscriptEnhancer,
     };
 
@@ -2366,6 +2577,34 @@ mod tests {
         artifact
     }
 
+    fn sample_artifact_with_confidence_timeline(text: &str) -> TranscriptArtifact {
+        let mut artifact = sample_artifact(text);
+        artifact.metadata.insert(
+            "timeline_v2".to_string(),
+            json!({
+                "version": 2,
+                "segments": [
+                    {
+                        "text": "Questo quesito riguarda Keras Tuner e JSON Schema.",
+                        "start_seconds": 12.0,
+                        "words": [
+                            { "text": "Questo", "confidence": 0.94, "start_seconds": 12.0 },
+                            { "text": "quesito", "confidence": 0.92, "start_seconds": 12.3 },
+                            { "text": "riguarda", "confidence": 0.87, "start_seconds": 12.7 },
+                            { "text": "Cheras", "confidence": 0.31, "start_seconds": 13.0 },
+                            { "text": "Tuner", "confidence": 0.42, "start_seconds": 13.3 },
+                            { "text": "e", "confidence": 0.96, "start_seconds": 13.5 },
+                            { "text": "GSM", "confidence": 0.27, "start_seconds": 13.9 },
+                            { "text": "Scheme", "confidence": 0.49, "start_seconds": 14.2 }
+                        ]
+                    }
+                ]
+            })
+            .to_string(),
+        );
+        artifact
+    }
+
     #[test]
     fn chunker_splits_and_progresses() {
         let input =
@@ -2538,20 +2777,49 @@ mod tests {
     }
 
     #[test]
-    fn summary_prompts_require_dense_coverage_for_direct_and_chunked_paths() {
-        let direct_prompt = build_direct_summary_prompt(
-            "Technical transcript",
-            "Write in English with sections.",
+    fn extract_low_confidence_spans_prioritizes_suspect_regions() {
+        let artifact = sample_artifact_with_confidence_timeline(
+            "Questo quesito riguarda Cheras Tuner e GSM Scheme.",
         );
+
+        let spans = extract_low_confidence_spans(&artifact);
+
+        assert!(!spans.is_empty());
+        assert_eq!(spans[0].suspect_text, "Cheras Tuner");
+        assert!(spans.iter().any(|span| span.suspect_text == "Cheras Tuner"));
+        assert!(spans.iter().any(|span| span.suspect_text == "GSM Scheme"));
+        assert!(spans
+            .iter()
+            .all(|span| span.excerpt.contains(&span.suspect_text)));
+    }
+
+    #[test]
+    fn confidence_aware_optimize_prompt_includes_low_confidence_hints() {
+        let artifact = sample_artifact_with_confidence_timeline(
+            "Questo quesito riguarda Cheras Tuner e GSM Scheme.",
+        );
+
+        let prompt = build_confidence_aware_optimize_prompt(
+            &artifact,
+            Some("Preserve technical terminology.".to_string()),
+        )
+        .expect("prompt should be generated");
+
+        assert!(prompt.contains("Preserve technical terminology."));
+        assert!(prompt.contains("Confidence-aware guidance"));
+        assert!(prompt.contains("Cheras Tuner"));
+        assert!(prompt.contains("GSM Scheme"));
+    }
+
+    #[test]
+    fn summary_prompts_require_dense_coverage_for_direct_and_chunked_paths() {
+        let direct_prompt =
+            build_direct_summary_prompt("Technical transcript", "Write in English with sections.");
         assert!(direct_prompt.contains("dense, polished document"));
         assert!(direct_prompt.contains("technical terms, examples, constraints, and decisions"));
 
-        let chunk_prompt = build_chunk_note_prompt(
-            1,
-            3,
-            "Write in English with sections.",
-            "Chunk transcript",
-        );
+        let chunk_prompt =
+            build_chunk_note_prompt(1, 3, "Write in English with sections.", "Chunk transcript");
         assert!(chunk_prompt.contains("technical terminology"));
         assert!(chunk_prompt.contains("Examples, evidence, or concrete scenarios"));
 

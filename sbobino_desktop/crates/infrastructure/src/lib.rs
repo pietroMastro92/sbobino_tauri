@@ -419,7 +419,10 @@ impl RuntimeTranscriptionFactory {
         })
     }
 
-    fn ordered_enhancer_candidate_specs(&self, settings: &AppSettings) -> Vec<EnhancerCandidateSpec> {
+    fn ordered_enhancer_candidate_specs(
+        &self,
+        settings: &AppSettings,
+    ) -> Vec<EnhancerCandidateSpec> {
         let mut specs = Vec::new();
 
         if settings.ai.active_provider == AiProvider::FoundationApple {
@@ -1731,7 +1734,10 @@ fn is_loopback_base_url(value: &str) -> bool {
         return false;
     };
 
-    matches!(url.host_str(), Some("localhost") | Some("127.0.0.1") | Some("::1"))
+    matches!(
+        url.host_str(),
+        Some("localhost") | Some("127.0.0.1") | Some("::1")
+    )
 }
 
 fn missing_models(models_dir: &Path) -> Vec<String> {

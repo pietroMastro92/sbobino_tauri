@@ -116,7 +116,12 @@ mod tests {
         let first_calls = Arc::new(AtomicUsize::new(0));
         let second_calls = Arc::new(AtomicUsize::new(0));
         let candidates = vec![
-            candidate("remote", "Remote", first_calls.clone(), Ok("done".to_string())),
+            candidate(
+                "remote",
+                "Remote",
+                first_calls.clone(),
+                Ok("done".to_string()),
+            ),
             candidate(
                 "foundation",
                 "Foundation",

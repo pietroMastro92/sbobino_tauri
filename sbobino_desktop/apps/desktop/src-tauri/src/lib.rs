@@ -30,9 +30,9 @@ use crate::commands::runtime::{
     get_transcription_start_preflight,
 };
 use crate::commands::settings::{
-    delete_prompt, get_ai_capability_status, get_ai_providers, get_settings,
-    get_settings_snapshot, list_gemini_models, list_prompts, reset_prompts, save_prompt,
-    test_prompt, update_ai_providers, update_settings, update_settings_partial,
+    delete_prompt, get_ai_capability_status, get_ai_providers, get_settings, get_settings_snapshot,
+    list_gemini_models, list_prompts, reset_prompts, save_prompt, test_prompt, update_ai_providers,
+    update_settings, update_settings_partial,
 };
 use crate::commands::transcription::{cancel_transcription, start_transcription};
 use crate::commands::updates::check_updates;

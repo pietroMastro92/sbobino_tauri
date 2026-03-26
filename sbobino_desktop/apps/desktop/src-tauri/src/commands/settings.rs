@@ -426,13 +426,14 @@ pub async fn test_prompt(
 
     match task {
         PromptTask::Optimize => {
-            let output = run_with_enhancer_fallback(&enhancers, "test optimize prompt", |enhancer| {
-                let input = input.clone();
-                let language = language.clone();
-                Box::pin(async move { enhancer.optimize(&input, &language).await })
-            })
-            .await
-            .map_err(CommandError::from)?;
+            let output =
+                run_with_enhancer_fallback(&enhancers, "test optimize prompt", |enhancer| {
+                    let input = input.clone();
+                    let language = language.clone();
+                    Box::pin(async move { enhancer.optimize(&input, &language).await })
+                })
+                .await
+                .map_err(CommandError::from)?;
 
             Ok(TestPromptResponse {
                 output: output.clone(),
@@ -442,13 +443,14 @@ pub async fn test_prompt(
             })
         }
         PromptTask::Summary | PromptTask::Faq => {
-            let output = run_with_enhancer_fallback(&enhancers, "test summary prompt", |enhancer| {
-                let input = input.clone();
-                let language = language.clone();
-                Box::pin(async move { enhancer.summarize_and_faq(&input, &language).await })
-            })
-            .await
-            .map_err(CommandError::from)?;
+            let output =
+                run_with_enhancer_fallback(&enhancers, "test summary prompt", |enhancer| {
+                    let input = input.clone();
+                    let language = language.clone();
+                    Box::pin(async move { enhancer.summarize_and_faq(&input, &language).await })
+                })
+                .await
+                .map_err(CommandError::from)?;
 
             Ok(TestPromptResponse {
                 output: format!("Summary:\n{}\n\nFAQs:\n{}", output.summary, output.faqs),
