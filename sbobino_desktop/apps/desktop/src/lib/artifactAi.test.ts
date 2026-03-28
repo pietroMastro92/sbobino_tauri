@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   aiActionsAvailable,
   buildChatArtifactPayload,
+  buildEmotionAnalysisPayload,
   buildSummaryArtifactPayload,
+  defaultEmotionControls,
   defaultSummaryControls,
+  parsePersistedEmotionAnalysis,
   shouldAutostartSummary,
 } from "./artifactAi";
 
@@ -71,6 +74,63 @@ describe("artifactAi helpers", () => {
       include_timestamps: false,
       include_speakers: true,
     });
+  });
+
+  it("builds emotion-analysis payloads from inspector controls", () => {
+    expect(buildEmotionAnalysisPayload({
+      id: "artifact-4",
+      language: "it",
+      includeTimestamps: true,
+      includeSpeakers: true,
+      speakerDynamics: false,
+    })).toEqual({
+      id: "artifact-4",
+      language: "it",
+      include_timestamps: true,
+      include_speakers: true,
+      speaker_dynamics: false,
+    });
+  });
+
+  it("exposes emotion-analysis defaults", () => {
+    expect(defaultEmotionControls).toEqual({
+      includeTimestamps: true,
+      includeSpeakers: false,
+      speakerDynamics: true,
+      language: "en",
+    });
+  });
+
+  it("parses persisted emotion analysis from artifact metadata", () => {
+    const result = parsePersistedEmotionAnalysis({
+      id: "artifact-5",
+      job_id: "job-1",
+      title: "Emotion test",
+      kind: "file",
+      input_path: "/tmp/demo.wav",
+      raw_transcript: "raw",
+      optimized_transcript: "",
+      summary: "",
+      faqs: "",
+      metadata: {
+        emotion_analysis_v1: JSON.stringify({
+          overview: {
+            primary_emotions: ["joy"],
+            emotional_arc: "Starts worried, ends calmer.",
+          },
+          timeline: [],
+          semantic_map: { nodes: [], edges: [], clusters: [] },
+          bridges: [],
+          reflection_prompts: ["What shifted?"],
+          narrative_markdown: "Narrative",
+        }),
+      },
+      created_at: "",
+      updated_at: "",
+    });
+
+    expect(result?.overview.primary_emotions).toEqual(["joy"]);
+    expect(result?.narrative_markdown).toBe("Narrative");
   });
 
   it("autostarts only once for empty summaries on ready artifacts", () => {

@@ -1,6 +1,7 @@
 import React, {
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
+  startTransition,
   useCallback,
   useEffect,
   useMemo,
@@ -26,6 +27,7 @@ import {
   FileAudio,
   FileText,
   Globe,
+  HeartPulse,
   History as HistoryIcon,
   House,
   Info,
@@ -53,6 +55,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
+  analyzeArtifactEmotions,
   cancelTranscription,
   chatArtifact,
   checkUpdates,
@@ -107,6 +110,24 @@ import {
   formatProvisioningAssetLabel,
   shouldOfferLocalModelsCta,
 } from "./lib/provisioningUi";
+import {
+  getArtifactDiarizationUiState,
+  normalizeJobFailureMessage,
+} from "./lib/diarizationUi";
+import { loadInitialAppBootstrapData } from "./lib/appBootstrap";
+import {
+  moveSpeakerColorMapEntry,
+  normalizeSpeakerColorKey,
+  resolveSpeakerColor,
+  sanitizeSpeakerColorMap,
+  setSpeakerColorForKey,
+} from "./lib/speakerColors";
+import { renameSpeakerInTimeline } from "./lib/speakerTimeline";
+import {
+  clampPercentage,
+  formatProgressPercentageLabel,
+  makeProgressVisible,
+} from "./lib/progressUi";
 import { stripAnsi } from "./lib/ansiText";
 import { buildConfidenceTranscript } from "./lib/whisperConfidence";
 import { useAppStore } from "./state/useAppStore";
@@ -115,6 +136,7 @@ import type {
   AppearanceMode,
   AppSettings,
   ArtifactKind,
+  EmotionAnalysisResult,
   JobProgress,
   LanguageCode,
   PromptTask,
@@ -150,8 +172,11 @@ import { shouldStartWindowDrag } from "./lib/windowDrag";
 import {
   aiActionsAvailable,
   buildChatArtifactPayload,
+  buildEmotionAnalysisPayload,
   buildSummaryArtifactPayload,
+  defaultEmotionControls,
   defaultSummaryControls,
+  parsePersistedEmotionAnalysis,
   shouldAutostartSummary,
 } from "./lib/artifactAi";
 
@@ -181,7 +206,7 @@ type Section =
   | "deleted_history"
   | "detail"
   | "realtime";
-type DetailMode = "transcript" | "segments" | "summary" | "chat";
+type DetailMode = "transcript" | "segments" | "summary" | "emotion" | "chat";
 type TranscriptViewMode = "optimized" | "original";
 type InspectorMode = "details" | "info";
 type SettingsPane =
@@ -194,6 +219,26 @@ type SettingsPane =
   | "advanced";
 type ChatMessage = { role: "user" | "assistant"; text: string };
 const HAS_OPTIMIZED_TRANSCRIPT_METADATA_KEY = "has_optimized_transcript";
+const EMOTION_ANALYSIS_METADATA_KEY = "emotion_analysis_v1";
+const EMOTION_ANALYSIS_GENERATED_AT_METADATA_KEY = "emotion_analysis_generated_at";
+const SETTINGS_PANES: SettingsPane[] = [
+  "general",
+  "transcription",
+  "whisper_cpp",
+  "local_models",
+  "ai_services",
+  "prompts",
+  "advanced",
+];
+
+function parseStandaloneSettingsPaneFromLocation(): SettingsPane {
+  const pane = new URLSearchParams(window.location.search).get("pane");
+  return SETTINGS_PANES.includes(pane as SettingsPane) ? (pane as SettingsPane) : "general";
+}
+
+function shouldPreloadSettingsDiagnostics(pane: SettingsPane): boolean {
+  return pane === "transcription" || pane === "local_models";
+}
 
 function findPreviousUserQuestion(messages: ChatMessage[], assistantIndex: number): string {
   for (let index = assistantIndex - 1; index >= 0; index -= 1) {
@@ -233,9 +278,16 @@ type DetailSegment = {
   sourceIndex: number;
   time: string;
   line: string;
+  speakerId: string | null;
   speakerLabel: string | null;
   startSeconds: number | null;
   endSeconds: number | null;
+};
+
+type KnownSpeaker = {
+  id: string;
+  label: string;
+  color: string;
 };
 
 type PromptTestState = {
@@ -244,15 +296,19 @@ type PromptTestState = {
   running: boolean;
 };
 
-type TrimmedAudioDraft = {
+type TrimmedAudioValidationSnapshot = {
   path: string;
+  durationSeconds: number;
+  fileSizeBytes: number;
+};
+
+type TrimmedAudioDraft = TrimmedAudioValidationSnapshot & {
   parentArtifactId: string;
   title: string;
   regions: TrimRegion[];
 };
 
-type PreparedImportTrimDraft = {
-  path: string;
+type PreparedImportTrimDraft = TrimmedAudioValidationSnapshot & {
   sourcePath: string;
   title: string;
   regions: TrimRegion[];
@@ -292,6 +348,8 @@ const modelOptions: Array<{ value: SpeechModel; label: string }> = [
   { value: "medium", label: "Medium" },
   { value: "large_turbo", label: "Large Turbo" },
 ];
+
+const MIN_RETRANSCRIBE_TRIM_DURATION_SECONDS = 1.5;
 
 function guessAppleSiliconFromUA(): boolean {
   const ua = (navigator.userAgent ?? "").toLowerCase();
@@ -339,6 +397,7 @@ const promptTaskOptions: Array<{ value: PromptTask; label: string }> = [
   { value: "optimize", label: "Optimize transcript" },
   { value: "summary", label: "Summary" },
   { value: "faq", label: "FAQ" },
+  { value: "emotion_analysis", label: "Emotion analysis" },
 ];
 
 const fallbackGeminiModelOptions = [
@@ -487,6 +546,7 @@ function getDefaultSpeakerDiarizationSettings(): SpeakerDiarizationSettings {
   return {
     enabled: false,
     device: "cpu",
+    speaker_colors: {},
   };
 }
 
@@ -722,11 +782,15 @@ function parseTimelineV2Segments(timelineV2Json: string | null | undefined): Det
       const speakerLabel =
         parseNonEmptyText((segment as { speaker_label?: unknown }).speaker_label)
         ?? parseNonEmptyText((segment as { speaker_id?: unknown }).speaker_id);
+      const speakerId =
+        parseNonEmptyText((segment as { speaker_id?: unknown }).speaker_id)
+        ?? (speakerLabel ? normalizeSpeakerColorKey(speakerLabel) : null);
 
       return [{
         sourceIndex,
         time: formatTimelineTimestamp(anchorSeconds),
         line: text,
+        speakerId,
         speakerLabel,
         startSeconds: resolvedStartSeconds,
         endSeconds: resolvedEndSeconds,
@@ -763,13 +827,81 @@ function parseTimelineV2Document(
   }
 }
 
+function validateTrimmedAudioDraftForTranscription(
+  draft: TrimmedAudioValidationSnapshot | null | undefined,
+): string | null {
+  if (!draft) {
+    return null;
+  }
+
+  if (!draft.path.trim()) {
+    return t("detail.trimMissingPath", "Trimmed audio is missing. Apply the trim again before retranscribing.");
+  }
+
+  if (!Number.isFinite(draft.fileSizeBytes) || draft.fileSizeBytes <= 0) {
+    return t("detail.trimEmpty", "Trimmed audio is empty. Apply the trim again before retranscribing.");
+  }
+
+  if (!Number.isFinite(draft.durationSeconds) || draft.durationSeconds <= 0) {
+    return t("detail.trimInvalidDuration", "Trimmed audio duration is invalid. Apply the trim again before retranscribing.");
+  }
+
+  if (draft.durationSeconds < MIN_RETRANSCRIBE_TRIM_DURATION_SECONDS) {
+    return t(
+      "detail.trimTooShort",
+      "Trimmed audio is too short ({seconds}s). Select at least {minimum}s before retranscribing.",
+      {
+        seconds: draft.durationSeconds.toFixed(2),
+        minimum: MIN_RETRANSCRIBE_TRIM_DURATION_SECONDS.toFixed(1),
+      },
+    );
+  }
+
+  return null;
+}
+
+function formatSpeakerSummary(labels: string[]): string {
+  if (labels.length === 0) {
+    return "";
+  }
+
+  const visible = labels.slice(0, 3);
+  const extraCount = labels.length - visible.length;
+  if (extraCount <= 0) {
+    return visible.join(", ");
+  }
+
+  return `${visible.join(", ")} +${extraCount}`;
+}
+
 function normalizeSpeakerId(label: string): string {
-  const candidate = label
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  return candidate.length > 0 ? candidate : "speaker";
+  return normalizeSpeakerColorKey(label);
+}
+
+function colorWithAlpha(hexColor: string, alpha: number): string {
+  const normalized = hexColor.trim();
+  if (!/^#[0-9A-Fa-f]{6}$/.test(normalized)) {
+    return hexColor;
+  }
+
+  const numeric = Number.parseInt(normalized.slice(1), 16);
+  const red = (numeric >> 16) & 0xff;
+  const green = (numeric >> 8) & 0xff;
+  const blue = numeric & 0xff;
+  const safeAlpha = Math.max(0, Math.min(1, alpha));
+  return `rgba(${red}, ${green}, ${blue}, ${safeAlpha})`;
+}
+
+function buildSpeakerAccentStyle(color: string | null | undefined): CSSProperties | undefined {
+  if (!color) {
+    return undefined;
+  }
+
+  return {
+    borderColor: colorWithAlpha(color, 0.36),
+    background: colorWithAlpha(color, 0.12),
+    color,
+  };
 }
 
 function readSegmentSpeakerLabel(segment: Record<string, unknown>): string | null {
@@ -835,13 +967,6 @@ function formatShortDuration(seconds: number): string {
   const mm = String(Math.floor(seconds / 60));
   const ss = String(seconds % 60).padStart(2, "0");
   return `${mm}:${ss}`;
-}
-
-function clampPercentage(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  if (value < 0) return 0;
-  if (value > 100) return 100;
-  return value;
 }
 
 function percentageFromJobProgress(progress: JobProgress | null | undefined): number {
@@ -1152,7 +1277,7 @@ function formatTranscriptionPreflightMessage(preflight: TranscriptionStartPrefli
 }
 
 function ProgressRing({ percentage, size = 18 }: { percentage: number; size?: number }): JSX.Element {
-  const clamped = clampPercentage(percentage);
+  const clamped = makeProgressVisible(percentage);
   const ringStyle = {
     width: `${size}px`,
     height: `${size}px`,
@@ -1311,6 +1436,7 @@ function sanitizeSpeakerDiarizationSettings(
   return {
     enabled: Boolean(settings.enabled),
     device,
+    speaker_colors: sanitizeSpeakerColorMap(settings.speaker_colors),
   };
 }
 
@@ -1351,13 +1477,15 @@ function sanitizeWhisperOptions(options: WhisperOptions): WhisperOptions {
 type DetailCenterModeControlProps = {
   detailMode: DetailMode;
   summaryDisabled: boolean;
+  emotionDisabled: boolean;
   chatDisabled: boolean;
-  onSelect: (mode: "transcript" | "summary" | "chat") => void;
+  onSelect: (mode: "transcript" | "summary" | "emotion" | "chat") => void;
 };
 
 function DetailCenterModeControl({
   detailMode,
   summaryDisabled,
+  emotionDisabled,
   chatDisabled,
   onSelect,
 }: DetailCenterModeControlProps): JSX.Element {
@@ -1378,6 +1506,14 @@ function DetailCenterModeControl({
         disabled={summaryDisabled}
       >
         <Sparkles size={15} />
+      </button>
+      <button
+        className={detailMode === "emotion" ? "seg active" : "seg"}
+        onClick={() => onSelect("emotion")}
+        title={t("detail.emotion", "Emotion Analysis")}
+        disabled={emotionDisabled}
+      >
+        <HeartPulse size={15} />
       </button>
       <button
         className={detailMode === "chat" ? "seg active" : "seg"}
@@ -1403,7 +1539,7 @@ type DetailToolbarProps = {
   onToggleSidebar: () => void;
   onBack: () => void;
   onRenameTitle?: () => void;
-  onSelectMode: (mode: "transcript" | "summary" | "chat") => void;
+  onSelectMode: (mode: "transcript" | "summary" | "emotion" | "chat") => void;
   onOpenExport: () => void;
   onShowDetailsPanel: () => void;
   onHideDetailsPanel: () => void;
@@ -1414,6 +1550,7 @@ type DetailToolbarProps = {
   optimizeDisabled?: boolean;
   optimizeDisabledTitle?: string;
   showRetranscribe?: boolean;
+  isStartingTrimmedAudioRetranscription?: boolean;
   onRetranscribeTrimmedAudio?: () => void;
 };
 
@@ -1440,6 +1577,7 @@ function DetailToolbar({
   optimizeDisabled,
   optimizeDisabledTitle,
   showRetranscribe,
+  isStartingTrimmedAudioRetranscription,
   onRetranscribeTrimmedAudio,
 }: DetailToolbarProps): JSX.Element {
   const { t } = useTranslation();
@@ -1448,10 +1586,8 @@ function DetailToolbar({
     : rightSidebarOpen
       ? t("detail.hideDetailsPanel", "Hide details panel")
       : t("detail.showDetailsPanel", "Show details panel");
-  const roundedTranscriptionProgress = Math.round(clampPercentage(transcriptionProgress));
-  const transcriptionProgressText = roundedTranscriptionProgress === 100
-    ? "100%"
-    : `${String(roundedTranscriptionProgress).padStart(2, "0")}%`;
+  const roundedTranscriptionProgress = Math.round(makeProgressVisible(transcriptionProgress));
+  const transcriptionProgressText = formatProgressPercentageLabel(transcriptionProgress);
   const cancelTranscriptionTitle = `${t("detail.cancelTranscription", "Cancel transcription")} (${roundedTranscriptionProgress}%)`;
   return (
     <header
@@ -1493,6 +1629,7 @@ function DetailToolbar({
           <DetailCenterModeControl
             detailMode={detailMode}
             summaryDisabled={!hasArtifact}
+            emotionDisabled={!hasArtifact}
             chatDisabled={chatDisabled || !hasArtifact}
             onSelect={onSelectMode}
           />
@@ -1514,13 +1651,22 @@ function DetailToolbar({
           )}
           {detailMode === "transcript" && showRetranscribe && onRetranscribeTrimmedAudio && (
             <button
-              className="retranscribe-hover-button"
+              className={`retranscribe-hover-button ${isStartingTrimmedAudioRetranscription ? "is-busy" : ""}`}
               onClick={() => void onRetranscribeTrimmedAudio()}
-              title={t("detail.retranscribeTrimmed", "Retranscribe Trimmed Audio")}
+              title={
+                isStartingTrimmedAudioRetranscription
+                  ? t("detail.startingTrimmedRetranscription", "Starting trimmed transcription...")
+                  : t("detail.retranscribeTrimmed", "Retranscribe Trimmed Audio")
+              }
+              disabled={isStartingTrimmedAudioRetranscription}
             >
               <div className="button-content">
-                <Scissors size={14} />
-                <span className="detail-action-label">{t("detail.retranscribe", "Retranscribe")}</span>
+                {isStartingTrimmedAudioRetranscription ? <Clock3 size={14} /> : <Scissors size={14} />}
+                <span className="detail-action-label">
+                  {isStartingTrimmedAudioRetranscription
+                    ? t("home.starting", "Starting...")
+                    : t("detail.retranscribe", "Retranscribe")}
+                </span>
               </div>
             </button>
           )}
@@ -1650,6 +1796,9 @@ export type GroupedArtifact = TranscriptArtifact & { children?: GroupedArtifact[
 
 export function App({ standaloneSettingsWindow = false }: AppProps) {
   const { t, language } = useTranslation();
+  const initialStandaloneSettingsPane = standaloneSettingsWindow
+    ? parseStandaloneSettingsPaneFromLocation()
+    : "general";
   const {
     settings,
     selectedFile,
@@ -1711,7 +1860,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   }, [preferredAppearanceMode]);
 
   const [section, setSection] = useState<Section>("home");
-  const [settingsPane, setSettingsPane] = useState<SettingsPane>("general");
+  const [settingsPane, setSettingsPane] = useState<SettingsPane>(initialStandaloneSettingsPane);
   const [settingsQuery, setSettingsQuery] = useState("");
   const [showModelManager, setShowModelManager] = useState(false);
   const [detailMode, setDetailMode] = useState<DetailMode>("transcript");
@@ -1767,6 +1916,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       // Clear all
       setOpenArtifacts([]);
       setActiveArtifactId(null);
+      setDraftEmotionAnalysis(null);
       return;
     }
     setOpenArtifacts((prev) => {
@@ -1787,6 +1937,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   const [showConfidenceColors, setShowConfidenceColors] = useState(false);
   const [draftSummary, setDraftSummary] = useState("");
   const [draftFaqs, setDraftFaqs] = useState("");
+  const [draftEmotionAnalysis, setDraftEmotionAnalysis] = useState<EmotionAnalysisResult | null>(null);
   const [showExportSheet, setShowExportSheet] = useState(false);
   const [renameTarget, setRenameTarget] = useState<TranscriptArtifact | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
@@ -1876,13 +2027,19 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   const [summaryKeyPointsOnly, setSummaryKeyPointsOnly] = useState(defaultSummaryControls.keyPointsOnly);
   const [summaryLanguage, setSummaryLanguage] = useState<LanguageCode>(defaultSummaryControls.language);
   const [summaryCustomPrompt, setSummaryCustomPrompt] = useState("");
+  const [emotionIncludeTimestamps, setEmotionIncludeTimestamps] = useState(defaultEmotionControls.includeTimestamps);
+  const [emotionIncludeSpeakers, setEmotionIncludeSpeakers] = useState(defaultEmotionControls.includeSpeakers);
+  const [emotionSpeakerDynamics, setEmotionSpeakerDynamics] = useState(defaultEmotionControls.speakerDynamics);
+  const [emotionLanguage, setEmotionLanguage] = useState<LanguageCode>(defaultEmotionControls.language);
   const [chatIncludeTimestamps, setChatIncludeTimestamps] = useState(true);
   const [chatIncludeSpeakers, setChatIncludeSpeakers] = useState(false);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
+  const [isGeneratingEmotionAnalysis, setIsGeneratingEmotionAnalysis] = useState(false);
   const [audioDurationSeconds, setAudioDurationSeconds] = useState(0);
   const [preparedImportTrimDraft, setPreparedImportTrimDraft] = useState<PreparedImportTrimDraft | null>(null);
   const [trimRegions, setTrimRegions] = useState<TrimRegion[]>([]);
   const [trimmedAudioDraft, setTrimmedAudioDraft] = useState<TrimmedAudioDraft | null>(null);
+  const [trimRetranscriptionError, setTrimRetranscriptionError] = useState<string | null>(null);
   const [activeDetailContext, setActiveDetailContext] = useState<ActiveDetailContext | null>(null);
 
   const activeJobIdRef = useRef<string | null>(activeJobId);
@@ -1963,6 +2120,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     if (activeArtifact.id !== trimmedAudioDraft.parentArtifactId) {
       setTrimmedAudioDraft(null);
       setTrimRegions([]);
+      setTrimRetranscriptionError(null);
     }
   }, [activeArtifact, trimmedAudioDraft]);
 
@@ -1995,7 +2153,17 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   }, [rightSidebarOpen]);
 
   useEffect(() => {
-    if (standaloneSettingsWindow && settingsPane === "local_models") {
+    if (!standaloneSettingsWindow) {
+      return;
+    }
+
+    if (settingsPane === "local_models") {
+      void refreshProvisioningStatus();
+      void refreshProvisioningModels();
+      return;
+    }
+
+    if (settingsPane === "transcription") {
       void refreshRuntimeHealth();
     }
   }, [settingsPane, standaloneSettingsWindow]);
@@ -2017,62 +2185,88 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
   useEffect(() => {
     let disposed = false;
+    let deferredUpdatesTimer: number | null = null;
 
     void (async () => {
       try {
-        const [
-          initialSettings,
-          activeArtifactsSnapshot,
-          deletedArtifactsSnapshot,
-          provision,
-          models,
-        ] = await Promise.all([
-          fetchSettingsSnapshot(),
-          listRecentArtifacts(),
-          listDeletedArtifacts({ limit: 200 }),
-          provisioningStatus(),
-          provisioningModels(),
-        ]);
+        const shouldPrimeSettingsDiagnostics =
+          standaloneSettingsWindow && shouldPreloadSettingsDiagnostics(initialStandaloneSettingsPane);
+        const shouldPrimeModelCatalog = standaloneSettingsWindow && initialStandaloneSettingsPane === "local_models";
+        const initialSettingsPromise = fetchSettingsSnapshot();
+        const initialRuntimeHealthPromise = shouldPrimeSettingsDiagnostics
+          ? fetchRuntimeHealth()
+          : Promise.resolve(null);
+        const initialProvisioningPromise = shouldPrimeSettingsDiagnostics
+          ? provisioningStatus()
+          : Promise.resolve(null);
+        const initialModelCatalogPromise = shouldPrimeModelCatalog
+          ? provisioningModels()
+          : Promise.resolve(null);
 
+        const initialSettings = await initialSettingsPromise;
+        if (disposed) return;
+
+        const [initialRuntimeHealthResult, initialProvisioningResult, initialModelCatalogResult] =
+          await Promise.allSettled([
+            initialRuntimeHealthPromise,
+            initialProvisioningPromise,
+            initialModelCatalogPromise,
+          ]);
         if (disposed) return;
 
         const normalized = normalizeSettings(initialSettings);
         setSettings(normalized);
+        if (initialRuntimeHealthResult.status === "fulfilled" && initialRuntimeHealthResult.value) {
+          setRuntimeHealth(initialRuntimeHealthResult.value);
+        }
+        if (initialProvisioningResult.status === "fulfilled" && initialProvisioningResult.value) {
+          setProvisioningState(initialProvisioningResult.value);
+        }
+        if (initialModelCatalogResult.status === "fulfilled" && initialModelCatalogResult.value) {
+          setModelCatalog(initialModelCatalogResult.value);
+        }
         if (normalized.general.app_language) {
           changeLanguage(normalized.general.app_language);
         }
-        setArtifacts(activeArtifactsSnapshot);
-        setDeletedArtifacts(deletedArtifactsSnapshot);
-        setProvisioningState(provision);
-        setModelCatalog(models);
-        try {
-          const initialRuntimeHealth = await fetchRuntimeHealth();
-          if (!disposed) {
-            setRuntimeHealth(initialRuntimeHealth);
-          }
 
-          if (
-            !initialRuntimeHealth.whisper_cli_available ||
-            !initialRuntimeHealth.whisper_stream_available
-          ) {
-            try {
-              const ensured = await ensureTranscriptionRuntime();
-              if (!disposed && ensured.did_setup) {
-                const refreshed = await fetchRuntimeHealth();
-                if (!disposed) {
-                  setRuntimeHealth(refreshed);
-                }
+        void (async () => {
+          try {
+            const bootstrap = await loadInitialAppBootstrapData(
+              {
+                fetchSettingsSnapshot: async () => initialSettings,
+                listRecentArtifacts,
+                listDeletedArtifacts,
+                provisioningStatus,
+                provisioningModels,
+              },
+              { standaloneSettingsWindow },
+            );
+
+            if (disposed) return;
+
+            startTransition(() => {
+              if (bootstrap.activeArtifacts) {
+                setArtifacts(bootstrap.activeArtifacts);
               }
-            } catch {
-              // non-blocking: runtime setup is retried on transcription start
-            }
+              if (bootstrap.deletedArtifacts) {
+                setDeletedArtifacts(bootstrap.deletedArtifacts);
+              }
+              if (bootstrap.provisioning) {
+                setProvisioningState(bootstrap.provisioning);
+              }
+              if (bootstrap.modelCatalog) {
+                setModelCatalog(bootstrap.modelCatalog);
+              }
+            });
+          } catch {
+            // keep app interactive even if non-essential bootstrap data fails
           }
-        } catch {
-          // keep app booting even if health probe fails
-        }
+        })();
 
-        if (initialSettings.general.auto_update_enabled) {
-          await refreshUpdates(true, () => disposed);
+        if (!standaloneSettingsWindow && normalized.general.auto_update_enabled) {
+          deferredUpdatesTimer = window.setTimeout(() => {
+            void refreshUpdates(true, () => disposed);
+          }, 1200);
         }
       } catch (bootstrapError) {
         setError(formatUiError("error.bootstrapFailed", "Bootstrap failed", bootstrapError));
@@ -2081,23 +2275,18 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
     return () => {
       disposed = true;
+      if (deferredUpdatesTimer !== null) {
+        window.clearTimeout(deferredUpdatesTimer);
+      }
     };
-  }, [setArtifacts, setError, setSettings]);
+  }, [setArtifacts, setError, setSettings, standaloneSettingsWindow]);
 
   useEffect(() => {
     if (!standaloneSettingsWindow) {
       return;
     }
 
-    const pane = new URLSearchParams(window.location.search).get("pane");
-    if (!pane) {
-      return;
-    }
-
-    const validPanes: SettingsPane[] = ["general", "transcription", "whisper_cpp", "local_models", "ai_services", "prompts", "advanced"];
-    if (validPanes.includes(pane as SettingsPane)) {
-      setSettingsPane(pane as SettingsPane);
-    }
+    setSettingsPane(parseStandaloneSettingsPaneFromLocation());
   }, [standaloneSettingsWindow]);
 
   useEffect(() => {
@@ -2221,8 +2410,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     let unlisten: (() => void) | undefined;
     void (async () => {
       unlisten = await subscribeSettingsNavigate((pane) => {
-        const validPanes: SettingsPane[] = ["general", "transcription", "whisper_cpp", "local_models", "ai_services", "prompts", "advanced"];
-        if (validPanes.includes(pane as SettingsPane)) {
+        if (SETTINGS_PANES.includes(pane as SettingsPane)) {
           setSettingsPane(pane as SettingsPane);
         }
       });
@@ -2347,14 +2535,18 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
     void (async () => {
       const uProgress = await subscribeJobProgress((event) => {
-        const localizedEvent = {
+        const resolvedMessage = normalizeJobFailureMessage(
+          event.message,
+          formatJobMessage(event.stage),
+        );
+        const queueEvent = {
           ...event,
-          message: formatJobMessage(event.stage),
+          message: resolvedMessage,
         };
-        setQueueItems((previous) => pushOrReplaceQueueItem(previous, localizedEvent));
+        setQueueItems((previous) => pushOrReplaceQueueItem(previous, queueEvent));
         if (event.job_id === activeJobIdRef.current) {
           clearStartupWatchdog();
-          setProgress(event);
+          setProgress(queueEvent);
           if (event.stage === "cancelled" || event.stage === "failed") {
             clearStartupWatchdog();
             const failedContext = pendingTranscriptionContextRef.current.get(event.job_id);
@@ -2366,10 +2558,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             activeJobDeltaSequenceRef.current = -1;
             setActiveDetailContext(null);
             if (event.stage === "failed") {
-              setError(formatJobMessage("failed"));
-              if (!restoreDetailAfterFailedTranscription(failedContext?.detailContext)) {
-                setSection("home");
-              }
+              presentTranscriptionFailure(resolvedMessage, failedContext?.detailContext);
             } else if (!restoreDetailAfterFailedTranscription(failedContext?.detailContext)) {
               setSection("home");
             }
@@ -2413,8 +2602,11 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       if (unmounted) { uCompleted(); } else { unsubCompleted = uCompleted; }
 
       const uFailed = await subscribeJobFailed((payload) => {
-        const localizedFailureMessage = formatJobMessage("failed");
-        failedJobMessagesRef.current.set(payload.job_id, localizedFailureMessage);
+        const resolvedFailureMessage = normalizeJobFailureMessage(
+          payload.message,
+          formatJobMessage("failed"),
+        );
+        failedJobMessagesRef.current.set(payload.job_id, resolvedFailureMessage);
         const failedContext = pendingTranscriptionContextRef.current.get(payload.job_id);
         pendingTranscriptionContextRef.current.delete(payload.job_id);
         setQueueItems((previous) =>
@@ -2423,7 +2615,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
               ? {
                   ...entry,
                   stage: "failed",
-                  message: localizedFailureMessage,
+                  message: resolvedFailureMessage,
                   percentage: 100,
                 }
               : entry,
@@ -2439,10 +2631,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           setActiveJobTitle("");
           activeJobDeltaSequenceRef.current = -1;
           setActiveDetailContext(null);
-          setError(localizedFailureMessage);
-          if (!restoreDetailAfterFailedTranscription(failedContext?.detailContext)) {
-            setSection("home");
-          }
+          presentTranscriptionFailure(resolvedFailureMessage, failedContext?.detailContext);
         }
       });
       if (unmounted) { uFailed(); } else { unsubFailed = uFailed; }
@@ -2730,6 +2919,10 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     () => parseTimelineV2Segments(activeArtifact?.metadata?.timeline_v2),
     [activeArtifact?.metadata?.timeline_v2],
   );
+  const speakerColorMap = useMemo(
+    () => sanitizeSpeakerColorMap(settings?.transcription.speaker_diarization?.speaker_colors ?? {}),
+    [settings?.transcription.speaker_diarization?.speaker_colors],
+  );
 
   const selectedDetailSegment = useMemo(
     () =>
@@ -2747,15 +2940,51 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     [detailSegments, segmentContextMenu],
   );
 
-  const knownSpeakerLabels = useMemo(() => {
-    return Array.from(
-      new Set(
-        detailSegments
-          .map((segment) => segment.speakerLabel?.trim())
-          .filter((label): label is string => Boolean(label && label.length > 0)),
-      ),
-    ).sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
-  }, [detailSegments]);
+  const knownSpeakers = useMemo<KnownSpeaker[]>(() => {
+    const speakersById = new Map<string, { id: string; label: string }>();
+
+    detailSegments.forEach((segment) => {
+      const label = segment.speakerLabel?.trim();
+      if (!label) {
+        return;
+      }
+
+      const id = normalizeSpeakerColorKey(segment.speakerId ?? label);
+      if (!speakersById.has(id)) {
+        speakersById.set(id, { id, label });
+      }
+    });
+
+    return Array.from(speakersById.values())
+      .sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: "base" }))
+      .map((speaker) => ({
+        ...speaker,
+        color: resolveSpeakerColor({
+          speakerId: speaker.id,
+          speakerLabel: speaker.label,
+          colorMap: speakerColorMap,
+        }) ?? "#4F7CFF",
+      }));
+  }, [detailSegments, speakerColorMap]);
+  const knownSpeakerLabels = useMemo(
+    () => knownSpeakers.map((speaker) => speaker.label),
+    [knownSpeakers],
+  );
+  const artifactDiarizationUiState = useMemo(
+    () => getArtifactDiarizationUiState(activeArtifact, knownSpeakerLabels),
+    [activeArtifact, knownSpeakerLabels],
+  );
+  const selectedSegmentSpeakerLabel = selectedDetailSegment?.speakerLabel?.trim() ?? "";
+  const canRenameSelectedSpeaker =
+    detailMode === "segments"
+    && Boolean(activeArtifact)
+    && selectedSegmentSourceIndex !== null
+    && selectedSegmentSpeakerLabel.length > 0
+    && speakerDraft.trim().length > 0
+    && speakerDraft.trim() !== selectedSegmentSpeakerLabel;
+  const speakerDynamicsAvailable = knownSpeakerLabels.length > 1;
+  const emotionAnalysisGeneratedAt =
+    activeArtifact?.metadata?.[EMOTION_ANALYSIS_GENERATED_AT_METADATA_KEY] ?? "";
 
   useEffect(() => {
     if (selectedSegmentSourceIndex === null) {
@@ -3141,21 +3370,44 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     }));
   }
 
-  function hydrateDetail(artifact: TranscriptArtifact): void {
+  function syncArtifactDraftState(
+    artifact: TranscriptArtifact,
+    options?: {
+      resetChat?: boolean;
+      resetDetailMode?: boolean;
+      clearDetailContext?: boolean;
+    },
+  ): void {
     const optimizedTranscriptExists = hasPersistedOptimizedTranscript(artifact);
     setActiveArtifact(artifact);
-    setActiveDetailContext(null);
+    if (options?.clearDetailContext) {
+      setActiveDetailContext(null);
+    }
     setDraftTitle(artifact.title);
     setDraftTranscript(optimizedTranscriptExists ? artifact.optimized_transcript : artifact.raw_transcript);
     setOptimizedTranscriptAvailable(optimizedTranscriptExists);
     setTranscriptViewMode(optimizedTranscriptExists ? "optimized" : "original");
     setDraftSummary(artifact.summary);
     setDraftFaqs(artifact.faqs);
-    setChatInput("");
-    setChatHistory([]);
-    setCopiedChatMessageIndex(null);
-    setDetailMode("transcript");
-    setInspectorMode("details");
+    setDraftEmotionAnalysis(parsePersistedEmotionAnalysis(artifact));
+    setTrimRetranscriptionError(null);
+    if (options?.resetChat) {
+      setChatInput("");
+      setChatHistory([]);
+      setCopiedChatMessageIndex(null);
+    }
+    if (options?.resetDetailMode) {
+      setDetailMode("transcript");
+      setInspectorMode("details");
+    }
+  }
+
+  function hydrateDetail(artifact: TranscriptArtifact): void {
+    syncArtifactDraftState(artifact, {
+      resetChat: true,
+      resetDetailMode: true,
+      clearDetailContext: true,
+    });
   }
 
   useEffect(() => {
@@ -3237,6 +3489,33 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     hydrateDetail(detailContext.sourceArtifact);
     setSection("detail");
     return true;
+  }
+
+  function presentTranscriptionFailure(
+    message: string | null | undefined,
+    detailContext: ActiveDetailContext | null | undefined,
+  ): void {
+    const normalizedMessage = normalizeJobFailureMessage(
+      message,
+      t("error.transcriptionFailed", "Transcription failed."),
+    );
+    const isTrimFailure = Boolean(detailContext?.trimmedAudioDraft);
+    const restored = restoreDetailAfterFailedTranscription(detailContext);
+
+    if (isTrimFailure) {
+      setTrimRetranscriptionError(normalizedMessage);
+      setError(null);
+      if (!restored) {
+        setSection("detail");
+      }
+      return;
+    }
+
+    setTrimRetranscriptionError(null);
+    setError(normalizedMessage);
+    if (!restored) {
+      setSection("home");
+    }
   }
 
   async function persistSettings(updated: AppSettings, previous: AppSettings | null): Promise<void> {
@@ -3460,6 +3739,44 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         ),
       },
     }));
+    void refreshRuntimeHealth();
+    void refreshProvisioningStatus();
+  }
+
+  async function onPatchSpeakerDiarizationPreferences(
+    mutator: (current: SpeakerDiarizationSettings) => SpeakerDiarizationSettings,
+  ): Promise<void> {
+    await patchSettings((current) => ({
+      ...current,
+      transcription: {
+        ...current.transcription,
+        speaker_diarization: sanitizeSpeakerDiarizationSettings(
+          mutator(
+            current.transcription.speaker_diarization
+            ?? getDefaultSpeakerDiarizationSettings(),
+          ),
+        ),
+      },
+    }));
+  }
+
+  async function onSetSpeakerColor(
+    speakerKey: string,
+    nextColor: string,
+  ): Promise<void> {
+    try {
+      await onPatchSpeakerDiarizationPreferences((current) => ({
+        ...current,
+        speaker_colors: setSpeakerColorForKey(
+          current.speaker_colors,
+          speakerKey,
+          nextColor,
+        ),
+      }));
+      setError(null);
+    } catch (colorError) {
+      setError(formatUiError("error.speakerColorFailed", "Failed to save speaker color", colorError));
+    }
   }
 
   async function onPatchWhisperOptions(
@@ -3516,15 +3833,23 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     clearStartupWatchdog();
     setIsStarting(true);
     setError(null);
+    setTrimRetranscriptionError(null);
     try {
+      const trimValidationError = validateTrimmedAudioDraftForTranscription(
+        isTrimRetranscription ? trimmedAudioDraft : preparedHomeTrim,
+      );
+      if (trimValidationError) {
+        presentTranscriptionFailure(trimValidationError, nextDetailContext);
+        return;
+      }
+
       const runtimeStatus = await withTimeout(
         ensureTranscriptionRuntime(),
         20_000,
         t("error.runtimeSetupTimedOut", "Runtime setup timed out."),
       );
       if (!runtimeStatus.ready) {
-        setError(formatRuntimeNotReadyMessage());
-        setSection("home");
+        presentTranscriptionFailure(formatRuntimeNotReadyMessage(), nextDetailContext);
         return;
       }
       if (runtimeStatus.did_setup) {
@@ -3544,8 +3869,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         console.warn("Transcription preflight failed, continuing with backend start:", preflightError);
       }
       if (preflight && !preflight.allowed) {
-        setError(formatTranscriptionPreflightMessage(preflight));
-        setSection("home");
+        presentTranscriptionFailure(formatTranscriptionPreflightMessage(preflight), nextDetailContext);
         return;
       }
 
@@ -3586,10 +3910,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         setActiveJobTitle("");
         activeJobDeltaSequenceRef.current = -1;
         setActiveDetailContext(null);
-        if (!restoreDetailAfterFailedTranscription(failedContext?.detailContext)) {
-          setSection("home");
-        }
-        setError(earlyFailure);
+        presentTranscriptionFailure(earlyFailure, failedContext?.detailContext);
         return;
       }
 
@@ -3629,23 +3950,18 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         setActiveJobTitle("");
         activeJobDeltaSequenceRef.current = -1;
         setActiveDetailContext(null);
-        if (!restoreDetailAfterFailedTranscription(stalledContext?.detailContext)) {
-          setSection("home");
-        }
-        setError(
+        presentTranscriptionFailure(
           t(
             "error.transcriptionStartupProblem",
             "Transcription is not starting correctly. Check Whisper CLI/Whisper Stream paths in Settings > Local Models.",
           ),
+          stalledContext?.detailContext,
         );
       }, 120_000);
     } catch (startError) {
-      setError(formatUiError("error.startTranscriptionFailed", "Failed to start transcription", startError));
       clearStartupWatchdog();
       setActiveDetailContext(null);
-      if (!restoreDetailAfterFailedTranscription(nextDetailContext)) {
-        setSection("home");
-      }
+      presentTranscriptionFailure(formatAppError(startError), nextDetailContext);
     } finally {
       setIsStarting(false);
     }
@@ -3702,6 +4018,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     setDetailMode("transcript");
     setInspectorMode("details");
     setSection("detail");
+    setTrimRetranscriptionError(null);
     setError(null);
   }
 
@@ -3709,6 +4026,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     setShowExportSheet(false);
     setActiveArtifact(null);
     setActiveDetailContext(null);
+    setTrimRetranscriptionError(null);
     setSection("history");
     setError(null);
   }
@@ -3852,15 +4170,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         return;
       }
       upsertArtifact(updated);
-      // Update artifact data without resetting detailMode (hydrateDetail
-      // would switch back to "transcript", losing the user's current view).
-      const updatedHasOptimizedTranscript = hasPersistedOptimizedTranscript(updated);
-      setActiveArtifact(updated);
-      setDraftTitle(updated.title);
-      setDraftTranscript(updatedHasOptimizedTranscript ? updated.optimized_transcript : updated.raw_transcript);
-      setOptimizedTranscriptAvailable(updatedHasOptimizedTranscript);
-      setDraftSummary(updated.summary);
-      setDraftFaqs(updated.faqs);
+      syncArtifactDraftState(updated);
       setError(null);
     } catch (assignError) {
       setError(formatUiError("error.assignSpeakerFailed", "Failed to assign speaker", assignError));
@@ -3886,8 +4196,102 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     );
   }
 
+  async function onRenameSelectedSpeaker(): Promise<void> {
+    if (!activeArtifact) {
+      setError(t("inspector.noTranscript"));
+      return;
+    }
+    if (selectedSegmentSourceIndex === null) {
+      setError(t("error.selectSegmentFirst", "Select a segment first."));
+      return;
+    }
+
+    const renameResult = renameSpeakerInTimeline(
+      activeArtifact.metadata?.timeline_v2,
+      selectedSegmentSourceIndex,
+      speakerDraft,
+    );
+
+    if (!renameResult.ok) {
+      switch (renameResult.reason) {
+        case "speaker_name_empty":
+          setError(t("error.speakerNameEmpty", "Speaker name cannot be empty."));
+          break;
+        case "speaker_missing":
+          setError(t("error.selectLabeledSpeakerFirst", "Select a labeled speaker first."));
+          break;
+        case "segment_out_of_range":
+          setError(t("error.segmentOutOfRange", "Selected segment is out of range."));
+          break;
+        case "missing_timeline":
+        default:
+          setError(t("error.segmentTimelineInvalid", "Segment timeline metadata is missing or invalid."));
+          break;
+      }
+      return;
+    }
+
+    setIsAssigningSpeaker(true);
+    try {
+      const updated = await updateArtifactTimeline({
+        id: activeArtifact.id,
+        timeline_v2: JSON.stringify(renameResult.timeline),
+      });
+      if (!updated) {
+        setError(t("error.transcriptNotFoundAssigning", "Transcript not found while assigning speaker."));
+        return;
+      }
+      if (
+        renameResult.previousSpeakerId
+        && renameResult.previousSpeakerId !== renameResult.nextSpeakerId
+      ) {
+        try {
+          await onPatchSpeakerDiarizationPreferences((current) => ({
+            ...current,
+            speaker_colors: moveSpeakerColorMapEntry(
+              current.speaker_colors,
+              renameResult.previousSpeakerId,
+              renameResult.nextSpeakerId,
+            ),
+          }));
+        } catch (colorError) {
+          console.warn("failed to move speaker color mapping after rename", colorError);
+        }
+      }
+      upsertArtifact(updated);
+      syncArtifactDraftState(updated);
+      setError(null);
+    } catch (renameError) {
+      setError(formatUiError("error.renameSpeakerFailed", "Failed to rename speaker", renameError));
+    } finally {
+      setIsAssigningSpeaker(false);
+    }
+  }
+
   async function onClearSpeakerForSegment(sourceIndex: number): Promise<void> {
     await onAssignSpeakerToSegment(sourceIndex, null, false);
+  }
+
+  function onStartRenameSpeakerLabel(speakerLabel: string): void {
+    const normalizedLabel = speakerLabel.trim();
+    if (!normalizedLabel) {
+      return;
+    }
+
+    const matchingSegment = detailSegments.find(
+      (segment) => segment.speakerLabel?.trim() === normalizedLabel,
+    );
+    setSpeakerDraft(normalizedLabel);
+    setError(null);
+
+    if (matchingSegment) {
+      focusSpeakerInputForSegment(matchingSegment.sourceIndex);
+      return;
+    }
+
+    setDetailMode("segments");
+    setInspectorMode("details");
+    setRightSidebarOpen(true);
   }
 
   function focusSpeakerInputForSegment(sourceIndex: number): void {
@@ -4235,6 +4639,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         options: {
           include_timestamps: payload.options.includeTimestamps,
           grouping: payload.options.grouping,
+          include_speaker_names: payload.options.includeSpeakerNames,
         },
         segments: payload.segments,
         content_override: payload.contentOverride,
@@ -4334,6 +4739,70 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     } finally {
       setIsGeneratingSummary(false);
     }
+  }
+
+  async function onGenerateEmotionAnalysis(revealOnSuccess = true): Promise<void> {
+    if (!activeArtifact || isGeneratingEmotionAnalysis) return;
+    if (!aiFeaturesAvailable) {
+      setError(aiUnavailableReason);
+      return;
+    }
+
+    setIsGeneratingEmotionAnalysis(true);
+    try {
+      const result = await analyzeArtifactEmotions(buildEmotionAnalysisPayload({
+        id: activeArtifact.id,
+        language: emotionLanguage,
+        includeTimestamps: emotionIncludeTimestamps,
+        includeSpeakers: emotionIncludeSpeakers,
+        speakerDynamics: speakerDynamicsAvailable ? emotionSpeakerDynamics : false,
+      }));
+
+      const refreshedArtifact = await getArtifact(activeArtifact.id);
+      if (refreshedArtifact) {
+        upsertArtifact(refreshedArtifact);
+        syncArtifactDraftState(refreshedArtifact);
+      } else {
+        const patchedArtifact: TranscriptArtifact = {
+          ...activeArtifact,
+          metadata: {
+            ...activeArtifact.metadata,
+            [EMOTION_ANALYSIS_METADATA_KEY]: JSON.stringify(result),
+            [EMOTION_ANALYSIS_GENERATED_AT_METADATA_KEY]: new Date().toISOString(),
+          },
+        };
+        upsertArtifact(patchedArtifact);
+        syncArtifactDraftState(patchedArtifact);
+      }
+
+      setDraftEmotionAnalysis(result);
+      if (revealOnSuccess) {
+        setDetailMode("emotion");
+      }
+      setError(null);
+    } catch (emotionError) {
+      const code = formatAppErrorCode(emotionError);
+      if (code === "missing_ai_provider" || code === "missing_api_key") {
+        setError(t("error.emotionConfigureProvider", "Emotion analysis failed: configure an AI provider in Settings > AI Services."));
+      } else {
+        const detail = formatAppError(emotionError).trim();
+        setError(detail || t("error.emotionFailed", "Emotion analysis failed"));
+      }
+    } finally {
+      setIsGeneratingEmotionAnalysis(false);
+    }
+  }
+
+  function onJumpToEmotionSegment(sourceIndex: number): void {
+    setSelectedSegmentSourceIndex(sourceIndex);
+    setDetailMode("segments");
+    setInspectorMode("details");
+  }
+
+  function onAskEmotionQuestion(prompt: string): void {
+    setDetailMode("chat");
+    setInspectorMode("details");
+    void onSendChat(prompt);
   }
 
   async function onImproveText(): Promise<void> {
@@ -4806,13 +5275,15 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                 <AudioPlayer
                   inputPath={homeAudioInputPath}
                   trimEnabled
-                  onTrimApplied={(path, regions) => {
+                  onTrimApplied={(trimmedAudio, regions) => {
                     if (!selectedFile) {
                       return;
                     }
                     const sourceLabel = fileLabel(selectedFile);
                     setPreparedImportTrimDraft({
-                      path,
+                      path: trimmedAudio.path,
+                      durationSeconds: trimmedAudio.duration_seconds,
+                      fileSizeBytes: trimmedAudio.file_size_bytes,
                       sourcePath: selectedFile,
                       title: buildTrimArtifactTitle(sourceLabel, regions),
                       regions: [...regions],
@@ -5161,6 +5632,190 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       );
     }
 
+    if (detailMode === "emotion") {
+      if (isGeneratingEmotionAnalysis) {
+        return (
+          <LoadingAnimation
+            icon={HeartPulse}
+            title={t("emotion.generating", "Analyzing emotions...")}
+            description={t("emotion.generatingDesc", "Building an emotional map of your transcript...")}
+            variant="summarizing"
+          />
+        );
+      }
+
+      if (!draftEmotionAnalysis) {
+        return (
+          <div className="detail-empty">
+            <div className="center-empty-icon"><HeartPulse size={28} /></div>
+            <h2>{t("detail.emotion", "Emotion Analysis")}</h2>
+            <p>{t("emotion.emptyDesc", "Generate a structured emotional reading from the right panel, then use it to reflect or continue in chat.")}</p>
+          </div>
+        );
+      }
+
+      return (
+        <div className="emotion-view">
+          <section className="emotion-section">
+            <div className="emotion-section-header">
+              <h3>{t("emotion.overview", "General reading")}</h3>
+              <div className="emotion-chip-row">
+                {draftEmotionAnalysis.overview.primary_emotions.map((emotion) => (
+                  <span key={emotion} className="kind-chip">{emotion}</span>
+                ))}
+              </div>
+            </div>
+            <p className="emotion-overview-copy">{draftEmotionAnalysis.overview.emotional_arc}</p>
+            {draftEmotionAnalysis.overview.speaker_dynamics ? (
+              <p className="emotion-overview-copy">{draftEmotionAnalysis.overview.speaker_dynamics}</p>
+            ) : null}
+            {draftEmotionAnalysis.overview.confidence_note ? (
+              <p className="muted">{draftEmotionAnalysis.overview.confidence_note}</p>
+            ) : null}
+            <div className="emotion-narrative">{draftEmotionAnalysis.narrative_markdown}</div>
+          </section>
+
+          <section className="emotion-section">
+            <div className="emotion-section-header">
+              <h3>{t("emotion.timeline", "Emotional arc")}</h3>
+            </div>
+            <div className="emotion-card-grid">
+              {draftEmotionAnalysis.timeline.map((entry) => (
+                <article key={`emotion-timeline-${entry.segment_index}`} className="emotion-card">
+                  <div className="emotion-card-meta">
+                    <strong>{entry.time_label ?? `${t("emotion.segment", "Segment")} ${entry.segment_index + 1}`}</strong>
+                    {entry.speaker_label ? <span className="kind-chip">{entry.speaker_label}</span> : null}
+                  </div>
+                  <p>{entry.evidence_text}</p>
+                  <div className="emotion-chip-row">
+                    {entry.dominant_emotions.map((emotion) => (
+                      <span key={`${entry.segment_index}-${emotion}`} className="kind-chip">{emotion}</span>
+                    ))}
+                  </div>
+                  <small>
+                    {t("emotion.scores", "Valence")} {entry.valence_score} · {t("emotion.intensity", "Intensity")} {entry.intensity_score}
+                  </small>
+                  {entry.shift_label ? <small>{entry.shift_label}</small> : null}
+                  <div className="emotion-card-actions">
+                    <button className="secondary-button" onClick={() => onJumpToEmotionSegment(entry.segment_index)}>
+                      {t("emotion.jump", "Jump to segment")}
+                    </button>
+                    <button
+                      className="secondary-button"
+                      onClick={() =>
+                        onAskEmotionQuestion(
+                          `Reflect on the emotional shift around segment ${entry.segment_index + 1}. What appears to trigger ${entry.dominant_emotions.join(", ") || "the tone change"}?`,
+                        )
+                      }
+                    >
+                      {t("emotion.ask", "Ask in chat")}
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <section className="emotion-section">
+            <div className="emotion-section-header">
+              <h3>{t("emotion.semanticMap", "Semantic clusters")}</h3>
+            </div>
+            <div className="emotion-card-grid">
+              {draftEmotionAnalysis.semantic_map.clusters.map((cluster) => (
+                <article key={cluster.id} className="emotion-card">
+                  <strong>{cluster.label}</strong>
+                  <p>{cluster.summary}</p>
+                  <div className="emotion-chip-row">
+                    {cluster.node_ids.slice(0, 6).map((nodeId) => (
+                      <span key={nodeId} className="kind-chip">{nodeId.replace(/^.*:/, "")}</span>
+                    ))}
+                  </div>
+                  <div className="emotion-card-actions">
+                    <button
+                      className="secondary-button"
+                      disabled={cluster.segment_indices.length === 0}
+                      onClick={() => {
+                        const target = cluster.segment_indices[0];
+                        if (target !== undefined) {
+                          onJumpToEmotionSegment(target);
+                        }
+                      }}
+                    >
+                      {t("emotion.jump", "Jump to segment")}
+                    </button>
+                    <button
+                      className="secondary-button"
+                      onClick={() =>
+                        onAskEmotionQuestion(
+                          `How does the semantic cluster "${cluster.label}" connect to the emotional dynamics in this transcript?`,
+                        )
+                      }
+                    >
+                      {t("emotion.ask", "Ask in chat")}
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <section className="emotion-section">
+            <div className="emotion-section-header">
+              <h3>{t("emotion.evidence", "Evidence and bridges")}</h3>
+            </div>
+            <div className="emotion-card-grid">
+              {draftEmotionAnalysis.bridges.map((bridge, index) => (
+                <article key={`${bridge.from_segment_index}-${bridge.to_segment_index}-${index}`} className="emotion-card">
+                  <strong>{bridge.bridge_theme}</strong>
+                  <p>{bridge.reason}</p>
+                  <small>
+                    {t("emotion.bridgeRange", "Segments")} {bridge.from_segment_index + 1} → {bridge.to_segment_index + 1}
+                  </small>
+                  <div className="emotion-chip-row">
+                    {bridge.shared_keywords.map((keyword) => (
+                      <span key={keyword} className="kind-chip">{keyword}</span>
+                    ))}
+                  </div>
+                  <div className="emotion-card-actions">
+                    <button className="secondary-button" onClick={() => onJumpToEmotionSegment(bridge.from_segment_index)}>
+                      {t("emotion.jump", "Jump to segment")}
+                    </button>
+                    <button
+                      className="secondary-button"
+                      onClick={() =>
+                        onAskEmotionQuestion(
+                          `Help me understand why the transcript reconnects around "${bridge.bridge_theme}" between segments ${bridge.from_segment_index + 1} and ${bridge.to_segment_index + 1}.`,
+                        )
+                      }
+                    >
+                      {t("emotion.ask", "Ask in chat")}
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <section className="emotion-section">
+            <div className="emotion-section-header">
+              <h3>{t("emotion.reflection", "Reflection prompts")}</h3>
+            </div>
+            <div className="emotion-reflection-list">
+              {draftEmotionAnalysis.reflection_prompts.map((prompt, index) => (
+                <button
+                  key={`emotion-reflection-${index}`}
+                  className="secondary-button emotion-reflection-button"
+                  onClick={() => onAskEmotionQuestion(prompt)}
+                >
+                  {prompt}
+                </button>
+              ))}
+            </div>
+          </section>
+        </div>
+      );
+    }
+
     if (detailMode === "chat") {
       return (
         <div className="chat-view">
@@ -5266,7 +5921,18 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             >
               {segment.speakerLabel ? (
                 <div style={{ marginBottom: "8px" }}>
-                  <span className="kind-chip">{segment.speakerLabel}</span>
+                  <span
+                    className="kind-chip speaker-kind-chip"
+                    style={buildSpeakerAccentStyle(
+                      resolveSpeakerColor({
+                        speakerId: segment.speakerId,
+                        speakerLabel: segment.speakerLabel,
+                        colorMap: speakerColorMap,
+                      }),
+                    )}
+                  >
+                    {segment.speakerLabel}
+                  </span>
                 </div>
               ) : null}
               <p style={{ fontSize: `${fontSize}px` }}>{segment.line}</p>
@@ -5288,62 +5954,219 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       );
     }
 
-    return (
-      <div className="transcript-container" style={{ position: "relative", height: "100%" }}>
-        {search.trim() ? (
-          <div
-            className="detail-editor highlight-layer"
-            style={{
-              fontSize: `${fontSize}px`,
-              position: "absolute",
-              top: 0,
-              left: 0,
-              width: "100%",
-              height: "100%",
-              pointerEvents: "none",
-              whiteSpace: "pre-wrap",
-              wordWrap: "break-word",
-              color: "transparent",
-            }}
-          >
-            <HighlightMatch text={visibleTranscript} search={search} />
+    const transcriptSpeakerBanner = (() => {
+      if (!activeArtifact || !artifactDiarizationUiState) {
+        return null;
+      }
+
+      if (artifactDiarizationUiState.kind === "speakers_detected") {
+        return (
+          <div className="transcript-speaker-banner">
+            <div className="transcript-speaker-banner-copy">
+              <strong>
+                {t("detail.speakersDetected", "{count} speakers detected", {
+                  count: artifactDiarizationUiState.speakerCount,
+                })}
+              </strong>
+              <span>{formatSpeakerSummary(artifactDiarizationUiState.speakerLabels)}</span>
+            </div>
+            <div className="transcript-speaker-banner-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setDetailMode("segments")}
+              >
+                {t("inspector.openSegments", "Open Segments")}
+              </button>
+            </div>
           </div>
-        ) : null}
-        {showingConfidenceTranscript && confidenceTranscriptDocument ? (
-          <ConfidenceTranscript
-            document={confidenceTranscriptDocument}
-            fontSize={fontSize}
-          />
-        ) : (
-          <textarea
-            className="detail-editor"
-            value={visibleTranscript}
-            onChange={(event) => setDraftTranscript(event.target.value)}
-            readOnly={transcriptReadOnly}
-            title={transcriptReadOnly
-              ? t(
-                "detail.originalTranscriptReadonly",
-                "Original transcript is read-only. Switch back to the optimized version to edit.",
-              )
-              : undefined}
-            style={{
-              fontSize: `${fontSize}px`,
-              position: search.trim() ? "absolute" : "relative",
-              top: 0,
-              left: 0,
-              width: "100%",
-              height: "100%",
-              background: search.trim() ? "transparent" : undefined,
-              color: search.trim() ? "black" : undefined,
-              opacity: search.trim() ? 0.7 : 1,
-            }}
-          />
-        )}
+        );
+      }
+
+      if (artifactDiarizationUiState.kind === "failed") {
+        const diarizationError =
+          artifactDiarizationUiState.error
+          ?? t("detail.diarizationFailedFallback", "Speaker diarization failed after transcription.");
+        return (
+          <div className="transcript-speaker-banner is-warning">
+            <div className="transcript-speaker-banner-copy">
+              <strong>{t("detail.diarizationFailed", "Speaker diarization failed for this transcript.")}</strong>
+              <span>{diarizationError}</span>
+            </div>
+            <div className="transcript-speaker-banner-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => void onOpenStandaloneSettingsWindow(
+                  shouldOfferLocalModelsCta(diarizationError) ? "local_models" : "transcription",
+                )}
+              >
+                {shouldOfferLocalModelsCta(diarizationError)
+                  ? t("action.openLocalModels", "Open Local Models")
+                  : t("action.openTranscriptionDefaults", "Open Transcription Defaults")}
+              </button>
+            </div>
+          </div>
+        );
+      }
+
+      if (artifactDiarizationUiState.kind === "no_speakers_detected") {
+        return (
+          <div className="transcript-speaker-banner">
+            <div className="transcript-speaker-banner-copy">
+              <strong>{t("detail.noSpeakersDetected", "Speaker diarization completed, but no speaker labels were assigned.")}</strong>
+              <span>{t("detail.noSpeakersDetectedHint", "Open Segments to inspect the timeline or assign speakers manually.")}</span>
+            </div>
+            <div className="transcript-speaker-banner-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setDetailMode("segments")}
+              >
+                {t("inspector.openSegments", "Open Segments")}
+              </button>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="transcript-speaker-banner">
+          <div className="transcript-speaker-banner-copy">
+            <strong>{t("detail.diarizationNotRequested", "This transcript was created without speaker diarization.")}</strong>
+            <span>{t("detail.diarizationNotRequestedHint", "Turn on Speaker diarization in Settings > Transcription Defaults before retranscribing the source audio.")}</span>
+          </div>
+          <div className="transcript-speaker-banner-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => void onOpenStandaloneSettingsWindow("transcription")}
+            >
+              {t("action.openTranscriptionDefaults", "Open Transcription Defaults")}
+            </button>
+          </div>
+        </div>
+      );
+    })();
+
+    return (
+      <div className="transcript-shell">
+        {transcriptSpeakerBanner}
+        <div className="transcript-container" style={{ position: "relative", height: "100%" }}>
+          {search.trim() ? (
+            <div
+              className="detail-editor highlight-layer"
+              style={{
+                fontSize: `${fontSize}px`,
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                height: "100%",
+                pointerEvents: "none",
+                whiteSpace: "pre-wrap",
+                wordWrap: "break-word",
+                color: "transparent",
+              }}
+            >
+              <HighlightMatch text={visibleTranscript} search={search} />
+            </div>
+          ) : null}
+          {showingConfidenceTranscript && confidenceTranscriptDocument ? (
+            <ConfidenceTranscript
+              document={confidenceTranscriptDocument}
+              fontSize={fontSize}
+            />
+          ) : (
+            <textarea
+              className="detail-editor"
+              value={visibleTranscript}
+              onChange={(event) => setDraftTranscript(event.target.value)}
+              readOnly={transcriptReadOnly}
+              title={transcriptReadOnly
+                ? t(
+                  "detail.originalTranscriptReadonly",
+                  "Original transcript is read-only. Switch back to the optimized version to edit.",
+                )
+                : undefined}
+              style={{
+                fontSize: `${fontSize}px`,
+                position: search.trim() ? "absolute" : "relative",
+                top: 0,
+                left: 0,
+                width: "100%",
+                height: "100%",
+                background: search.trim() ? "transparent" : undefined,
+                color: search.trim() ? "black" : undefined,
+                opacity: search.trim() ? 0.7 : 1,
+              }}
+            />
+          )}
+        </div>
       </div>
     );
   }
 
   function renderDefaultInspector(): JSX.Element {
+    const peoplePillText = (() => {
+      if (detailMode === "segments" && selectedDetailSegment) {
+        return selectedDetailSegment.speakerLabel ?? t("inspector.unknown", "Unknown");
+      }
+
+      if (!artifactDiarizationUiState) {
+        return t("inspector.unknown", "Unknown");
+      }
+
+      switch (artifactDiarizationUiState.kind) {
+        case "speakers_detected":
+          return t("detail.speakersDetected", "{count} speakers detected", {
+            count: artifactDiarizationUiState.speakerCount,
+          });
+        case "failed":
+          return t("detail.diarizationFailedShort", "Diarization failed");
+        case "no_speakers_detected":
+          return t("detail.noSpeakersShort", "No speakers detected");
+        case "not_requested":
+        default:
+          return t("inspector.unknown", "Unknown");
+      }
+    })();
+
+    const peopleSummaryText = (() => {
+      if (detailMode === "segments") {
+        if (
+          selectedSegmentSpeakerLabel.length > 0
+          && speakerDraft.trim().length > 0
+          && speakerDraft.trim() !== selectedSegmentSpeakerLabel
+        ) {
+          return t(
+            "inspector.renameSpeakerHint",
+            "Rename updates this speaker everywhere in the transcript. Assign only changes the selected segment.",
+          );
+        }
+        return selectedSegmentSourceIndex === null
+          ? t("inspector.selectSegmentHint", "Select a segment to assign a speaker manually.")
+          : t("inspector.speakerSavedHint", "Speaker label is saved into segment metadata. Right-click a segment for quick actions.");
+      }
+
+      if (!artifactDiarizationUiState) {
+        return t("inspector.diarizationHint", "Speaker assignment is available in Segments mode. Diarization controls are in Settings > Transcription Defaults and asset setup is in Settings > Local Models.");
+      }
+
+      switch (artifactDiarizationUiState.kind) {
+        case "speakers_detected":
+          return formatSpeakerSummary(artifactDiarizationUiState.speakerLabels);
+        case "failed":
+          return artifactDiarizationUiState.error
+            ?? t("detail.diarizationFailedFallback", "Speaker diarization failed after transcription.");
+        case "no_speakers_detected":
+          return t("detail.noSpeakersDetectedHint", "Open Segments to inspect the timeline or assign speakers manually.");
+        case "not_requested":
+        default:
+          return t("detail.diarizationNotRequestedHint", "Turn on Speaker diarization in Settings > Transcription Defaults before retranscribing the source audio.");
+      }
+    })();
+
     return (
       <div className="inspector-body">
         <button className="secondary-button" onClick={() => void navigator.clipboard.writeText(visibleTranscript)}>
@@ -5449,7 +6272,55 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
         <div className="inspector-block">
           <h4>{t("inspector.people")}</h4>
-          <div className="pill">{selectedDetailSegment?.speakerLabel ?? t("inspector.unknown", "Unknown")}</div>
+          <div
+            className={`pill ${
+              artifactDiarizationUiState?.kind === "failed"
+                ? "pill-warning"
+                : artifactDiarizationUiState?.kind === "speakers_detected"
+                  ? "pill-success"
+                  : ""
+            }`}
+          >
+            {peoplePillText}
+          </div>
+          {knownSpeakerLabels.length > 0 ? (
+            <div className="speaker-known-list">
+              <span className="speaker-known-label">{t("inspector.detectedSpeakers", "Detected speakers")}</span>
+              <div className="speaker-chip-list">
+                {knownSpeakers.map((speaker) => (
+                  <div key={speaker.id} className="speaker-chip-row">
+                    <button
+                      type="button"
+                      className={`speaker-chip-button ${
+                        speaker.label === selectedSegmentSpeakerLabel ? "is-active" : ""
+                      }`}
+                      style={buildSpeakerAccentStyle(speaker.color)}
+                      onClick={() => onStartRenameSpeakerLabel(speaker.label)}
+                    >
+                      {speaker.label}
+                    </button>
+                    <label
+                      className="speaker-color-control"
+                      title={t("inspector.speakerColor", "Speaker color")}
+                    >
+                      <span className="sr-only">
+                        {t("inspector.speakerColorFor", "Speaker color for {speaker}", {
+                          speaker: speaker.label,
+                        })}
+                      </span>
+                      <input
+                        type="color"
+                        value={speaker.color}
+                        onChange={(event) => {
+                          void onSetSpeakerColor(speaker.id, event.target.value);
+                        }}
+                      />
+                    </label>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
           <div className="speaker-edit-row">
             <input
               ref={peopleSpeakerInputRef}
@@ -5483,6 +6354,13 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             >
               {isAssigningSpeaker ? "..." : t("inspector.assign", "Assign")}
             </button>
+            <button
+              className="secondary-button speaker-assign-button"
+              disabled={isAssigningSpeaker || !canRenameSelectedSpeaker}
+              onClick={() => void onRenameSelectedSpeaker()}
+            >
+              {isAssigningSpeaker ? "..." : t("inspector.renameSpeaker", "Rename")}
+            </button>
           </div>
           <label className="toggle-row compact">
             <span>{t("inspector.propagate")}</span>
@@ -5501,11 +6379,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             </datalist>
           ) : null}
           <small className="muted">
-            {detailMode === "segments"
-              ? selectedSegmentSourceIndex === null
-                ? t("inspector.selectSegmentHint", "Select a segment to assign a speaker manually.")
-                : t("inspector.speakerSavedHint", "Speaker label is saved into segment metadata. Right-click a segment for quick actions.")
-              : t("inspector.diarizationHint", "Speaker assignment is available in Segments mode. Diarization controls are in Settings > Transcription Defaults and asset setup is in Settings > Local Models.")}
+            {peopleSummaryText}
           </small>
         </div>
 
@@ -5671,6 +6545,103 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     );
   }
 
+  function renderEmotionInspector(): JSX.Element {
+    return (
+      <div className="inspector-body">
+        <label>
+          {t("summary.aiService", "AI Service")}
+          <select
+            className="inspector-select"
+            value={activeAiServiceSelectValue}
+            onChange={(event) => {
+              void onSelectAiService(event.target.value);
+            }}
+          >
+            {aiServiceSelectOptions.map((option) => (
+              <option key={option.value} value={option.value} disabled={option.disabled}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <button
+          className="secondary-button"
+          onClick={() =>
+            void navigator.clipboard.writeText(
+              draftEmotionAnalysis?.narrative_markdown || visibleTranscript,
+            )
+          }
+        >
+          {t("summary.copy", "Copy")}
+        </button>
+        <button
+          className="secondary-button"
+          onClick={() => void onGenerateEmotionAnalysis()}
+          disabled={isGeneratingEmotionAnalysis || !activeArtifact || !aiFeaturesAvailable}
+          title={!aiFeaturesAvailable ? aiUnavailableReason : undefined}
+        >
+          {isGeneratingEmotionAnalysis
+            ? t("emotion.generating", "Analyzing emotions...")
+            : t("emotion.generate", "Analyze emotions")}
+        </button>
+        {!aiFeaturesAvailable ? (
+          <p className="muted">
+            {draftEmotionAnalysis
+              ? t("emotion.cachedOnly", "Cached emotion analysis is available, but regeneration needs an AI provider.")
+              : aiUnavailableReason}
+          </p>
+        ) : null}
+        {emotionAnalysisGeneratedAt ? (
+          <p className="muted">
+            {t("emotion.generatedAt", "Last generated")}: {formatDate(emotionAnalysisGeneratedAt)}
+          </p>
+        ) : null}
+
+        <label className="toggle-row">
+          <span>{t("summary.includeTimestamps", "Include timestamps")}</span>
+          <input
+            type="checkbox"
+            checked={emotionIncludeTimestamps}
+            onChange={(event) => setEmotionIncludeTimestamps(event.target.checked)}
+          />
+        </label>
+        <label className="toggle-row">
+          <span>{t("summary.includeSpeakers", "Include speakers")}</span>
+          <input
+            type="checkbox"
+            checked={emotionIncludeSpeakers}
+            onChange={(event) => setEmotionIncludeSpeakers(event.target.checked)}
+          />
+        </label>
+        <label className="toggle-row">
+          <span>{t("emotion.speakerDynamics", "Speaker dynamics")}</span>
+          <input
+            type="checkbox"
+            checked={speakerDynamicsAvailable && emotionSpeakerDynamics}
+            disabled={!speakerDynamicsAvailable}
+            onChange={(event) => setEmotionSpeakerDynamics(event.target.checked)}
+          />
+        </label>
+
+        <label>
+          {t("summary.language", "Language")}
+          <select
+            className="inspector-select"
+            value={emotionLanguage}
+            onChange={(event) => setEmotionLanguage(event.target.value as LanguageCode)}
+          >
+            {languageOptions.filter((option) => option.value !== "auto").map((option) => (
+              <option key={option.value} value={option.value}>
+                {t(`lang.${option.value}`, option.label)}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+    );
+  }
+
   function renderChatInspector(): JSX.Element {
     return (
       <div className="inspector-body">
@@ -5793,12 +6764,15 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     }
 
     if (inspectorMode === "info") return renderMetadataInspector();
+    if (detailMode === "emotion") return renderEmotionInspector();
     if (detailMode === "summary") return renderSummaryInspector();
     if (detailMode === "chat") return renderChatInspector();
     return renderDefaultInspector();
   }
 
   function renderDetail(): JSX.Element {
+    const isTrimRetranscriptionStarting = isStarting && Boolean(effectiveTrimmedAudioDraft);
+
     return (
       <div className={effectiveRightSidebarOpen ? "detail-layout" : "detail-layout right-collapsed"}>
         <section className="detail-main" ref={detailMainRef}>
@@ -5834,6 +6808,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             optimizeDisabled={!aiFeaturesAvailable}
             optimizeDisabledTitle={aiUnavailableReason}
             showRetranscribe={Boolean(effectiveTrimmedAudioDraft && !activeJobId)}
+            isStartingTrimmedAudioRetranscription={isTrimRetranscriptionStarting}
             onRetranscribeTrimmedAudio={() => {
               if (effectiveTrimmedAudioDraft) {
                 void onStartTranscription(effectiveTrimmedAudioDraft.path, {
@@ -5897,21 +6872,51 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
               {effectiveTrimmedAudioDraft ? (
                 <div className="detail-audio-player-label">{t("detail.trimmedAudio", "Trimmed audio")}</div>
               ) : null}
+              {trimRetranscriptionError ? (
+                <div className="detail-inline-error" role="alert">
+                  <span>{trimRetranscriptionError}</span>
+                  {shouldOfferLocalModelsCta(trimRetranscriptionError) ? (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => void onOpenStandaloneSettingsWindow("local_models")}
+                    >
+                      {t("action.openLocalModels", "Open Local Models")}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+              {isTrimRetranscriptionStarting && !trimRetranscriptionError ? (
+                <div className="detail-inline-status" role="status" aria-live="polite">
+                  <span>
+                    {t(
+                      "detail.preparingTrimmedRetranscription",
+                      "Preparing trimmed audio transcription...",
+                    )}
+                  </span>
+                </div>
+              ) : null}
               <AudioPlayer
                 inputPath={detailAudioInputPath}
                 trimEnabled
                 onMetadataLoaded={(metadata) => {
                   setAudioDurationSeconds(metadata.durationSeconds);
                 }}
-                onTrimRegionsChange={setTrimRegions}
-                onTrimApplied={(path, regions) => {
+                onTrimRegionsChange={(regions) => {
+                  setTrimRegions(regions);
+                  setTrimRetranscriptionError(null);
+                }}
+                onTrimApplied={(trimmedAudio, regions) => {
                   const trimSourceArtifact = activeArtifact ?? effectiveDetailContext?.sourceArtifact;
                   if (!trimSourceArtifact) {
                     return;
                   }
                   const sourceLabel = trimSourceArtifact.title.trim() || fileLabel(trimSourceArtifact.input_path);
+                  setTrimRetranscriptionError(null);
                   setTrimmedAudioDraft({
-                    path,
+                    path: trimmedAudio.path,
+                    durationSeconds: trimmedAudio.duration_seconds,
+                    fileSizeBytes: trimmedAudio.file_size_bytes,
                     parentArtifactId: trimSourceArtifact.id,
                     title: buildTrimArtifactTitle(sourceLabel, regions),
                     regions: [...regions],
@@ -6134,7 +7139,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
     const speakerDiarization =
       settings.transcription.speaker_diarization ?? getDefaultSpeakerDiarizationSettings();
-    const pyannoteHealth = runtimeHealth?.pyannote ?? provisioning.pyannote;
+    const pyannoteHealth = runtimeHealth?.pyannote ?? null;
 
     return (
       <div className="settings-stack">
@@ -6215,17 +7220,25 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                 <span className={pyannoteHealth.ready ? "kind-chip" : "missing-chip"}>
                   {pyannoteHealth.ready ? t("status.ready", "Ready") : t("status.setupRequired", "Setup required")}
                 </span>
-              ) : null}
-              <input
-                type="checkbox"
-                checked={speakerDiarization.enabled}
-                onChange={(event) => {
+              ) : <span className="settings-status-chip-placeholder" aria-hidden="true" />}
+              <button
+                type="button"
+                className={`settings-switch ${speakerDiarization.enabled ? "is-on" : "is-off"}`}
+                role="switch"
+                aria-checked={speakerDiarization.enabled}
+                aria-label={t("settings.transcription.speakerDiarization", "Enable speaker diarization")}
+                title={t("settings.transcription.speakerDiarization", "Enable speaker diarization")}
+                onClick={() => {
                   void onPatchSpeakerDiarizationSettings((current) => ({
                     ...current,
-                    enabled: event.target.checked,
+                    enabled: !current.enabled,
                   }));
                 }}
-              />
+              >
+                <span className="settings-switch-track" aria-hidden="true">
+                  <span className="settings-switch-thumb" />
+                </span>
+              </button>
             </div>
           </div>
 
@@ -7525,6 +8538,31 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                       bindings: {
                         ...current.prompts.bindings,
                         faq_prompt_id: value,
+                      },
+                    },
+                  }));
+                }}
+              >
+                {settings.prompts.templates.map((template) => (
+                  <option key={template.id} value={template.id}>
+                    {template.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              {t("settings.prompts.emotion", "Emotion Analysis")}
+              <select
+                value={settings.prompts.bindings.emotion_prompt_id}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  void patchSettings((current) => ({
+                    ...current,
+                    prompts: {
+                      ...current.prompts,
+                      bindings: {
+                        ...current.prompts.bindings,
+                        emotion_prompt_id: value,
                       },
                     },
                   }));

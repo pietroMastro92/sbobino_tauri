@@ -9,11 +9,14 @@ export type ExportGrouping = "none" | "speaker_paragraphs";
 export type ExportSegment = {
   time: string;
   line: string;
+  speakerId?: string | null;
+  speakerLabel?: string | null;
 };
 
 export type ExportOptions = {
   includeTimestamps: boolean;
   grouping: ExportGrouping;
+  includeSpeakerNames?: boolean;
 };
 
 export type ExportRequest = {
@@ -152,12 +155,13 @@ function formatVttTime(seconds: number): string {
   return `${hh}:${mm}:${ss}.000`;
 }
 
-function buildPreviewContent(params: {
+export function buildPreviewContent(params: {
   transcriptText: string;
   segments: ExportSegment[];
   style: ExportStyle;
   format: ExportFormat;
   includeTimestamps: boolean;
+  includeSpeakerNames: boolean;
   language: "en" | "it" | "es" | "de";
   title: string;
   summary?: string;
@@ -169,6 +173,7 @@ function buildPreviewContent(params: {
     style,
     format,
     includeTimestamps,
+    includeSpeakerNames,
     language,
     title,
     summary = "",
@@ -276,6 +281,15 @@ function buildPreviewContent(params: {
     return [localizedDocumentTitle(title), ...sections].join("\n\n");
   };
 
+  const withSpeakerPrefix = (segment: ExportSegment): string => {
+    const line = segment.line.trim();
+    const speakerLabel = segment.speakerLabel?.trim();
+    if (!includeSpeakerNames || !speakerLabel) {
+      return line;
+    }
+    return `${speakerLabel}: ${line}`;
+  };
+
   // ── Subtitles ──
   if (style === "subtitles") {
     if (format === "srt") {
@@ -284,7 +298,7 @@ function buildPreviewContent(params: {
         .map((segment, index) => {
           const startSeconds = parseMmSsToSeconds(segment.time);
           const endSeconds = startSeconds + 11;
-          return `${index + 1}\n${formatSrtTime(startSeconds)} --> ${formatSrtTime(endSeconds)}\n${segment.line.trim()}`;
+          return `${index + 1}\n${formatSrtTime(startSeconds)} --> ${formatSrtTime(endSeconds)}\n${withSpeakerPrefix(segment)}`;
         })
         .join("\n\n");
     }
@@ -294,7 +308,7 @@ function buildPreviewContent(params: {
         .map((segment) => {
           const startSeconds = parseMmSsToSeconds(segment.time);
           const endSeconds = startSeconds + 11;
-          return `${formatVttTime(startSeconds)} --> ${formatVttTime(endSeconds)}\n${segment.line.trim()}`;
+          return `${formatVttTime(startSeconds)} --> ${formatVttTime(endSeconds)}\n${withSpeakerPrefix(segment)}`;
         })
         .join("\n\n");
       return `WEBVTT\n\n${cues}`;
@@ -302,7 +316,7 @@ function buildPreviewContent(params: {
     if (format === "md") {
       if (segments.length === 0) return normalizedTranscript;
       return segments
-        .map((segment) => `${segment.line.trim()}\n${segment.time}`)
+        .map((segment) => `${withSpeakerPrefix(segment)}\n${segment.time}`)
         .join("\n\n");
     }
     return normalizedTranscript;
@@ -318,22 +332,31 @@ function buildPreviewContent(params: {
         const startSeconds = parseMmSsToSeconds(segment.time);
         const endStr = String(startSeconds + 11).padStart(2, "0");
         return {
-          text: segment.line.trim(),
+          text: withSpeakerPrefix(segment),
           timestamp: `${segment.time}-00:${endStr}`,
+          ...(includeSpeakerNames && segment.speakerLabel?.trim()
+            ? { speaker_label: segment.speakerLabel.trim() }
+            : {}),
         };
       });
       return JSON.stringify(arr, null, 2);
     }
 
     if (format === "csv") {
-      const header = localizedCsvHeader();
+      const header = includeSpeakerNames
+        ? `${localizedCsvHeader()};Speaker`
+        : localizedCsvHeader();
       if (segments.length === 0) return `${header}\n00:00;00:00;"${normalizedTranscript}"`;
       const rows = segments.map((segment) => {
         const startSeconds = parseMmSsToSeconds(segment.time);
         const endSeconds = startSeconds + 11;
         const endMm = String(Math.floor(endSeconds / 60)).padStart(2, "0");
         const endSs = String(endSeconds % 60).padStart(2, "0");
-        return `${segment.time};${endMm}:${endSs};"${segment.line.trim()}"`;
+        const base = `${segment.time};${endMm}:${endSs};"${segment.line.trim()}"`;
+        if (!includeSpeakerNames) {
+          return base;
+        }
+        return `${base};"${(segment.speakerLabel?.trim() ?? "").replace(/"/g, "\"\"")}"`;
       });
       return `${header}\n${rows.join("\n")}`;
     }
@@ -344,7 +367,7 @@ function buildPreviewContent(params: {
       }
       const body = segments
         .map((segment) =>
-          includeTimestamps ? `[${segment.time}] ${segment.line.trim()}` : segment.line.trim(),
+          includeTimestamps ? `[${segment.time}] ${withSpeakerPrefix(segment)}` : withSpeakerPrefix(segment),
         )
         .join("\n");
       return buildDocumentPreview(body);
@@ -353,7 +376,7 @@ function buildPreviewContent(params: {
     // txt, docx
     if (segments.length === 0) return buildDocumentPreview(normalizedTranscript);
     const body = segments
-      .map((segment) => `[${segment.time}] ${segment.line.trim()}`)
+      .map((segment) => `[${segment.time}] ${withSpeakerPrefix(segment)}`)
       .join("\n");
     return buildDocumentPreview(body);
   }
@@ -407,6 +430,10 @@ export function ExportSheet({
     () => (segmentsAlignedWithTranscript ? segments : []),
     [segments, segmentsAlignedWithTranscript],
   );
+  const speakerNamesAvailable = useMemo(
+    () => exportSegments.some((segment) => Boolean(segment.speakerLabel?.trim())),
+    [exportSegments],
+  );
 
   const styleItems = useMemo(
     () => getStyleItems(t, segmentsAlignedWithTranscript),
@@ -441,6 +468,12 @@ export function ExportSheet({
     }
   }, [includeTimestamps, segmentsAlignedWithTranscript, style]);
 
+  useEffect(() => {
+    if (!speakerNamesAvailable && showSpeakerNames) {
+      setShowSpeakerNames(false);
+    }
+  }, [showSpeakerNames, speakerNamesAvailable]);
+
   const exportContent = useMemo(() => {
     return buildPreviewContent({
       transcriptText,
@@ -448,12 +481,13 @@ export function ExportSheet({
       style,
       format,
       includeTimestamps,
+      includeSpeakerNames: showSpeakerNames,
       language,
       title,
       summary,
       faqs,
     });
-  }, [exportSegments, faqs, includeTimestamps, language, style, format, summary, transcriptText, title]);
+  }, [exportSegments, faqs, includeTimestamps, showSpeakerNames, language, style, format, summary, transcriptText, title]);
 
   const preview = useMemo(() => {
     const normalized = exportContent.trim();
@@ -491,6 +525,7 @@ export function ExportSheet({
         options: {
           includeTimestamps,
           grouping,
+          includeSpeakerNames: showSpeakerNames,
         },
         segments: exportSegments,
         contentOverride: transcriptText,
@@ -646,6 +681,7 @@ export function ExportSheet({
                       type="checkbox"
                       checked={showSpeakerNames}
                       onChange={(event) => setShowSpeakerNames(event.target.checked)}
+                      disabled={!speakerNamesAvailable}
                     />
                   </label>
                   <label className="toggle-row">
@@ -689,6 +725,7 @@ export function ExportSheet({
                       type="checkbox"
                       checked={showSpeakerNames}
                       onChange={(event) => setShowSpeakerNames(event.target.checked)}
+                      disabled={!speakerNamesAvailable}
                     />
                   </label>
                   <label className="toggle-row">

@@ -35,7 +35,7 @@ export type PromptCategory =
   | "qa"
   | "rewrite"
   | "custom";
-export type PromptTask = "optimize" | "summary" | "faq";
+export type PromptTask = "optimize" | "summary" | "faq" | "emotion_analysis";
 
 export type GeneralSettings = {
   auto_update_enabled: boolean;
@@ -84,6 +84,7 @@ export type WhisperOptions = {
 export type SpeakerDiarizationSettings = {
   enabled: boolean;
   device: "auto" | "cpu" | "mps";
+  speaker_colors: Record<string, string>;
 };
 
 export type TranscriptionSettings = {
@@ -150,6 +151,7 @@ export type PromptBindings = {
   optimize_prompt_id: string;
   summary_prompt_id: string;
   faq_prompt_id: string;
+  emotion_prompt_id: string;
 };
 
 export type PromptSettings = {
@@ -242,6 +244,77 @@ export type SummarizeArtifactPayload = ArtifactAiContextOptions & {
   custom_prompt?: string | null;
 };
 
+export type EmotionAnalysisPayload = ArtifactAiContextOptions & {
+  id: string;
+  language: LanguageCode;
+  speaker_dynamics: boolean;
+};
+
+export type EmotionOverview = {
+  primary_emotions: string[];
+  emotional_arc: string;
+  speaker_dynamics?: string | null;
+  confidence_note?: string | null;
+};
+
+export type EmotionTimelineEntry = {
+  segment_index: number;
+  time_label?: string | null;
+  start_seconds?: number | null;
+  end_seconds?: number | null;
+  speaker_label?: string | null;
+  dominant_emotions: string[];
+  valence_score: number;
+  intensity_score: number;
+  evidence_text: string;
+  shift_label?: string | null;
+};
+
+export type EmotionSemanticNode = {
+  id: string;
+  label: string;
+  kind: string;
+  weight: number;
+};
+
+export type EmotionSemanticEdge = {
+  source: string;
+  target: string;
+  weight: number;
+  relation: string;
+};
+
+export type EmotionSemanticCluster = {
+  id: string;
+  label: string;
+  node_ids: string[];
+  segment_indices: number[];
+  summary: string;
+};
+
+export type EmotionSemanticMap = {
+  nodes: EmotionSemanticNode[];
+  edges: EmotionSemanticEdge[];
+  clusters: EmotionSemanticCluster[];
+};
+
+export type EmotionBridge = {
+  from_segment_index: number;
+  to_segment_index: number;
+  bridge_theme: string;
+  reason: string;
+  shared_keywords: string[];
+};
+
+export type EmotionAnalysisResult = {
+  overview: EmotionOverview;
+  timeline: EmotionTimelineEntry[];
+  semantic_map: EmotionSemanticMap;
+  bridges: EmotionBridge[];
+  reflection_prompts: string[];
+  narrative_markdown: string;
+};
+
 export type TimelineV2Word = {
   text: string;
   start_seconds?: number;
@@ -271,6 +344,12 @@ export type StartTranscriptionPayload = {
   whisper_options: WhisperOptions;
   title?: string;
   parent_id?: string;
+};
+
+export type WriteTrimmedAudioResponse = {
+  path: string;
+  duration_seconds: number;
+  file_size_bytes: number;
 };
 
 export type RealtimeDeltaKind = "append_final" | "update_preview";

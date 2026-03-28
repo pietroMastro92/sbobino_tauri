@@ -1,4 +1,5 @@
 pub mod artifact;
+pub mod emotion_analysis;
 pub mod error;
 pub mod job;
 pub mod settings;
@@ -6,6 +7,10 @@ pub mod transcript_cleanup;
 
 pub use artifact::{
     ArtifactKind, SpeakerTurn, TimedSegment, TimedWord, TranscriptArtifact, TranscriptionOutput,
+};
+pub use emotion_analysis::{
+    EmotionAnalysisResult, EmotionBridge, EmotionOverview, EmotionSemanticCluster,
+    EmotionSemanticEdge, EmotionSemanticMap, EmotionSemanticNode, EmotionTimelineEntry,
 };
 pub use error::DomainError;
 pub use job::{JobProgress, JobStage, JobStatus, TranscriptionJob};

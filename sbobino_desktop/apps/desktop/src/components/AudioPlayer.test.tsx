@@ -210,7 +210,11 @@ describe("AudioPlayer", () => {
   });
 
   it("applies the current trim ranges through the callback", async () => {
-    vi.mocked(writeTrimmedAudio).mockResolvedValue({ path: "/tmp/trimmed-sample.mp3" });
+    vi.mocked(writeTrimmedAudio).mockResolvedValue({
+      path: "/tmp/trimmed-sample.mp3",
+      duration_seconds: 8,
+      file_size_bytes: 128000,
+    });
     const onTrimApplied = vi.fn();
 
     const { container } = render(
@@ -241,9 +245,45 @@ describe("AudioPlayer", () => {
       ]);
     });
 
-    expect(onTrimApplied).toHaveBeenCalledWith("/tmp/trimmed-sample.mp3", [
-      { id: "region-1", startTime: 2, endTime: 6 },
-      { id: "region-2", startTime: 12, endTime: 16 },
-    ]);
+    expect(onTrimApplied).toHaveBeenCalledWith(
+      {
+        path: "/tmp/trimmed-sample.mp3",
+        duration_seconds: 8,
+        file_size_bytes: 128000,
+      },
+      [
+        { id: "region-1", startTime: 2, endTime: 6 },
+        { id: "region-2", startTime: 12, endTime: 16 },
+      ],
+    );
+  });
+
+  it("shows the exact trim failure message", async () => {
+    vi.mocked(writeTrimmedAudio).mockRejectedValue(
+      new Error("trimmed audio is too short (1.20s). Select at least 1.5s before retranscribing."),
+    );
+
+    const { container } = render(
+      <AudioPlayer
+        inputPath="/tmp/sample.mp3"
+        initialTrimRegions={[
+          { id: "region-1", startTime: 2, endTime: 3.2 },
+        ]}
+      />,
+    );
+    const audio = container.querySelector("audio") as HTMLAudioElement;
+
+    Object.defineProperty(audio, "duration", {
+      configurable: true,
+      value: 32,
+    });
+
+    fireEvent.loadedMetadata(audio);
+    fireEvent.click(container.querySelector(".trim-toggle") as HTMLButtonElement);
+    fireEvent.click(container.querySelector(".trim-apply-button") as HTMLButtonElement);
+
+    await screen.findByText(
+      "trimmed audio is too short (1.20s). Select at least 1.5s before retranscribing.",
+    );
   });
 });

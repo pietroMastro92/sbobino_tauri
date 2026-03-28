@@ -84,6 +84,12 @@ pub trait ArtifactRepository: Send + Sync {
         id: &str,
         timeline_v2_json: &str,
     ) -> Result<Option<TranscriptArtifact>, ApplicationError>;
+    async fn update_emotion_analysis(
+        &self,
+        id: &str,
+        emotion_analysis_json: &str,
+        generated_at: &str,
+    ) -> Result<Option<TranscriptArtifact>, ApplicationError>;
     async fn rename(
         &self,
         id: &str,

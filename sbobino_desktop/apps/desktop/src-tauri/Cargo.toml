@@ -38,6 +38,7 @@ sbobino-application = { path = "../../../crates/application" }
 sbobino-infrastructure = { path = "../../../crates/infrastructure" }
 window-vibrancy = "0.7.1"
 base64 = "0.22"
+hound.workspace = true
 
 [dev-dependencies]
 tempfile = "3.13"

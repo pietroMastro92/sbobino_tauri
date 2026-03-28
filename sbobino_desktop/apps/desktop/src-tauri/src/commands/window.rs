@@ -48,7 +48,7 @@ pub async fn open_settings_window(
     .inner_size(1024.0, 760.0)
     .min_inner_size(900.0, 620.0)
     .resizable(true)
-    .transparent(true)
+    .transparent(false)
     .title_bar_style(TitleBarStyle::Overlay)
     .hidden_title(true);
 
@@ -75,18 +75,6 @@ pub async fn open_settings_window(
             }
             _ => {}
         });
-    }
-
-    // Apply the same macOS vibrancy effect as the main window
-    #[cfg(target_os = "macos")]
-    {
-        use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
-        let _ = apply_vibrancy(
-            &settings_window,
-            NSVisualEffectMaterial::UnderWindowBackground,
-            Some(NSVisualEffectState::Active),
-            None,
-        );
     }
 
     Ok(true)

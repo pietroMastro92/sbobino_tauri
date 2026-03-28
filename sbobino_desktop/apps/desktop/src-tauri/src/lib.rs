@@ -12,10 +12,10 @@ use tokio::sync::Mutex;
 use tracing_subscriber::{fmt, EnvFilter};
 
 use crate::commands::artifacts::{
-    chat_artifact, delete_artifacts, empty_deleted_artifacts, export_artifact, get_artifact,
-    hard_delete_artifacts, list_artifacts, list_deleted_artifacts, list_recent_artifacts,
-    optimize_artifact, read_audio_file, rename_artifact, restore_artifacts, summarize_artifact,
-    update_artifact, update_artifact_timeline, write_trimmed_audio,
+    analyze_artifact_emotions, chat_artifact, delete_artifacts, empty_deleted_artifacts,
+    export_artifact, get_artifact, hard_delete_artifacts, list_artifacts, list_deleted_artifacts,
+    list_recent_artifacts, optimize_artifact, read_audio_file, rename_artifact, restore_artifacts,
+    summarize_artifact, update_artifact, update_artifact_timeline, write_trimmed_audio,
 };
 use crate::commands::provisioning::{
     provisioning_cancel, provisioning_download_model, provisioning_install_pyannote,
@@ -147,6 +147,7 @@ pub fn run() {
             export_artifact,
             chat_artifact,
             summarize_artifact,
+            analyze_artifact_emotions,
             optimize_artifact,
             read_audio_file,
             write_trimmed_audio,

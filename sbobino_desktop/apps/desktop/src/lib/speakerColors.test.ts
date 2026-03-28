@@ -1,0 +1,52 @@
+import { describe, expect, it } from "vitest";
+import {
+  getDefaultSpeakerColorForKey,
+  moveSpeakerColorMapEntry,
+  normalizeSpeakerColorKey,
+  resolveSpeakerColor,
+  sanitizeSpeakerColorMap,
+  setSpeakerColorForKey,
+} from "./speakerColors";
+
+describe("speakerColors", () => {
+  it("normalizes speaker keys consistently", () => {
+    expect(normalizeSpeakerColorKey(" Speaker 1 ")).toBe("speaker_1");
+    expect(normalizeSpeakerColorKey("")).toBe("speaker");
+  });
+
+  it("sanitizes custom speaker color maps", () => {
+    expect(sanitizeSpeakerColorMap({
+      " Speaker 1 ": "#ff00aa",
+      invalid: "blue",
+    })).toEqual({
+      speaker_1: "#FF00AA",
+    });
+  });
+
+  it("resolves configured colors before deterministic defaults", () => {
+    expect(resolveSpeakerColor({
+      speakerId: "speaker_1",
+      colorMap: { speaker_1: "#123456" },
+    })).toBe("#123456");
+
+    expect(resolveSpeakerColor({
+      speakerLabel: "Speaker 2",
+      colorMap: {},
+    })).toBe(getDefaultSpeakerColorForKey("speaker_2"));
+  });
+
+  it("drops custom overrides when the chosen color matches the default", () => {
+    const defaultColor = getDefaultSpeakerColorForKey("speaker_1");
+    expect(setSpeakerColorForKey({ speaker_1: "#112233" }, "speaker_1", defaultColor)).toEqual({});
+  });
+
+  it("moves custom colors across speaker renames", () => {
+    expect(moveSpeakerColorMapEntry(
+      { speaker_1: "#ABCDEF" },
+      "speaker_1",
+      "Pietro",
+    )).toEqual({
+      pietro: "#ABCDEF",
+    });
+  });
+});

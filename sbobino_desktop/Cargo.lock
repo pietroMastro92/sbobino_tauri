@@ -4029,6 +4029,7 @@ dependencies = [
  "chrono",
  "docx-rs",
  "futures-util",
+ "hound",
  "printpdf",
  "reqwest 0.12.28",
  "sbobino-application",

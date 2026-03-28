@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 
@@ -56,7 +56,8 @@ impl FoundationAppleEnhancer {
             .error
             .unwrap_or_else(|| "Foundation model request failed".to_string());
         Err(ApplicationError::PostProcessing(format!(
-            "{message}{availability}"
+            "{}{availability}",
+            normalize_foundation_runtime_error(&message)
         )))
     }
 
@@ -342,7 +343,7 @@ impl Drop for FoundationBridgeProcess {
 
 #[cfg(test)]
 mod tests {
-    use super::build_optimize_prompt;
+    use super::{build_optimize_prompt, normalize_foundation_runtime_error};
 
     #[test]
     fn optimize_prompt_defaults_to_source_language_when_auto() {
@@ -350,6 +351,15 @@ mod tests {
         assert!(prompt.contains("the same language as the source text"));
         assert!(prompt.contains("the same language as the transcript"));
         assert!(prompt.contains("repeated phrases"));
+    }
+
+    #[test]
+    fn foundation_generation_error_is_made_actionable() {
+        let message = normalize_foundation_runtime_error(
+            "Foundation bridge error: The operation couldn’t be completed. (FoundationModels.LanguageModelSession.GenerationError error -1.)",
+        );
+        assert!(message.contains("Switch AI Service"));
+        assert!(message.contains("compatible Xcode toolchain"));
     }
 }
 
@@ -397,43 +407,129 @@ fn ensure_bridge_binary() -> Result<PathBuf, ApplicationError> {
         .parent()
         .unwrap_or_else(|| std::path::Path::new("/tmp"))
         .join("foundation_bridge_bin");
+    let module_cache_path = script_path
+        .parent()
+        .unwrap_or_else(|| Path::new("/tmp"))
+        .join("module-cache");
 
-    let compile_output = Command::new("xcrun")
-        .arg("swiftc")
-        .arg("-parse-as-library")
-        .arg(&script_path)
-        .arg("-o")
-        .arg(&binary_path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|error| {
-            ApplicationError::PostProcessing(format!(
-                "failed to compile Foundation bridge with swiftc: {error}"
-            ))
-        })?;
+    std::fs::create_dir_all(&module_cache_path).map_err(|error| {
+        ApplicationError::PostProcessing(format!(
+            "failed to create Foundation bridge module cache: {error}"
+        ))
+    })?;
 
-    if !compile_output.status.success() {
+    let mut diagnostics = Vec::new();
+    for candidate in foundation_swiftc_candidates() {
+        let mut command = Command::new(&candidate.program);
+        if let Some(developer_dir) = candidate.developer_dir.as_ref() {
+            command.env("DEVELOPER_DIR", developer_dir);
+        }
+
+        let compile_output = command
+            .args(&candidate.pre_args)
+            .arg("-module-cache-path")
+            .arg(&module_cache_path)
+            .arg("-parse-as-library")
+            .arg(&script_path)
+            .arg("-o")
+            .arg(&binary_path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|error| {
+                ApplicationError::PostProcessing(format!(
+                    "failed to launch Foundation bridge compiler ({}): {error}",
+                    candidate.label
+                ))
+            })?;
+
+        if compile_output.status.success() {
+            let _ = BINARY_PATH.set(binary_path.clone());
+            return Ok(binary_path);
+        }
+
         let stderr = String::from_utf8_lossy(&compile_output.stderr)
             .trim()
             .to_string();
         let stdout = String::from_utf8_lossy(&compile_output.stdout)
             .trim()
             .to_string();
-        let diagnostics = if !stderr.is_empty() {
+        let detail = if !stderr.is_empty() {
             stderr
         } else if !stdout.is_empty() {
             stdout
         } else {
             format!("swiftc exited with status {}", compile_output.status)
         };
-        return Err(ApplicationError::PostProcessing(format!(
-            "Foundation bridge failed to compile: {diagnostics}"
-        )));
+        diagnostics.push(format!("{}: {}", candidate.label, summarize_compile_diagnostics(&detail)));
     }
 
-    let _ = BINARY_PATH.set(binary_path.clone());
-    Ok(binary_path)
+    Err(ApplicationError::PostProcessing(format!(
+        "Foundation bridge failed to compile. Select a compatible Xcode toolchain or switch AI Service. {}",
+        diagnostics.join(" | ")
+    )))
+}
+
+#[derive(Debug, Clone)]
+struct SwiftcCandidate {
+    label: String,
+    program: PathBuf,
+    pre_args: Vec<String>,
+    developer_dir: Option<PathBuf>,
+}
+
+fn foundation_swiftc_candidates() -> Vec<SwiftcCandidate> {
+    let mut candidates = Vec::new();
+
+    let xcode_developer_dir = PathBuf::from("/Applications/Xcode.app/Contents/Developer");
+    if xcode_developer_dir.is_dir() {
+        candidates.push(SwiftcCandidate {
+            label: "Xcode xcrun swiftc".to_string(),
+            program: PathBuf::from("xcrun"),
+            pre_args: vec![
+                "--sdk".to_string(),
+                "macosx".to_string(),
+                "swiftc".to_string(),
+            ],
+            developer_dir: Some(xcode_developer_dir),
+        });
+    }
+
+    candidates.push(SwiftcCandidate {
+        label: "xcrun swiftc".to_string(),
+        program: PathBuf::from("xcrun"),
+        pre_args: vec![
+            "--sdk".to_string(),
+            "macosx".to_string(),
+            "swiftc".to_string(),
+        ],
+        developer_dir: None,
+    });
+
+    candidates
+}
+
+fn summarize_compile_diagnostics(detail: &str) -> String {
+    let normalized = detail.replace('\n', " ");
+    if normalized.contains("this SDK is not supported by the compiler") {
+        return "toolchain/SDK mismatch while compiling FoundationModels".to_string();
+    }
+    if normalized.contains("ModuleCache") && normalized.contains("Operation not permitted") {
+        return "module cache was not writable during FoundationModels compilation".to_string();
+    }
+    normalized
+        .split_whitespace()
+        .take(32)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn normalize_foundation_runtime_error(message: &str) -> String {
+    let normalized = message.trim();
+    if normalized.contains("LanguageModelSession.GenerationError error -1") {
+        return "Foundation Model request failed on this Mac. Switch AI Service from Foundation Model to a configured remote provider, or select a compatible Xcode toolchain and relaunch the app.".to_string();
+    }
+    normalized.to_string()
 }
 
 const FOUNDATION_BRIDGE_SWIFT: &str = r#"

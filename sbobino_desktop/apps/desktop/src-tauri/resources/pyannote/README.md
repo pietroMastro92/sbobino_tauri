@@ -1,5 +1,9 @@
 Place bundled offline pyannote assets here.
 
+Use `scripts/setup_bundled_pyannote.sh` from the workspace root to populate
+this directory on a macOS build machine without committing the downloaded
+payloads to git.
+
 Expected bundle layout:
 
 - `resources/pyannote/model/`

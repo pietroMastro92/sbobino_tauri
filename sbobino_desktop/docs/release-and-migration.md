@@ -38,6 +38,10 @@
 - Build signed bundles in CI.
 - Submit DMG to Apple Notary Service with `xcrun notarytool`.
 - Staple notarization ticket with `xcrun stapler`.
+- Before `tauri build`, hydrate the bundled pyannote resources on the macOS build machine:
+  - `./scripts/setup_bundled_pyannote.sh --force`
+  - this populates `apps/desktop/src-tauri/resources/pyannote/model` and `apps/desktop/src-tauri/resources/pyannote/python/<target-triple>`
+  - the packaged app then ships pyannote offline and auto-installs it on first launch without asking the end user to download anything
 - Build pyannote release assets before publishing the tag:
   - `./scripts/package_pyannote_release_assets.sh <version> <runtime_aarch64_dir> <runtime_x86_64_dir> <model_dir> <output_dir>`
   - Upload the generated zips and manifest to the same GitHub Release as the app bundles.

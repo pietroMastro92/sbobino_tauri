@@ -11,6 +11,9 @@ use sbobino_domain::{
 
 use crate::{
     ai_support::{missing_ai_provider_command_error, run_with_enhancer_fallback},
+    commands::emotion_analysis::{
+        analyze_emotions_with_enhancers, EmotionAnalysisInput, EmotionAnalysisOptions,
+    },
     error::CommandError,
     state::AppState,
 };
@@ -405,7 +408,9 @@ pub async fn test_prompt(
     let task = payload.task.unwrap_or(PromptTask::Optimize);
     let (optimize_prompt_override, summary_prompt_override) = match task {
         PromptTask::Optimize => (payload.prompt_override.clone(), None),
-        PromptTask::Summary | PromptTask::Faq => (None, payload.prompt_override.clone()),
+        PromptTask::Summary | PromptTask::Faq | PromptTask::EmotionAnalysis => {
+            (None, payload.prompt_override.clone())
+        }
     };
     let enhancers = state
         .runtime_factory
@@ -456,6 +461,32 @@ pub async fn test_prompt(
                 output: format!("Summary:\n{}\n\nFAQs:\n{}", output.summary, output.faqs),
                 summary: output.summary,
                 faqs: output.faqs,
+                model,
+            })
+        }
+        PromptTask::EmotionAnalysis => {
+            let result = analyze_emotions_with_enhancers(
+                &enhancers,
+                EmotionAnalysisInput {
+                    title: "Prompt test".to_string(),
+                    transcript: input.clone(),
+                    timeline_v2_json: None,
+                },
+                EmotionAnalysisOptions {
+                    language: language.clone(),
+                    include_timestamps: false,
+                    include_speakers: false,
+                    speaker_dynamics: false,
+                    prompt_override: payload.prompt_override.clone(),
+                },
+            )
+            .await
+            .map_err(CommandError::from)?;
+
+            Ok(TestPromptResponse {
+                output: result.narrative_markdown,
+                summary: String::new(),
+                faqs: String::new(),
                 model,
             })
         }

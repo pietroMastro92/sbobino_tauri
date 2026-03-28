@@ -1,10 +1,12 @@
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
 
+use chrono::Utc;
 use docx_rs::{Docx, Paragraph, Run};
 use futures_util::stream::{self, StreamExt};
-use printpdf::{ops::PdfPage, text::TextItem, units::Pt, BuiltinFont, Mm, Op, PdfDocument};
+use printpdf::{ops::PdfPage, text::TextItem, units::Pt, BuiltinFont, Color, Mm, Op, PdfDocument, Rgb};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::State;
@@ -18,9 +20,24 @@ use sbobino_domain::{
 
 use crate::{
     ai_support::{missing_ai_provider_command_error, run_with_enhancer_fallback},
+    commands::emotion_analysis::{
+        analyze_emotions_with_enhancers, EmotionAnalysisInput, EmotionAnalysisOptions,
+    },
     error::CommandError,
     state::AppState,
 };
+
+const MIN_TRIMMED_AUDIO_DURATION_SECONDS: f64 = 1.5;
+const SPEAKER_COLOR_PALETTE: &[&str] = &[
+    "#4F7CFF",
+    "#EC6A5E",
+    "#27A376",
+    "#B06BF2",
+    "#D88B15",
+    "#1293A5",
+    "#E255A1",
+    "#6C7A2D",
+];
 
 fn default_true() -> bool {
     true
@@ -40,6 +57,10 @@ fn default_summary_action_items() -> bool {
 
 fn default_summary_key_points_only() -> bool {
     false
+}
+
+fn default_emotion_speaker_dynamics() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -111,6 +132,17 @@ pub struct OptimizeArtifactPayload {
     pub text: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct EmotionAnalysisPayload {
+    pub id: String,
+    #[serde(default = "default_summary_language")]
+    pub language: String,
+    #[serde(flatten)]
+    pub context: ArtifactAiContextOptions,
+    #[serde(default = "default_emotion_speaker_dynamics")]
+    pub speaker_dynamics: bool,
+}
+
 const CHAT_CONTEXT_BUDGETS: &[(usize, usize)] = &[(8, 7600), (6, 5200), (4, 3400), (2, 2000)];
 const CHAT_CHUNK_TARGET_CHARS: usize = 900;
 const CHAT_CHUNK_OVERLAP_WORDS: usize = 24;
@@ -166,6 +198,7 @@ struct TimelineV2Word {
 struct TimelineContextSegment {
     text: String,
     time_label: Option<String>,
+    speaker_id: Option<String>,
     speaker_label: Option<String>,
 }
 
@@ -222,6 +255,10 @@ pub enum ExportStyle {
 pub struct ExportSegment {
     pub time: String,
     pub line: String,
+    #[serde(default, alias = "speakerId")]
+    pub speaker_id: Option<String>,
+    #[serde(default, alias = "speakerLabel")]
+    pub speaker_label: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -237,6 +274,8 @@ pub struct ExportOptions {
     pub include_timestamps: bool,
     #[serde(default)]
     pub grouping: Option<ExportGrouping>,
+    #[serde(default)]
+    pub include_speaker_names: bool,
 }
 
 impl Default for ExportOptions {
@@ -244,6 +283,7 @@ impl Default for ExportOptions {
         Self {
             include_timestamps: false,
             grouping: Some(ExportGrouping::None),
+            include_speaker_names: false,
         }
     }
 }
@@ -270,6 +310,13 @@ struct ExportDocument {
 struct ExportDocumentSection {
     title: String,
     body: String,
+    styled_lines: Option<Vec<ExportStyledLine>>,
+}
+
+#[derive(Debug, Clone)]
+struct ExportStyledLine {
+    text: String,
+    speaker_color: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -536,6 +583,12 @@ pub async fn export_artifact(
     let options = payload.options.unwrap_or_default();
     let grouping = options.grouping.unwrap_or(ExportGrouping::None);
     let language = normalize_export_language(payload.language.as_deref());
+    let settings = state
+        .settings_service
+        .snapshot()
+        .await
+        .map_err(CommandError::from)?;
+    let speaker_colors = settings.transcription.speaker_diarization.speaker_colors;
     let segments = match payload.segments {
         Some(entries) if !entries.is_empty() => entries,
         Some(_) if payload.content_override.is_some() => {
@@ -548,6 +601,7 @@ pub async fn export_artifact(
         &segments,
         style,
         options.include_timestamps,
+        options.include_speaker_names,
     );
     let export_document = build_export_document(
         language,
@@ -558,6 +612,8 @@ pub async fn export_artifact(
         &segments,
         style,
         options.include_timestamps,
+        options.include_speaker_names,
+        &speaker_colors,
     );
 
     match payload.format {
@@ -575,13 +631,18 @@ pub async fn export_artifact(
             style,
             grouping,
             options.include_timestamps,
+            options.include_speaker_names,
             &segments,
             &export_content,
         )?,
-        ExportFormat::Csv => export_csv(destination_path, &segments)?,
+        ExportFormat::Csv => export_csv(destination_path, &segments, options.include_speaker_names)?,
         ExportFormat::Md => {
             let content = if style == ExportStyle::Subtitles {
-                build_markdown_subtitles_content(&segments, &base_transcription)
+                build_markdown_subtitles_content(
+                    &segments,
+                    &base_transcription,
+                    options.include_speaker_names,
+                )
             } else {
                 render_markdown_document(&export_document)
             };
@@ -590,7 +651,7 @@ pub async fn export_artifact(
         ExportFormat::Srt => export_txt(destination_path, &export_content)?,
         ExportFormat::Vtt => export_txt(
             destination_path,
-            &build_vtt_content(&segments, &base_transcription),
+            &build_vtt_content(&segments, &base_transcription, options.include_speaker_names),
         )?,
     }
 
@@ -742,6 +803,78 @@ pub async fn summarize_artifact(
     .map_err(CommandError::from)
 }
 
+#[tauri::command]
+pub async fn analyze_artifact_emotions(
+    state: State<'_, AppState>,
+    payload: EmotionAnalysisPayload,
+) -> Result<sbobino_domain::EmotionAnalysisResult, CommandError> {
+    let artifact = state
+        .artifact_service
+        .get(&payload.id)
+        .await
+        .map_err(CommandError::from)?
+        .ok_or_else(|| CommandError::new("not_found", "artifact not found"))?;
+
+    let enhancers = state
+        .runtime_factory
+        .build_enhancer_candidates()
+        .map_err(|e| CommandError::new("runtime_factory", e))?;
+    if enhancers.is_empty() {
+        let reason = state
+            .runtime_factory
+            .ai_capability_status()
+            .ok()
+            .and_then(|status| status.unavailable_reason);
+        return Err(missing_ai_provider_command_error(reason.as_deref()));
+    }
+
+    let transcript = build_artifact_context_transcript(&artifact, payload.context);
+    if transcript.trim().is_empty() {
+        return Err(CommandError::new(
+            "empty_content",
+            "no transcription available to analyze",
+        ));
+    }
+
+    let settings = state
+        .settings_service
+        .snapshot()
+        .await
+        .map_err(CommandError::from)?;
+
+    let result = analyze_emotions_with_enhancers(
+        &enhancers,
+        EmotionAnalysisInput {
+            title: artifact.title.clone(),
+            transcript,
+            timeline_v2_json: artifact.metadata.get("timeline_v2").cloned(),
+        },
+        EmotionAnalysisOptions {
+            language: payload.language.clone(),
+            include_timestamps: payload.context.include_timestamps,
+            include_speakers: payload.context.include_speakers,
+            speaker_dynamics: payload.speaker_dynamics,
+            prompt_override: settings.prompt_for_task(PromptTask::EmotionAnalysis),
+        },
+    )
+    .await
+    .map_err(CommandError::from)?;
+
+    let serialized = serde_json::to_string(&result).map_err(|error| {
+        CommandError::new(
+            "emotion_analysis",
+            format!("failed to serialize emotion analysis: {error}"),
+        )
+    })?;
+    state
+        .artifact_service
+        .update_emotion_analysis(&artifact.id, &serialized, &Utc::now().to_rfc3339())
+        .await
+        .map_err(CommandError::from)?;
+
+    Ok(result)
+}
+
 fn effective_transcript(artifact: &TranscriptArtifact) -> String {
     let optimized = artifact.optimized_transcript.trim();
     if !optimized.is_empty() {
@@ -793,12 +926,14 @@ fn parse_timeline_context_segments(artifact: &TranscriptArtifact) -> Vec<Timelin
             }
 
             let time_label = resolve_timeline_segment_seconds(&segment).map(format_mm_ss);
+            let speaker_id = normalize_optional_text(segment.speaker_id);
             let speaker_label = normalize_optional_text(segment.speaker_label)
-                .or_else(|| normalize_optional_text(segment.speaker_id));
+                .or_else(|| speaker_id.clone());
 
             Some(TimelineContextSegment {
                 text: text.to_string(),
                 time_label,
+                speaker_id,
                 speaker_label,
             })
         })
@@ -1632,6 +1767,8 @@ pub struct WriteTrimmedAudioPayload {
 #[derive(Debug, Serialize)]
 pub struct WriteTrimmedAudioResponse {
     pub path: String,
+    pub duration_seconds: f64,
+    pub file_size_bytes: u64,
 }
 
 #[tauri::command]
@@ -1804,9 +1941,64 @@ pub async fn write_trimmed_audio(
         }
     }
 
+    let (duration_seconds, file_size_bytes) = trimmed_audio_output_metadata(&output_path)?;
+    validate_trimmed_audio_output(duration_seconds, file_size_bytes)?;
+
     Ok(WriteTrimmedAudioResponse {
         path: output_path.to_string_lossy().to_string(),
+        duration_seconds,
+        file_size_bytes,
     })
+}
+
+fn trimmed_audio_output_metadata(path: &Path) -> Result<(f64, u64), CommandError> {
+    let metadata = std::fs::metadata(path)
+        .map_err(|e| CommandError::new("trim", format!("failed to inspect trimmed audio: {e}")))?;
+    let file_size_bytes = metadata.len();
+
+    let reader = hound::WavReader::open(path)
+        .map_err(|e| CommandError::new("trim", format!("trimmed audio is unreadable: {e}")))?;
+    let spec = reader.spec();
+    if spec.sample_rate == 0 {
+        return Err(CommandError::new(
+            "trim",
+            "trimmed audio has invalid sample rate".to_string(),
+        ));
+    }
+
+    let duration_seconds = f64::from(reader.duration()) / f64::from(spec.sample_rate);
+    Ok((duration_seconds, file_size_bytes))
+}
+
+fn validate_trimmed_audio_output(
+    duration_seconds: f64,
+    file_size_bytes: u64,
+) -> Result<(), CommandError> {
+    if file_size_bytes == 0 {
+        return Err(CommandError::new(
+            "trim",
+            "trimmed audio file is empty".to_string(),
+        ));
+    }
+
+    if !duration_seconds.is_finite() || duration_seconds <= 0.0 {
+        return Err(CommandError::new(
+            "trim",
+            "trimmed audio duration is invalid".to_string(),
+        ));
+    }
+
+    if duration_seconds < MIN_TRIMMED_AUDIO_DURATION_SECONDS {
+        return Err(CommandError::new(
+            "trim",
+            format!(
+                "trimmed audio is too short ({duration_seconds:.2}s). Select at least {:.1}s before retranscribing.",
+                MIN_TRIMMED_AUDIO_DURATION_SECONDS,
+            ),
+        ));
+    }
+
+    Ok(())
 }
 
 fn export_txt(path: &Path, transcription: &str) -> Result<(), CommandError> {
@@ -1819,22 +2011,130 @@ fn export_md(path: &Path, content: &str) -> Result<(), CommandError> {
         .map_err(|e| CommandError::new("export", format!("failed to export markdown: {e}")))
 }
 
-fn export_csv(path: &Path, segments: &[ExportSegment]) -> Result<(), CommandError> {
-    let header = "Start Timestamp;End Timestamp;Transcript";
+fn normalized_export_speaker_label(segment: &ExportSegment) -> Option<&str> {
+    segment
+        .speaker_label
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn normalized_export_speaker_id(segment: &ExportSegment) -> Option<String> {
+    normalize_optional_text(segment.speaker_id.clone())
+        .map(normalize_speaker_color_key)
+        .or_else(|| normalized_export_speaker_label(segment).map(normalize_speaker_color_key))
+}
+
+fn normalize_speaker_color_key(value: impl AsRef<str>) -> String {
+    let candidate = value
+        .as_ref()
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|character| if character.is_ascii_alphanumeric() { character } else { '_' })
+        .collect::<String>();
+
+    let normalized = candidate.trim_matches('_').to_string();
+    if normalized.is_empty() {
+        "speaker".to_string()
+    } else {
+        normalized
+    }
+}
+
+fn sanitize_speaker_color_value(value: impl AsRef<str>) -> Option<String> {
+    let trimmed = value.as_ref().trim();
+    if trimmed.len() != 7 || !trimmed.starts_with('#') {
+        return None;
+    }
+    if !trimmed
+        .chars()
+        .skip(1)
+        .all(|character| character.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    Some(trimmed.to_ascii_uppercase())
+}
+
+fn default_speaker_color_for_key(key: &str) -> String {
+    let hash = key
+        .bytes()
+        .fold(0_u64, |accumulator, value| accumulator.wrapping_mul(31).wrapping_add(value as u64));
+    SPEAKER_COLOR_PALETTE[(hash as usize) % SPEAKER_COLOR_PALETTE.len()].to_string()
+}
+
+fn resolve_export_speaker_color(
+    segment: &ExportSegment,
+    speaker_colors: &BTreeMap<String, String>,
+) -> Option<String> {
+    let speaker_key = normalized_export_speaker_id(segment)?;
+    if let Some(color) = speaker_colors
+        .get(&speaker_key)
+        .and_then(|value| sanitize_speaker_color_value(value))
+    {
+        return Some(color);
+    }
+
+    Some(default_speaker_color_for_key(&speaker_key))
+}
+
+fn parse_hex_rgb(color: &str) -> Option<(u8, u8, u8)> {
+    let normalized = sanitize_speaker_color_value(color)?;
+    let value = u32::from_str_radix(&normalized[1..], 16).ok()?;
+    Some((
+        ((value >> 16) & 0xff) as u8,
+        ((value >> 8) & 0xff) as u8,
+        (value & 0xff) as u8,
+    ))
+}
+
+fn render_export_segment_line(segment: &ExportSegment, include_speaker_names: bool) -> String {
+    let line = segment.line.trim();
+    if !include_speaker_names {
+        return line.to_string();
+    }
+    match normalized_export_speaker_label(segment) {
+        Some(speaker_label) => format!("{speaker_label}: {line}"),
+        None => line.to_string(),
+    }
+}
+
+fn export_csv(
+    path: &Path,
+    segments: &[ExportSegment],
+    include_speaker_names: bool,
+) -> Result<(), CommandError> {
+    let header = if include_speaker_names {
+        "Start Timestamp;End Timestamp;Transcript;Speaker"
+    } else {
+        "Start Timestamp;End Timestamp;Transcript"
+    };
     let rows = if segments.is_empty() {
-        vec!["00:00;00:00;\"\"".to_string()]
+        vec![if include_speaker_names {
+            "00:00;00:00;\"\";\"\"".to_string()
+        } else {
+            "00:00;00:00;\"\"".to_string()
+        }]
     } else {
         segments
             .iter()
             .map(|segment| {
                 let start_seconds = parse_timestamp_to_seconds(&segment.time);
                 let end_time = format_mm_ss_u32(start_seconds + 11);
-                format!(
+                let base = format!(
                     "{};{};\"{}\"",
                     segment.time,
                     end_time,
                     segment.line.replace('"', "\"\"")
-                )
+                );
+                if !include_speaker_names {
+                    return base;
+                }
+                let speaker = normalized_export_speaker_label(segment)
+                    .unwrap_or_default()
+                    .replace('"', "\"\"");
+                format!("{base};\"{speaker}\"")
             })
             .collect::<Vec<_>>()
     };
@@ -1855,8 +2155,22 @@ fn export_docx(path: &Path, document: &ExportDocument) -> Result<(), CommandErro
 
         doc = doc.add_paragraph(Paragraph::new().add_run(Run::new().add_text(&section.title)));
 
-        for line in section.body.lines() {
-            doc = doc.add_paragraph(Paragraph::new().add_run(Run::new().add_text(line)));
+        if let Some(styled_lines) = &section.styled_lines {
+            for line in styled_lines {
+                let mut run = Run::new().add_text(&line.text);
+                if let Some(color) = line
+                    .speaker_color
+                    .as_deref()
+                    .and_then(sanitize_speaker_color_value)
+                {
+                    run = run.color(color.trim_start_matches('#'));
+                }
+                doc = doc.add_paragraph(Paragraph::new().add_run(run));
+            }
+        } else {
+            for line in section.body.lines() {
+                doc = doc.add_paragraph(Paragraph::new().add_run(Run::new().add_text(line)));
+            }
         }
     }
 
@@ -1874,10 +2188,26 @@ fn export_html(path: &Path, language: &str, document: &ExportDocument) -> Result
         .sections
         .iter()
         .map(|section| {
+            let content_html = if let Some(styled_lines) = &section.styled_lines {
+                styled_lines
+                    .iter()
+                    .map(|line| match line.speaker_color.as_deref() {
+                        Some(color) => format!(
+                            "<span style=\"color:{}\">{}</span>",
+                            escape_html(color),
+                            escape_html(&line.text)
+                        ),
+                        None => escape_html(&line.text),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("<br/>\n")
+            } else {
+                escape_html(&section.body).replace('\n', "<br/>\n")
+            };
             format!(
                 "<section class=\"section\"><h2>{}</h2><div class=\"content\">{}</div></section>",
                 escape_html(&section.title),
-                escape_html(&section.body).replace('\n', "<br/>\n")
+                content_html
             )
         })
         .collect::<Vec<_>>()
@@ -1898,9 +2228,23 @@ fn export_json(
     style: ExportStyle,
     grouping: ExportGrouping,
     include_timestamps: bool,
+    include_speaker_names: bool,
     segments: &[ExportSegment],
     content: &str,
 ) -> Result<(), CommandError> {
+    let serialized_segments = if include_speaker_names {
+        segments.to_vec()
+    } else {
+        segments
+            .iter()
+            .map(|segment| ExportSegment {
+                time: segment.time.clone(),
+                line: segment.line.clone(),
+                speaker_id: None,
+                speaker_label: None,
+            })
+            .collect::<Vec<_>>()
+    };
     let payload = json!({
         "id": artifact.id,
         "job_id": artifact.job_id,
@@ -1912,7 +2256,8 @@ fn export_json(
         "style": style,
         "options": {
             "include_timestamps": include_timestamps,
-            "grouping": grouping
+            "grouping": grouping,
+            "include_speaker_names": include_speaker_names
         },
         "document_title": document.title,
         "sections": document.sections.iter().map(|section| {
@@ -1924,7 +2269,7 @@ fn export_json(
         "content": content,
         "summary": artifact.summary,
         "faqs": artifact.faqs,
-        "segments": segments,
+        "segments": serialized_segments,
         "metadata": artifact.metadata,
     });
 
@@ -1941,11 +2286,12 @@ fn export_pdf(path: &Path, document: &ExportDocument) -> Result<(), CommandError
     let mut ops = start_pdf_page_ops(Some(&document.title));
     let mut y = 780.0_f32;
     let body_lines = render_document_body_lines(document);
+    let colored_lines = render_document_body_styled_lines(document);
 
     if body_lines.is_empty() {
-        write_pdf_line(&mut ops, "No content available for export.", y);
+        write_pdf_line(&mut ops, "No content available for export.", y, None);
     } else {
-        for line in body_lines {
+        for line in colored_lines {
             if y < 42.0 {
                 ops.push(Op::EndTextSection);
                 pages.push(PdfPage::new(Mm(210.0), Mm(297.0), ops));
@@ -1953,7 +2299,7 @@ fn export_pdf(path: &Path, document: &ExportDocument) -> Result<(), CommandError
                 y = 810.0;
             }
 
-            write_pdf_line(&mut ops, &line, y);
+            write_pdf_line(&mut ops, &line.text, y, line.speaker_color.as_deref());
             y -= 14.0;
         }
     }
@@ -2013,13 +2359,27 @@ fn start_pdf_page_ops(title: Option<&str>) -> Vec<Op> {
     ops
 }
 
-fn write_pdf_line(ops: &mut Vec<Op>, line: &str, y: f32) {
+fn write_pdf_line(ops: &mut Vec<Op>, line: &str, y: f32, speaker_color: Option<&str>) {
     ops.push(Op::SetTextCursor {
         pos: printpdf::graphics::Point {
             x: Pt(28.0),
             y: Pt(y),
         },
     });
+    if let Some((red, green, blue)) = speaker_color.and_then(parse_hex_rgb) {
+        ops.push(Op::SetFillColor {
+            col: Color::Rgb(Rgb::new(
+                red as f32 / 255.0,
+                green as f32 / 255.0,
+                blue as f32 / 255.0,
+                None,
+            )),
+        });
+    } else {
+        ops.push(Op::SetFillColor {
+            col: Color::Rgb(Rgb::new(0.12, 0.14, 0.19, None)),
+        });
+    }
     ops.push(Op::WriteTextBuiltinFont {
         items: vec![TextItem::Text(line.to_string())],
         font: BuiltinFont::Helvetica,
@@ -2094,6 +2454,89 @@ fn localized_export_faq_title(language: &str) -> &'static str {
     }
 }
 
+fn build_primary_section_styled_lines(
+    segments: &[ExportSegment],
+    _transcription: &str,
+    style: ExportStyle,
+    include_timestamps: bool,
+    include_speaker_names: bool,
+    speaker_colors: &BTreeMap<String, String>,
+) -> Option<Vec<ExportStyledLine>> {
+    if segments.is_empty() {
+        return None;
+    }
+
+    let lines = match style {
+        ExportStyle::Segments => segments
+            .iter()
+            .map(|segment| ExportStyledLine {
+                text: if include_timestamps {
+                    format!(
+                        "[{}] {}",
+                        segment.time,
+                        render_export_segment_line(segment, include_speaker_names)
+                    )
+                } else {
+                    render_export_segment_line(segment, include_speaker_names)
+                },
+                speaker_color: resolve_export_speaker_color(segment, speaker_colors),
+            })
+            .collect::<Vec<_>>(),
+        ExportStyle::Transcript if include_timestamps => segments
+            .iter()
+            .map(|segment| ExportStyledLine {
+                text: format!(
+                    "[{}] {}",
+                    segment.time,
+                    render_export_segment_line(segment, include_speaker_names)
+                ),
+                speaker_color: resolve_export_speaker_color(segment, speaker_colors),
+            })
+            .collect::<Vec<_>>(),
+        ExportStyle::Subtitles => segments
+            .iter()
+            .enumerate()
+            .flat_map(|(index, segment)| {
+                let start_seconds = parse_timestamp_to_seconds(&segment.time);
+                let end_seconds = start_seconds + 11;
+                let mut cue_lines = vec![
+                    ExportStyledLine {
+                        text: (index + 1).to_string(),
+                        speaker_color: None,
+                    },
+                    ExportStyledLine {
+                        text: format!(
+                            "{} --> {}",
+                            format_srt_time(start_seconds),
+                            format_srt_time(end_seconds)
+                        ),
+                        speaker_color: None,
+                    },
+                    ExportStyledLine {
+                        text: render_export_segment_line(segment, include_speaker_names),
+                        speaker_color: resolve_export_speaker_color(segment, speaker_colors),
+                    },
+                ];
+
+                if index + 1 < segments.len() {
+                    cue_lines.push(ExportStyledLine {
+                        text: String::new(),
+                        speaker_color: None,
+                    });
+                }
+                cue_lines
+            })
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
+
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines)
+    }
+}
+
 fn build_export_document(
     language: &str,
     title: &str,
@@ -2103,16 +2546,33 @@ fn build_export_document(
     segments: &[ExportSegment],
     style: ExportStyle,
     include_timestamps: bool,
+    include_speaker_names: bool,
+    speaker_colors: &BTreeMap<String, String>,
 ) -> ExportDocument {
     let mut sections = vec![ExportDocumentSection {
         title: localized_export_primary_section_title(language, style).to_string(),
-        body: build_export_content(transcription, segments, style, include_timestamps),
+        body: build_export_content(
+            transcription,
+            segments,
+            style,
+            include_timestamps,
+            include_speaker_names,
+        ),
+        styled_lines: build_primary_section_styled_lines(
+            segments,
+            transcription,
+            style,
+            include_timestamps,
+            include_speaker_names,
+            speaker_colors,
+        ),
     }];
 
     if !summary.trim().is_empty() {
         sections.push(ExportDocumentSection {
             title: localized_export_summary_title(language).to_string(),
             body: summary.trim().to_string(),
+            styled_lines: None,
         });
     }
 
@@ -2120,6 +2580,7 @@ fn build_export_document(
         sections.push(ExportDocumentSection {
             title: localized_export_faq_title(language).to_string(),
             body: faqs.trim().to_string(),
+            styled_lines: None,
         });
     }
 
@@ -2166,7 +2627,49 @@ fn render_document_body_lines(document: &ExportDocument) -> Vec<String> {
             lines.push(String::new());
         }
         lines.push(section.title.clone());
-        lines.extend(section.body.lines().map(|line| line.to_string()));
+        if let Some(styled_lines) = &section.styled_lines {
+            lines.extend(styled_lines.iter().map(|line| line.text.clone()));
+        } else {
+            lines.extend(section.body.lines().map(|line| line.to_string()));
+        }
+    }
+
+    lines
+}
+
+fn render_document_body_styled_lines(document: &ExportDocument) -> Vec<ExportStyledLine> {
+    let mut lines = Vec::new();
+
+    for (index, section) in document.sections.iter().enumerate() {
+        if index == 0 {
+            lines.push(ExportStyledLine {
+                text: String::new(),
+                speaker_color: None,
+            });
+        } else {
+            lines.push(ExportStyledLine {
+                text: String::new(),
+                speaker_color: None,
+            });
+            lines.push(ExportStyledLine {
+                text: String::new(),
+                speaker_color: None,
+            });
+        }
+
+        lines.push(ExportStyledLine {
+            text: section.title.clone(),
+            speaker_color: None,
+        });
+
+        if let Some(styled_lines) = &section.styled_lines {
+            lines.extend(styled_lines.iter().cloned());
+        } else {
+            lines.extend(section.body.lines().map(|line| ExportStyledLine {
+                text: line.to_string(),
+                speaker_color: None,
+            }));
+        }
     }
 
     lines
@@ -2184,6 +2687,8 @@ fn build_export_segments(artifact: &TranscriptArtifact, transcription: &str) -> 
             Some(ExportSegment {
                 time,
                 line: text.to_string(),
+                speaker_id: segment.speaker_id,
+                speaker_label: segment.speaker_label,
             })
         })
         .collect::<Vec<_>>();
@@ -2208,6 +2713,8 @@ fn build_segments_from_text(transcription: &str) -> Vec<ExportSegment> {
             ExportSegment {
                 time: format!("{:02}:{:02}", mm, ss),
                 line: line.to_string(),
+                speaker_id: None,
+                speaker_label: None,
             }
         })
         .collect()
@@ -2250,19 +2757,27 @@ fn format_vtt_time(seconds: u32) -> String {
     format!("{:02}:{:02}:{:02}.000", hh, mm, ss)
 }
 
-fn build_markdown_subtitles_content(segments: &[ExportSegment], transcription: &str) -> String {
+fn build_markdown_subtitles_content(
+    segments: &[ExportSegment],
+    transcription: &str,
+    include_speaker_names: bool,
+) -> String {
     if segments.is_empty() {
         return transcription.trim().to_string();
     }
 
     segments
         .iter()
-        .map(|segment| format!("{}\n{}", segment.line.trim(), segment.time))
+        .map(|segment| format!("{}\n{}", render_export_segment_line(segment, include_speaker_names), segment.time))
         .collect::<Vec<_>>()
         .join("\n\n")
 }
 
-fn build_vtt_content(segments: &[ExportSegment], transcription: &str) -> String {
+fn build_vtt_content(
+    segments: &[ExportSegment],
+    transcription: &str,
+    include_speaker_names: bool,
+) -> String {
     if segments.is_empty() {
         return format!("WEBVTT\n\n{}", transcription.trim());
     }
@@ -2276,7 +2791,7 @@ fn build_vtt_content(segments: &[ExportSegment], transcription: &str) -> String 
                 "{} --> {}\n{}",
                 format_vtt_time(start_seconds),
                 format_vtt_time(end_seconds),
-                segment.line.trim()
+                render_export_segment_line(segment, include_speaker_names)
             )
         })
         .collect::<Vec<_>>()
@@ -2290,6 +2805,7 @@ fn build_export_content(
     segments: &[ExportSegment],
     style: ExportStyle,
     include_timestamps: bool,
+    include_speaker_names: bool,
 ) -> String {
     let normalized_transcription = transcription.trim();
 
@@ -2310,7 +2826,7 @@ fn build_export_content(
                         index + 1,
                         format_srt_time(start_seconds),
                         format_srt_time(end_seconds),
-                        segment.line.trim()
+                        render_export_segment_line(segment, include_speaker_names)
                     )
                 })
                 .collect::<Vec<_>>()
@@ -2325,9 +2841,13 @@ fn build_export_content(
                 .iter()
                 .map(|segment| {
                     if include_timestamps {
-                        format!("[{}] {}", segment.time, segment.line.trim())
+                        format!(
+                            "[{}] {}",
+                            segment.time,
+                            render_export_segment_line(segment, include_speaker_names)
+                        )
                     } else {
-                        segment.line.trim().to_string()
+                        render_export_segment_line(segment, include_speaker_names)
                     }
                 })
                 .collect::<Vec<_>>()
@@ -2339,7 +2859,13 @@ fn build_export_content(
             } else {
                 segments
                     .iter()
-                    .map(|segment| format!("[{}] {}", segment.time, segment.line.trim()))
+                    .map(|segment| {
+                        format!(
+                            "[{}] {}",
+                            segment.time,
+                            render_export_segment_line(segment, include_speaker_names)
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join("\n")
             }
@@ -2370,6 +2896,7 @@ mod tests {
     use chrono::Utc;
     use sbobino_application::dto::SummaryFaq;
     use serde_json::json;
+    use tempfile::tempdir;
 
     use super::{
         build_artifact_context_transcript, build_chat_context_candidates, build_chunk_note_prompt,
@@ -2377,8 +2904,9 @@ mod tests {
         build_export_document, build_export_segments, build_summary_instructions,
         build_summary_synthesis_prompt, chunk_text_by_words, extract_low_confidence_spans,
         is_context_window_error, optimize_with_rag, render_plain_text_document, summarize_with_rag,
-        ApplicationError, ArtifactAiContextOptions, ArtifactKind, ExportStyle,
-        SummarizeArtifactPayload, TranscriptArtifact, TranscriptEnhancer,
+        trimmed_audio_output_metadata, validate_trimmed_audio_output, ApplicationError,
+        ArtifactAiContextOptions, ArtifactKind, ExportStyle, SummarizeArtifactPayload,
+        TranscriptArtifact, TranscriptEnhancer, MIN_TRIMMED_AUDIO_DURATION_SECONDS,
     };
 
     struct TrackingEnhancer {
@@ -2563,11 +3091,13 @@ mod tests {
                     {
                         "text": "Alice opens the meeting.",
                         "start_seconds": 12.4,
+                        "speaker_id": "speaker_1",
                         "speaker_label": "Alice"
                     },
                     {
                         "text": "Bob confirms the next step.",
                         "start_seconds": 24.9,
+                        "speaker_id": "speaker_2",
                         "speaker_label": "Bob"
                     }
                 ]
@@ -2666,16 +3196,53 @@ mod tests {
         assert_eq!(segments.len(), 2);
         assert_eq!(segments[0].time, "00:12");
         assert_eq!(segments[0].line, "Alice opens the meeting.");
+        assert_eq!(segments[0].speaker_id.as_deref(), Some("speaker_1"));
 
         let content = build_export_content(
             "fallback transcript",
             &segments,
             ExportStyle::Segments,
             true,
+            true,
         );
 
-        assert!(content.contains("[00:12] Alice opens the meeting."));
+        assert_eq!(segments[0].speaker_label.as_deref(), Some("Alice"));
+        assert!(content.contains("[00:12] Alice: Alice opens the meeting."));
+        assert!(content.contains("[00:24] Bob: Bob confirms the next step."));
         assert!(!content.contains("[00:12]\nAlice opens the meeting."));
+    }
+
+    #[test]
+    fn export_document_styles_segment_lines_with_speaker_colors() {
+        let artifact = sample_artifact_with_timeline("fallback transcript");
+        let segments = build_export_segments(&artifact, "fallback transcript");
+        let mut speaker_colors = BTreeMap::new();
+        speaker_colors.insert("speaker_1".to_string(), "#123456".to_string());
+
+        let document = build_export_document(
+            "en",
+            &artifact.title,
+            &artifact.raw_transcript,
+            &artifact.summary,
+            &artifact.faqs,
+            &segments,
+            ExportStyle::Segments,
+            true,
+            true,
+            &speaker_colors,
+        );
+
+        let styled_lines = document.sections[0]
+            .styled_lines
+            .as_ref()
+            .expect("primary section should expose styled lines");
+        assert_eq!(styled_lines[0].text, "[00:12] Alice: Alice opens the meeting.");
+        assert_eq!(styled_lines[0].speaker_color.as_deref(), Some("#123456"));
+        assert!(styled_lines[1]
+            .speaker_color
+            .as_deref()
+            .expect("speaker color fallback should exist")
+            .starts_with('#'));
     }
 
     #[test]
@@ -2707,6 +3274,8 @@ mod tests {
         let segments = vec![super::ExportSegment {
             time: "00:00".to_string(),
             line: "Linea uno".to_string(),
+            speaker_id: None,
+            speaker_label: None,
         }];
 
         let document = build_export_document(
@@ -2718,6 +3287,8 @@ mod tests {
             &segments,
             ExportStyle::Segments,
             true,
+            false,
+            &BTreeMap::new(),
         );
 
         assert_eq!(document.title, "Trascrizione di Riunione team");
@@ -2967,5 +3538,41 @@ mod tests {
         assert!(prompts
             .iter()
             .any(|prompt| prompt.contains("Transcript chunk:")));
+    }
+
+    #[test]
+    fn trimmed_audio_output_metadata_reports_duration_and_file_size() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("trimmed.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+
+        let mut writer = hound::WavWriter::create(&path, spec).expect("create wav writer");
+        for _ in 0..32_000 {
+            writer.write_sample::<i16>(0).expect("write sample");
+        }
+        writer.finalize().expect("finalize wav");
+
+        let (duration_seconds, file_size_bytes) =
+            trimmed_audio_output_metadata(&path).expect("metadata should parse");
+
+        assert!((duration_seconds - 2.0).abs() < 0.02);
+        assert!(file_size_bytes > 0);
+    }
+
+    #[test]
+    fn validate_trimmed_audio_output_rejects_empty_and_too_short_files() {
+        let empty_error = validate_trimmed_audio_output(1.0, 0)
+            .expect_err("empty trimmed file should be rejected");
+        assert!(empty_error.message.contains("trimmed audio file is empty"));
+
+        let short_error =
+            validate_trimmed_audio_output(MIN_TRIMMED_AUDIO_DURATION_SECONDS - 0.1, 128)
+                .expect_err("too-short trimmed file should be rejected");
+        assert!(short_error.message.contains("trimmed audio is too short"));
     }
 }

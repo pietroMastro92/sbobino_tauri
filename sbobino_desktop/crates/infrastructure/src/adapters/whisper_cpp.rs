@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::process::ExitStatus;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -20,6 +21,9 @@ use crate::adapters::transcript_segmentation::normalize_transcript_segments;
 
 static OUTPUT_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 const DELTA_REPLACE_PREFIX: &str = "\u{001F}REPLACE:";
+const PROCESS_WAIT_POLL_INTERVAL: Duration = Duration::from_secs(5);
+const PROCESS_IDLE_TIMEOUT_MIN: Duration = Duration::from_secs(900);
+const PROCESS_IDLE_TIMEOUT_MAX: Duration = Duration::from_secs(3600);
 
 #[derive(Debug, Clone)]
 pub struct WhisperCppEngine {
@@ -87,6 +91,64 @@ impl WhisperCppEngine {
         Path::new(&self.models_dir).join(model_filename)
     }
 
+    fn clock_now_millis() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+            .unwrap_or(0)
+    }
+
+    fn transcription_idle_timeout(total_audio_seconds: Option<f32>) -> Duration {
+        let scaled_seconds = total_audio_seconds
+            .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+            .map(|seconds| ((seconds as f64 * 0.25).ceil() as u64).saturating_add(300))
+            .unwrap_or(PROCESS_IDLE_TIMEOUT_MIN.as_secs());
+
+        let candidate = Duration::from_secs(scaled_seconds);
+        candidate.clamp(PROCESS_IDLE_TIMEOUT_MIN, PROCESS_IDLE_TIMEOUT_MAX)
+    }
+
+    fn mark_activity(last_activity_at_ms: &AtomicU64) {
+        last_activity_at_ms.store(Self::clock_now_millis(), Ordering::Relaxed);
+    }
+
+    async fn wait_for_child_with_idle_timeout(
+        child: &mut tokio::process::Child,
+        total_audio_seconds: Option<f32>,
+        last_activity_at_ms: Arc<AtomicU64>,
+    ) -> Result<ExitStatus, ApplicationError> {
+        let idle_timeout = Self::transcription_idle_timeout(total_audio_seconds);
+        let idle_timeout_millis = idle_timeout.as_millis().min(u128::from(u64::MAX)) as u64;
+        let mut wait_future = Box::pin(child.wait());
+
+        loop {
+            match timeout(PROCESS_WAIT_POLL_INTERVAL, wait_future.as_mut()).await {
+                Ok(wait_result) => {
+                    return wait_result.map_err(|error| {
+                        ApplicationError::SpeechToText(format!(
+                            "failed to wait for whisper-cli: {error}"
+                        ))
+                    });
+                }
+                Err(_) => {
+                    let idle_for_millis = Self::clock_now_millis()
+                        .saturating_sub(last_activity_at_ms.load(Ordering::Relaxed));
+                    if idle_for_millis < idle_timeout_millis {
+                        continue;
+                    }
+
+                    drop(wait_future);
+                    let _ = child.start_kill();
+                    let _ = child.wait().await;
+                    return Err(ApplicationError::SpeechToText(format!(
+                        "whisper-cli stopped producing output for {}s and was terminated",
+                        idle_timeout.as_secs()
+                    )));
+                }
+            }
+        }
+    }
+
     fn validate_model_exists(&self, model_filename: &str) -> Result<PathBuf, ApplicationError> {
         let model_path = self.model_path(model_filename);
         if model_path.exists() {
@@ -107,11 +169,11 @@ impl WhisperCppEngine {
         if parts.len() == 3 {
             let hh = parts[0].parse::<f32>().ok()?;
             let mm = parts[1].parse::<f32>().ok()?;
-            let ss = parts[2].parse::<f32>().ok()?;
+            let ss = parts[2].replace(',', ".").parse::<f32>().ok()?;
             Some((hh * 3600.0) + (mm * 60.0) + ss)
         } else if parts.len() == 2 {
             let mm = parts[0].parse::<f32>().ok()?;
-            let ss = parts[1].parse::<f32>().ok()?;
+            let ss = parts[1].replace(',', ".").parse::<f32>().ok()?;
             Some((mm * 60.0) + ss)
         } else {
             None
@@ -401,6 +463,7 @@ impl WhisperCppEngine {
         emit_partial: Arc<dyn Fn(String) + Send + Sync>,
         emit_progress_seconds: Arc<dyn Fn(f32) + Send + Sync>,
         _total_audio_seconds: Option<f32>,
+        last_activity_at_ms: Arc<AtomicU64>,
     ) -> Result<Vec<String>, ApplicationError>
     where
         R: AsyncRead + Unpin,
@@ -411,6 +474,7 @@ impl WhisperCppEngine {
         let mut raw_lines = Vec::<String>::new();
 
         while let Ok(Some(raw)) = lines.next_line().await {
+            Self::mark_activity(last_activity_at_ms.as_ref());
             raw_lines.push(raw.clone());
             if let Some(parsed_line) = Self::parse_cli_line(&raw) {
                 match parsed_line {
@@ -594,11 +658,13 @@ impl WhisperCppEngine {
         })?;
 
         let collected = Arc::new(Mutex::new(TranscriptCollector::default()));
+        let last_activity_at_ms = Arc::new(AtomicU64::new(Self::clock_now_millis()));
 
         let stdout_emit = emit_partial.clone();
         let stdout_progress = emit_progress_seconds.clone();
         let stdout_collector = collected.clone();
         let stdout_total_seconds = total_audio_seconds;
+        let stdout_last_activity = last_activity_at_ms.clone();
         let stdout_task = tokio::spawn(async move {
             Self::consume_stream(
                 stdout,
@@ -606,6 +672,7 @@ impl WhisperCppEngine {
                 stdout_emit,
                 stdout_progress,
                 stdout_total_seconds,
+                stdout_last_activity,
             )
             .await
         });
@@ -614,6 +681,7 @@ impl WhisperCppEngine {
         let stderr_progress = emit_progress_seconds.clone();
         let stderr_collector = collected.clone();
         let stderr_total_seconds = total_audio_seconds;
+        let stderr_last_activity = last_activity_at_ms.clone();
         let stderr_task = tokio::spawn(async move {
             Self::consume_stream(
                 stderr,
@@ -621,22 +689,17 @@ impl WhisperCppEngine {
                 stderr_emit,
                 stderr_progress,
                 stderr_total_seconds,
+                stderr_last_activity,
             )
             .await
         });
 
-        let status = match timeout(Duration::from_secs(900), child.wait()).await {
-            Ok(wait_result) => wait_result.map_err(|e| {
-                ApplicationError::SpeechToText(format!("failed to wait for whisper-cli: {e}"))
-            })?,
-            Err(_) => {
-                let _ = child.start_kill();
-                let _ = child.wait().await;
-                return Err(ApplicationError::SpeechToText(
-                    "whisper-cli timed out after 900s".to_string(),
-                ));
-            }
-        };
+        let status = Self::wait_for_child_with_idle_timeout(
+            &mut child,
+            total_audio_seconds,
+            last_activity_at_ms,
+        )
+        .await?;
 
         let _stdout_lines = stdout_task.await.map_err(|e| {
             ApplicationError::SpeechToText(format!("stdout reader task failed: {e}"))
@@ -705,6 +768,35 @@ impl WhisperCppEngine {
             text: transcript,
             segments,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WhisperCppEngine, PROCESS_IDLE_TIMEOUT_MAX, PROCESS_IDLE_TIMEOUT_MIN};
+
+    #[test]
+    fn transcription_idle_timeout_defaults_to_minimum_without_duration() {
+        assert_eq!(
+            WhisperCppEngine::transcription_idle_timeout(None),
+            PROCESS_IDLE_TIMEOUT_MIN
+        );
+    }
+
+    #[test]
+    fn transcription_idle_timeout_scales_for_longer_audio() {
+        assert_eq!(
+            WhisperCppEngine::transcription_idle_timeout(Some(7_200.0)).as_secs(),
+            2_100
+        );
+    }
+
+    #[test]
+    fn transcription_idle_timeout_caps_at_maximum() {
+        assert_eq!(
+            WhisperCppEngine::transcription_idle_timeout(Some(24_000.0)),
+            PROCESS_IDLE_TIMEOUT_MAX
+        );
     }
 }
 

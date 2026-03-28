@@ -5,6 +5,8 @@ import type {
   AiCapabilityStatus,
   AppSettings,
   ChatArtifactPayload,
+  EmotionAnalysisPayload,
+  EmotionAnalysisResult,
   ArtifactKind,
   EnsureRuntimeResponse,
   JobProgress,
@@ -22,6 +24,7 @@ import type {
   TranscriptionDelta,
   TranscriptArtifact,
   SummarizeArtifactPayload,
+  WriteTrimmedAudioResponse,
   UpdateAiProvidersPayload,
   UpdateCheckResponse,
   UpdateSettingsPartialPayload,
@@ -190,10 +193,13 @@ export async function exportArtifact(payload: {
   options?: {
     include_timestamps: boolean;
     grouping: "none" | "speaker_paragraphs";
+    include_speaker_names?: boolean;
   };
   segments?: Array<{
     time: string;
     line: string;
+    speakerId?: string | null;
+    speakerLabel?: string | null;
   }>;
   content_override?: string;
 }): Promise<{ path: string }> {
@@ -206,6 +212,12 @@ export async function chatArtifact(payload: ChatArtifactPayload): Promise<string
 
 export async function summarizeArtifact(payload: SummarizeArtifactPayload): Promise<string> {
   return invoke<string>("summarize_artifact", { payload });
+}
+
+export async function analyzeArtifactEmotions(
+  payload: EmotionAnalysisPayload,
+): Promise<EmotionAnalysisResult> {
+  return invoke<EmotionAnalysisResult>("analyze_artifact_emotions", { payload });
 }
 
 export type OptimizeArtifactPayload = {
@@ -300,8 +312,8 @@ export async function readAudioFile(path: string): Promise<number[]> {
 export async function writeTrimmedAudio(
   inputPath: string,
   regions: Array<{ start: number; end: number }>,
-): Promise<{ path: string }> {
-  return invoke<{ path: string }>("write_trimmed_audio", {
+): Promise<WriteTrimmedAudioResponse> {
+  return invoke<WriteTrimmedAudioResponse>("write_trimmed_audio", {
     payload: { input_path: inputPath, regions },
   });
 }

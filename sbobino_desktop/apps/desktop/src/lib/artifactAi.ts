@@ -1,8 +1,11 @@
 import type {
   AiCapabilityStatus,
   ChatArtifactPayload,
+  EmotionAnalysisPayload,
+  EmotionAnalysisResult,
   LanguageCode,
   SummarizeArtifactPayload,
+  TranscriptArtifact,
 } from "../types";
 
 export const defaultSummaryControls = {
@@ -12,6 +15,13 @@ export const defaultSummaryControls = {
   bulletPoints: false,
   actionItems: true,
   keyPointsOnly: false,
+  language: "en" as LanguageCode,
+};
+
+export const defaultEmotionControls = {
+  includeTimestamps: true,
+  includeSpeakers: false,
+  speakerDynamics: true,
   language: "en" as LanguageCode,
 };
 
@@ -57,6 +67,53 @@ export function buildChatArtifactPayload(params: {
     include_timestamps: params.includeTimestamps,
     include_speakers: params.includeSpeakers,
   };
+}
+
+export function buildEmotionAnalysisPayload(params: {
+  id: string;
+  language: LanguageCode;
+  includeTimestamps: boolean;
+  includeSpeakers: boolean;
+  speakerDynamics: boolean;
+}): EmotionAnalysisPayload {
+  return {
+    id: params.id,
+    language: params.language,
+    include_timestamps: params.includeTimestamps,
+    include_speakers: params.includeSpeakers,
+    speaker_dynamics: params.speakerDynamics,
+  };
+}
+
+export function parsePersistedEmotionAnalysis(
+  artifact: TranscriptArtifact | null | undefined,
+): EmotionAnalysisResult | null {
+  const raw = artifact?.metadata?.emotion_analysis_v1?.trim();
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<EmotionAnalysisResult> | null;
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+
+    if (
+      !parsed.overview ||
+      !Array.isArray(parsed.timeline) ||
+      !parsed.semantic_map ||
+      !Array.isArray(parsed.bridges) ||
+      !Array.isArray(parsed.reflection_prompts) ||
+      typeof parsed.narrative_markdown !== "string"
+    ) {
+      return null;
+    }
+
+    return parsed as EmotionAnalysisResult;
+  } catch {
+    return null;
+  }
 }
 
 export function shouldAutostartSummary(params: {

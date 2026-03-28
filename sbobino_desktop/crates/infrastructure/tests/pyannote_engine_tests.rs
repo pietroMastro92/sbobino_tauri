@@ -55,12 +55,14 @@ printf '{"speakers":[{"speaker_id":"speaker_1","speaker_label":"Speaker 1","star
 
     let engine = PyannoteSpeakerDiarizationEngine::new(
         python_path.to_string_lossy().to_string(),
+        None,
         script_path.to_string_lossy().to_string(),
         temp.path()
             .join("pyannote-model")
             .to_string_lossy()
             .to_string(),
         "cpu".to_string(),
+        vec![],
     );
 
     let turns = engine

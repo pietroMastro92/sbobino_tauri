@@ -236,5 +236,8 @@ fn set_prompt_binding(settings: &mut AppSettings, task: PromptTask, prompt_id: &
         }
         PromptTask::Summary => settings.prompts.bindings.summary_prompt_id = prompt_id.to_string(),
         PromptTask::Faq => settings.prompts.bindings.faq_prompt_id = prompt_id.to_string(),
+        PromptTask::EmotionAnalysis => {
+            settings.prompts.bindings.emotion_prompt_id = prompt_id.to_string()
+        }
     }
 }

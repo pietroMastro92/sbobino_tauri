@@ -49,6 +49,11 @@ async fn save_then_load_preserves_structured_transcription_settings() {
     settings.transcription.enable_ai_post_processing = true;
     settings.transcription.speaker_diarization.enabled = true;
     settings.transcription.speaker_diarization.device = "mps".to_string();
+    settings
+        .transcription
+        .speaker_diarization
+        .speaker_colors
+        .insert("speaker_1".to_string(), "#4F7CFF".to_string());
 
     repo.save(&settings).await.expect("save should succeed");
     let loaded = repo.load().await.expect("second load should succeed");
@@ -57,4 +62,13 @@ async fn save_then_load_preserves_structured_transcription_settings() {
     assert!(loaded.ai_post_processing);
     assert!(loaded.transcription.speaker_diarization.enabled);
     assert_eq!(loaded.transcription.speaker_diarization.device, "mps");
+    assert_eq!(
+        loaded
+            .transcription
+            .speaker_diarization
+            .speaker_colors
+            .get("speaker_1")
+            .map(String::as_str),
+        Some("#4F7CFF")
+    );
 }

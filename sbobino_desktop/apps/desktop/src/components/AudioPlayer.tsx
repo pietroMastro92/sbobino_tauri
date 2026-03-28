@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { readAudioFile, writeTrimmedAudio } from "../lib/tauri";
 import { useTranslation, type AppLanguage } from "../i18n";
+import type { WriteTrimmedAudioResponse } from "../types";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -18,7 +19,7 @@ type AudioPlayerProps = {
   initialTrimRegions?: TrimRegion[];
   onMetadataLoaded?: (metadata: { durationSeconds: number }) => void;
   onTrimRegionsChange?: (regions: TrimRegion[]) => void;
-  onTrimApplied?: (trimmedPath: string, regions: TrimRegion[]) => void;
+  onTrimApplied?: (trimmedAudio: WriteTrimmedAudioResponse, regions: TrimRegion[]) => void;
 };
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -113,6 +114,22 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 const MIN_REGION_DURATION = 0.5;
+
+function formatErrorMessage(error: unknown, fallback: string): string {
+  if (typeof error === "string" && error.trim()) {
+    return error.trim();
+  }
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
+  if (error && typeof error === "object") {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) {
+      return message.trim();
+    }
+  }
+  return fallback;
+}
 
 function sortRegions(regions: TrimRegion[]): TrimRegion[] {
   return [...regions].sort((a, b) => a.startTime - b.startTime);
@@ -1327,6 +1344,7 @@ export function AudioPlayer({
                 onClick={async () => {
                   if (isApplyingTrim || regions.length === 0 || !sourcePath) return;
                   setIsApplyingTrim(true);
+                  setLoadError(null);
                   try {
                     const result = await writeTrimmedAudio(
                       sourcePath,
@@ -1334,11 +1352,11 @@ export function AudioPlayer({
                     );
 
                     triggerHaptic("success");
-                    onTrimApplied?.(result.path, [...regions]);
+                    onTrimApplied?.(result, [...regions]);
                   } catch (error) {
                     console.error("Failed to apply trim:", error);
                     triggerHaptic("error");
-                    setLoadError(t("audio.errorTrim", "Trim failed"));
+                    setLoadError(formatErrorMessage(error, t("audio.errorTrim", "Trim failed")));
                   } finally {
                     setIsApplyingTrim(false);
                   }

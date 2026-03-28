@@ -66,6 +66,17 @@ impl ArtifactService {
             .await
     }
 
+    pub async fn update_emotion_analysis(
+        &self,
+        id: &str,
+        emotion_analysis_json: &str,
+        generated_at: &str,
+    ) -> Result<Option<TranscriptArtifact>, ApplicationError> {
+        self.artifacts
+            .update_emotion_analysis(id, emotion_analysis_json, generated_at)
+            .await
+    }
+
     pub async fn rename(
         &self,
         id: &str,

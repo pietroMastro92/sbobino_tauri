@@ -1,9 +1,11 @@
 use std::net::TcpListener;
 use std::path::Path;
+use std::process::ExitStatus;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
 };
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -31,7 +33,9 @@ pub struct WhisperKitEngine {
 const DELTA_REPLACE_PREFIX: &str = "\u{001F}REPLACE:";
 const SERVER_STARTUP_ATTEMPTS: usize = 1200;
 const SERVER_STARTUP_DELAY: Duration = Duration::from_millis(250);
-const SERVER_TRANSCRIBE_TIMEOUT: Duration = Duration::from_secs(900);
+const PROCESS_WAIT_POLL_INTERVAL: Duration = Duration::from_secs(5);
+const PROCESS_IDLE_TIMEOUT_MIN: Duration = Duration::from_secs(900);
+const PROCESS_IDLE_TIMEOUT_MAX: Duration = Duration::from_secs(3600);
 
 #[derive(Debug, Deserialize, Default)]
 struct WhisperKitSseEvent {
@@ -141,6 +145,65 @@ impl WhisperKitEngine {
         }
 
         Some(frames / (spec.sample_rate as f32))
+    }
+
+    fn clock_now_millis() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+            .unwrap_or(0)
+    }
+
+    fn transcription_idle_timeout(total_audio_seconds: Option<f32>) -> Duration {
+        let scaled_seconds = total_audio_seconds
+            .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+            .map(|seconds| ((seconds as f64 * 0.25).ceil() as u64).saturating_add(300))
+            .unwrap_or(PROCESS_IDLE_TIMEOUT_MIN.as_secs());
+
+        let candidate = Duration::from_secs(scaled_seconds);
+        candidate.clamp(PROCESS_IDLE_TIMEOUT_MIN, PROCESS_IDLE_TIMEOUT_MAX)
+    }
+
+    fn mark_activity(last_activity_at_ms: &AtomicU64) {
+        last_activity_at_ms.store(Self::clock_now_millis(), Ordering::Relaxed);
+    }
+
+    async fn wait_for_child_with_idle_timeout(
+        child: &mut tokio::process::Child,
+        label: &str,
+        total_audio_seconds: Option<f32>,
+        last_activity_at_ms: Arc<AtomicU64>,
+    ) -> Result<ExitStatus, ApplicationError> {
+        let idle_timeout = Self::transcription_idle_timeout(total_audio_seconds);
+        let idle_timeout_millis = idle_timeout.as_millis().min(u128::from(u64::MAX)) as u64;
+        let mut wait_future = Box::pin(child.wait());
+
+        loop {
+            match timeout(PROCESS_WAIT_POLL_INTERVAL, wait_future.as_mut()).await {
+                Ok(wait_result) => {
+                    return wait_result.map_err(|error| {
+                        ApplicationError::SpeechToText(format!(
+                            "failed to wait for {label}: {error}"
+                        ))
+                    });
+                }
+                Err(_) => {
+                    let idle_for_millis = Self::clock_now_millis()
+                        .saturating_sub(last_activity_at_ms.load(Ordering::Relaxed));
+                    if idle_for_millis < idle_timeout_millis {
+                        continue;
+                    }
+
+                    drop(wait_future);
+                    let _ = child.start_kill();
+                    let _ = child.wait().await;
+                    return Err(ApplicationError::SpeechToText(format!(
+                        "{label} stopped producing output for {}s and was terminated",
+                        idle_timeout.as_secs()
+                    )));
+                }
+            }
+        }
     }
 
     fn strip_ansi_codes(input: &str) -> String {
@@ -346,6 +409,7 @@ impl WhisperKitEngine {
         track_progress: bool,
         total_audio_seconds: Option<f32>,
         emit_progress_seconds: Arc<dyn Fn(f32) + Send + Sync>,
+        last_activity_at_ms: Arc<AtomicU64>,
     ) -> Result<Vec<String>, ApplicationError>
     where
         R: AsyncRead + Unpin,
@@ -364,6 +428,7 @@ impl WhisperKitEngine {
                 break;
             }
 
+            Self::mark_activity(last_activity_at_ms.as_ref());
             pending.extend_from_slice(&chunk[..read]);
             let mut start = 0_usize;
             let mut index = 0_usize;
@@ -594,13 +659,23 @@ impl WhisperKitEngine {
         })?;
 
         let stdout_progress = emit_progress_seconds.clone();
+        let server_activity_at_ms = Arc::new(AtomicU64::new(Self::clock_now_millis()));
+        let stdout_last_activity = server_activity_at_ms.clone();
         let stdout_task = tokio::spawn(async move {
-            Self::consume_stream(stdout, true, total_audio_seconds, stdout_progress).await
+            Self::consume_stream(
+                stdout,
+                true,
+                total_audio_seconds,
+                stdout_progress,
+                stdout_last_activity,
+            )
+            .await
         });
 
         let stderr_progress = emit_progress_seconds.clone();
+        let stderr_last_activity = server_activity_at_ms.clone();
         let stderr_task = tokio::spawn(async move {
-            Self::consume_stream(stderr, false, None, stderr_progress).await
+            Self::consume_stream(stderr, false, None, stderr_progress, stderr_last_activity).await
         });
 
         let saw_real_progress = Arc::new(AtomicBool::new(false));
@@ -704,8 +779,9 @@ impl WhisperKitEngine {
                 form = form.text("task", "translate".to_string());
             }
 
+            let response_timeout = Self::transcription_idle_timeout(total_audio_seconds);
             let response = timeout(
-                SERVER_TRANSCRIBE_TIMEOUT,
+                response_timeout,
                 client
                     .post(format!("{base_url}/v1/audio/transcriptions"))
                     .multipart(form)
@@ -713,9 +789,10 @@ impl WhisperKitEngine {
             )
             .await
             .map_err(|_| {
-                ApplicationError::SpeechToText(
-                    "whisperkit-cli streaming request timed out after 900s".to_string(),
-                )
+                ApplicationError::SpeechToText(format!(
+                    "whisperkit-cli streaming request did not start within {}s",
+                    response_timeout.as_secs()
+                ))
             })?
             .map_err(|e| {
                 ApplicationError::SpeechToText(format!(
@@ -930,29 +1007,34 @@ impl WhisperKitEngine {
         let stderr = child.stderr.take().ok_or_else(|| {
             ApplicationError::SpeechToText("missing whisperkit-cli stderr pipe".to_string())
         })?;
+        let last_activity_at_ms = Arc::new(AtomicU64::new(Self::clock_now_millis()));
 
         let stdout_progress = emit_progress_seconds.clone();
+        let stdout_last_activity = last_activity_at_ms.clone();
         let stdout_task = tokio::spawn(async move {
-            Self::consume_stream(stdout, true, total_audio_seconds, stdout_progress).await
+            Self::consume_stream(
+                stdout,
+                true,
+                total_audio_seconds,
+                stdout_progress,
+                stdout_last_activity,
+            )
+            .await
         });
 
         let stderr_progress = emit_progress_seconds.clone();
+        let stderr_last_activity = last_activity_at_ms.clone();
         let stderr_task = tokio::spawn(async move {
-            Self::consume_stream(stderr, false, None, stderr_progress).await
+            Self::consume_stream(stderr, false, None, stderr_progress, stderr_last_activity).await
         });
 
-        let status = match timeout(Duration::from_secs(900), child.wait()).await {
-            Ok(wait_result) => wait_result.map_err(|e| {
-                ApplicationError::SpeechToText(format!("failed to wait for whisperkit-cli: {e}"))
-            })?,
-            Err(_) => {
-                let _ = child.start_kill();
-                let _ = child.wait().await;
-                return Err(ApplicationError::SpeechToText(
-                    "whisperkit-cli timed out after 900s".to_string(),
-                ));
-            }
-        };
+        let status = Self::wait_for_child_with_idle_timeout(
+            &mut child,
+            "whisperkit-cli",
+            total_audio_seconds,
+            last_activity_at_ms,
+        )
+        .await?;
 
         let stdout_lines = stdout_task.await.map_err(|e| {
             ApplicationError::SpeechToText(format!("stdout reader task failed: {e}"))
@@ -1032,5 +1114,34 @@ impl SpeechToTextEngine for WhisperKitEngine {
                 .await
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WhisperKitEngine, PROCESS_IDLE_TIMEOUT_MAX, PROCESS_IDLE_TIMEOUT_MIN};
+
+    #[test]
+    fn transcription_idle_timeout_defaults_to_minimum_without_duration() {
+        assert_eq!(
+            WhisperKitEngine::transcription_idle_timeout(None),
+            PROCESS_IDLE_TIMEOUT_MIN
+        );
+    }
+
+    #[test]
+    fn transcription_idle_timeout_scales_for_longer_audio() {
+        assert_eq!(
+            WhisperKitEngine::transcription_idle_timeout(Some(7_200.0)).as_secs(),
+            2_100
+        );
+    }
+
+    #[test]
+    fn transcription_idle_timeout_caps_at_maximum() {
+        assert_eq!(
+            WhisperKitEngine::transcription_idle_timeout(Some(24_000.0)),
+            PROCESS_IDLE_TIMEOUT_MAX
+        );
     }
 }

@@ -23,6 +23,20 @@ def resolve_device(requested: str):
     return torch.device("cpu")
 
 
+def resolve_annotation(diarization):
+    if hasattr(diarization, "exclusive_speaker_diarization"):
+        annotation = diarization.exclusive_speaker_diarization
+        if annotation is not None:
+            return annotation
+
+    if hasattr(diarization, "speaker_diarization"):
+        annotation = diarization.speaker_diarization
+        if annotation is not None:
+            return annotation
+
+    return diarization
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run speaker diarization with pyannote.audio")
     parser.add_argument("--audio-path", required=True)
@@ -48,10 +62,17 @@ def main() -> int:
         sys.stderr.write(f"pyannote inference failed: {error}\n")
         return 1
 
+    annotation = resolve_annotation(diarization)
+    if not hasattr(annotation, "itertracks"):
+        sys.stderr.write(
+            f"pyannote inference returned unsupported annotation type: {type(annotation).__name__}\n"
+        )
+        return 1
+
     speaker_order: Dict[str, int] = {}
     turns: List[dict] = []
 
-    for turn, _, backend_speaker in diarization.itertracks(yield_label=True):
+    for turn, _, backend_speaker in annotation.itertracks(yield_label=True):
         if backend_speaker not in speaker_order:
             speaker_order[backend_speaker] = len(speaker_order) + 1
         index = speaker_order[backend_speaker]

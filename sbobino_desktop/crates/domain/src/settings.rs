@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -238,6 +240,7 @@ impl Default for WhisperOptions {
 pub struct SpeakerDiarizationSettings {
     pub enabled: bool,
     pub device: String,
+    pub speaker_colors: BTreeMap<String, String>,
 }
 
 impl Default for SpeakerDiarizationSettings {
@@ -245,6 +248,7 @@ impl Default for SpeakerDiarizationSettings {
         Self {
             enabled: false,
             device: "cpu".to_string(),
+            speaker_colors: BTreeMap::new(),
         }
     }
 }
@@ -343,6 +347,7 @@ pub struct PromptBindings {
     pub optimize_prompt_id: String,
     pub summary_prompt_id: String,
     pub faq_prompt_id: String,
+    pub emotion_prompt_id: String,
 }
 
 impl Default for PromptBindings {
@@ -351,6 +356,7 @@ impl Default for PromptBindings {
             optimize_prompt_id: "builtin_improve_grammar".to_string(),
             summary_prompt_id: "builtin_bullet_points".to_string(),
             faq_prompt_id: "builtin_generate_faq".to_string(),
+            emotion_prompt_id: "builtin_identify_emotions".to_string(),
         }
     }
 }
@@ -377,6 +383,7 @@ pub enum PromptTask {
     Optimize,
     Summary,
     Faq,
+    EmotionAnalysis,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -566,6 +573,15 @@ impl AppSettings {
         if !has_faq {
             self.prompts.bindings.faq_prompt_id = PromptBindings::default().faq_prompt_id;
         }
+
+        let has_emotion = self
+            .prompts
+            .templates
+            .iter()
+            .any(|template| template.id == self.prompts.bindings.emotion_prompt_id);
+        if !has_emotion {
+            self.prompts.bindings.emotion_prompt_id = PromptBindings::default().emotion_prompt_id;
+        }
     }
 
     pub fn prompt_for_task(&self, task: PromptTask) -> Option<String> {
@@ -573,6 +589,7 @@ impl AppSettings {
             PromptTask::Optimize => &self.prompts.bindings.optimize_prompt_id,
             PromptTask::Summary => &self.prompts.bindings.summary_prompt_id,
             PromptTask::Faq => &self.prompts.bindings.faq_prompt_id,
+            PromptTask::EmotionAnalysis => &self.prompts.bindings.emotion_prompt_id,
         };
 
         self.prompts

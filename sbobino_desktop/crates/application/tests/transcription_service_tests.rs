@@ -294,6 +294,29 @@ impl ArtifactRepository for InMemoryArtifactRepository {
         Ok(Some(artifact.clone()))
     }
 
+    async fn update_emotion_analysis(
+        &self,
+        id: &str,
+        emotion_analysis_json: &str,
+        generated_at: &str,
+    ) -> Result<Option<TranscriptArtifact>, ApplicationError> {
+        let mut artifacts = self.artifacts.lock().expect("artifact repo lock poisoned");
+        let Some(artifact) = artifacts.iter_mut().find(|artifact| artifact.id == id) else {
+            return Ok(None);
+        };
+
+        artifact.metadata.insert(
+            "emotion_analysis_v1".to_string(),
+            emotion_analysis_json.to_string(),
+        );
+        artifact.metadata.insert(
+            "emotion_analysis_generated_at".to_string(),
+            generated_at.to_string(),
+        );
+        artifact.touch();
+        Ok(Some(artifact.clone()))
+    }
+
     async fn rename(
         &self,
         id: &str,

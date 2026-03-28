@@ -1,4 +1,5 @@
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -17,9 +18,11 @@ pub fn embedded_helper_script() -> &'static str {
 #[derive(Debug, Clone)]
 pub struct PyannoteSpeakerDiarizationEngine {
     python_path: String,
+    python_home: Option<PathBuf>,
     script_path: String,
     model_path: String,
     device: String,
+    path_prepend: Vec<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -40,16 +43,33 @@ struct PyannoteSpeakerTurn {
 impl PyannoteSpeakerDiarizationEngine {
     pub fn new(
         python_path: String,
+        python_home: Option<PathBuf>,
         script_path: String,
         model_path: String,
         device: String,
+        path_prepend: Vec<PathBuf>,
     ) -> Self {
         Self {
             python_path,
+            python_home,
             script_path,
             model_path,
             device,
+            path_prepend,
         }
+    }
+
+    fn build_path_env(&self) -> Option<OsString> {
+        if self.path_prepend.is_empty() {
+            return None;
+        }
+
+        let mut entries = self.path_prepend.clone();
+        if let Some(existing) = std::env::var_os("PATH") {
+            entries.extend(std::env::split_paths(&existing));
+        }
+
+        std::env::join_paths(entries).ok()
     }
 
     fn parse_turns(stdout: &[u8]) -> Result<Vec<SpeakerTurn>, ApplicationError> {
@@ -100,6 +120,13 @@ impl SpeakerDiarizationEngine for PyannoteSpeakerDiarizationEngine {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        if let Some(path_env) = self.build_path_env() {
+            command.env("PATH", path_env);
+        }
+        if let Some(python_home) = &self.python_home {
+            command.env("PYTHONHOME", python_home);
+        }
+        command.env("PYTHONNOUSERSITE", "1");
 
         let child = command.spawn().map_err(|error| {
             ApplicationError::SpeakerDiarization(format!(
@@ -137,6 +164,7 @@ impl SpeakerDiarizationEngine for PyannoteSpeakerDiarizationEngine {
 #[cfg(test)]
 mod tests {
     use super::PyannoteSpeakerDiarizationEngine;
+    use std::path::PathBuf;
 
     #[test]
     fn parse_turns_discards_invalid_entries() {
@@ -153,5 +181,22 @@ mod tests {
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0].speaker_id, "speaker_1");
         assert_eq!(turns[0].speaker_label.as_deref(), Some("Speaker 1"));
+    }
+
+    #[test]
+    fn build_path_env_prepends_custom_entries() {
+        let engine = PyannoteSpeakerDiarizationEngine::new(
+            "python3".to_string(),
+            None,
+            "helper.py".to_string(),
+            "model".to_string(),
+            "cpu".to_string(),
+            vec![PathBuf::from("/tmp/ffmpeg-bin")],
+        );
+
+        let path_env = engine.build_path_env().expect("path should build");
+        let entries = std::env::split_paths(&path_env).collect::<Vec<_>>();
+
+        assert_eq!(entries.first(), Some(&PathBuf::from("/tmp/ffmpeg-bin")));
     }
 }
