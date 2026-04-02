@@ -140,3 +140,18 @@ export function moveSpeakerColorMapEntry(
   nextMap[normalizedNextKey] = currentColor;
   return nextMap;
 }
+
+export function removeSpeakerColorMapEntry(
+  colorMap: Record<string, string> | null | undefined,
+  key: string | null | undefined,
+): Record<string, string> {
+  const normalizedKey = normalizeSpeakerColorKey(key);
+  const nextMap = sanitizeSpeakerColorMap(colorMap ?? {});
+
+  if (!normalizedKey) {
+    return nextMap;
+  }
+
+  delete nextMap[normalizedKey];
+  return nextMap;
+}

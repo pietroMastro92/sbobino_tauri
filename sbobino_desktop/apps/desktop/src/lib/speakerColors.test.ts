@@ -3,6 +3,7 @@ import {
   getDefaultSpeakerColorForKey,
   moveSpeakerColorMapEntry,
   normalizeSpeakerColorKey,
+  removeSpeakerColorMapEntry,
   resolveSpeakerColor,
   sanitizeSpeakerColorMap,
   setSpeakerColorForKey,
@@ -47,6 +48,15 @@ describe("speakerColors", () => {
       "Pietro",
     )).toEqual({
       pietro: "#ABCDEF",
+    });
+  });
+
+  it("removes custom colors for merged-away speakers", () => {
+    expect(removeSpeakerColorMapEntry(
+      { speaker_1: "#ABCDEF", speaker_2: "#123456" },
+      "speaker_1",
+    )).toEqual({
+      speaker_2: "#123456",
     });
   });
 });

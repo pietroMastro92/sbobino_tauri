@@ -119,11 +119,16 @@ import { loadInitialAppBootstrapData } from "./lib/appBootstrap";
 import {
   moveSpeakerColorMapEntry,
   normalizeSpeakerColorKey,
+  removeSpeakerColorMapEntry,
   resolveSpeakerColor,
   sanitizeSpeakerColorMap,
   setSpeakerColorForKey,
 } from "./lib/speakerColors";
-import { renameSpeakerInTimeline } from "./lib/speakerTimeline";
+import {
+  mergeSpeakerInTimeline,
+  removeSpeakerFromTimeline,
+  renameSpeakerInTimeline,
+} from "./lib/speakerTimeline";
 import {
   clampPercentage,
   formatProgressPercentageLabel,
@@ -364,6 +369,12 @@ const modelOptions: Array<{ value: SpeechModel; label: string }> = [
 ];
 
 const MIN_RETRANSCRIBE_TRIM_DURATION_SECONDS = 1.5;
+const LEFT_SIDEBAR_WIDTH_STORAGE_KEY = "sbobino.layout.leftSidebarWidth";
+const RIGHT_SIDEBAR_WIDTH_STORAGE_KEY = "sbobino.layout.rightSidebarWidth";
+const LEFT_SIDEBAR_MIN_WIDTH = 160;
+const LEFT_SIDEBAR_MAX_WIDTH = 320;
+const RIGHT_SIDEBAR_MIN_WIDTH = 220;
+const RIGHT_SIDEBAR_MAX_WIDTH = 420;
 
 function guessAppleSiliconFromUA(): boolean {
   const ua = (navigator.userAgent ?? "").toLowerCase();
@@ -1418,6 +1429,18 @@ function readStoredFlag(key: string, fallback: boolean): boolean {
   return fallback;
 }
 
+function readStoredNumber(key: string, fallback: number): number {
+  if (typeof window === "undefined") {
+    return fallback;
+  }
+  const raw = window.localStorage.getItem(key);
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function createRemoteServiceId(kind: RemoteServiceKind): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return `${kind}_${crypto.randomUUID()}`;
@@ -1972,6 +1995,13 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   const [rightSidebarOpen, setRightSidebarOpen] = useState<boolean>(() =>
     readStoredFlag("sbobino.layout.rightSidebarOpen", true),
   );
+  const [leftSidebarWidth, setLeftSidebarWidth] = useState<number>(() =>
+    readStoredNumber(LEFT_SIDEBAR_WIDTH_STORAGE_KEY, 216),
+  );
+  const [rightSidebarWidth, setRightSidebarWidth] = useState<number>(() =>
+    readStoredNumber(RIGHT_SIDEBAR_WIDTH_STORAGE_KEY, 280),
+  );
+  const [activeSidebarResize, setActiveSidebarResize] = useState<"left" | "right" | null>(null);
   const [windowWidth, setWindowWidth] = useState<number>(() => window.innerWidth);
   const [search, setSearch] = useState("");
   const [deletedSearch, setDeletedSearch] = useState("");
@@ -2011,6 +2041,22 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   );
   const rightSidebarForcedCollapsed = section === "detail" && windowWidth <= 900;
   const effectiveRightSidebarOpen = rightSidebarOpen && !rightSidebarForcedCollapsed;
+
+  const clampLeftSidebarWidth = useCallback((width: number, containerWidth: number) => {
+    const maxWidth = Math.min(
+      LEFT_SIDEBAR_MAX_WIDTH,
+      Math.max(LEFT_SIDEBAR_MIN_WIDTH, Math.round(containerWidth * 0.32)),
+    );
+    return Math.min(maxWidth, Math.max(LEFT_SIDEBAR_MIN_WIDTH, Math.round(width)));
+  }, []);
+
+  const clampRightSidebarWidth = useCallback((width: number, containerWidth: number) => {
+    const maxWidth = Math.min(
+      RIGHT_SIDEBAR_MAX_WIDTH,
+      Math.max(RIGHT_SIDEBAR_MIN_WIDTH, Math.round(containerWidth * 0.42)),
+    );
+    return Math.min(maxWidth, Math.max(RIGHT_SIDEBAR_MIN_WIDTH, Math.round(width)));
+  }, []);
   
   const setActiveArtifact = (artifact: TranscriptArtifact | null) => {
     if (!artifact) {
@@ -2055,6 +2101,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   const [focusedJobId, setFocusedJobId] = useState<string | null>(null);
   const [selectedSegmentSourceIndex, setSelectedSegmentSourceIndex] = useState<number | null>(null);
   const [speakerDraft, setSpeakerDraft] = useState("");
+  const [mergeSpeakerSourceId, setMergeSpeakerSourceId] = useState("");
+  const [mergeSpeakerTargetId, setMergeSpeakerTargetId] = useState("");
   const [isAssigningSpeaker, setIsAssigningSpeaker] = useState(false);
   const [propagateSpeakerAssignment, setPropagateSpeakerAssignment] = useState(false);
   const [segmentContextMenu, setSegmentContextMenu] = useState<{
@@ -2152,6 +2200,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
   const activeJobIdRef = useRef<string | null>(activeJobId);
   const segmentElementMapRef = useRef<Map<number, HTMLElement>>(new Map());
+  const windowFrameRef = useRef<HTMLElement | null>(null);
+  const detailLayoutRef = useRef<HTMLDivElement | null>(null);
 
   const describeEmotionValence = useCallback((score: number): string => {
     if (score >= 0.35) {
@@ -2377,6 +2427,64 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   useEffect(() => {
     window.localStorage.setItem("sbobino.layout.rightSidebarOpen", String(rightSidebarOpen));
   }, [rightSidebarOpen]);
+
+  useEffect(() => {
+    const containerWidth = windowFrameRef.current?.getBoundingClientRect().width ?? window.innerWidth;
+    setLeftSidebarWidth((current) => clampLeftSidebarWidth(current, containerWidth));
+  }, [clampLeftSidebarWidth, windowWidth]);
+
+  useEffect(() => {
+    const containerWidth = detailLayoutRef.current?.getBoundingClientRect().width ?? window.innerWidth;
+    setRightSidebarWidth((current) => clampRightSidebarWidth(current, containerWidth));
+  }, [clampRightSidebarWidth, windowWidth]);
+
+  useEffect(() => {
+    window.localStorage.setItem(LEFT_SIDEBAR_WIDTH_STORAGE_KEY, String(leftSidebarWidth));
+  }, [leftSidebarWidth]);
+
+  useEffect(() => {
+    window.localStorage.setItem(RIGHT_SIDEBAR_WIDTH_STORAGE_KEY, String(rightSidebarWidth));
+  }, [rightSidebarWidth]);
+
+  useEffect(() => {
+    if (!activeSidebarResize) {
+      document.body.classList.remove("sidebar-resizing");
+      return;
+    }
+
+    document.body.classList.add("sidebar-resizing");
+
+    const handleMouseMove = (event: MouseEvent) => {
+      if (activeSidebarResize === "left") {
+        const frameRect = windowFrameRef.current?.getBoundingClientRect();
+        if (!frameRect) {
+          return;
+        }
+        setLeftSidebarWidth(clampLeftSidebarWidth(event.clientX - frameRect.left, frameRect.width));
+        return;
+      }
+
+      const detailRect = detailLayoutRef.current?.getBoundingClientRect();
+      if (!detailRect) {
+        return;
+      }
+      setRightSidebarWidth(clampRightSidebarWidth(detailRect.right - event.clientX, detailRect.width));
+    };
+
+    const stopResize = () => {
+      setActiveSidebarResize(null);
+      document.body.classList.remove("sidebar-resizing");
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", stopResize);
+
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", stopResize);
+      document.body.classList.remove("sidebar-resizing");
+    };
+  }, [activeSidebarResize, clampLeftSidebarWidth, clampRightSidebarWidth]);
 
   useEffect(() => {
     if (!standaloneSettingsWindow) {
@@ -3295,6 +3403,10 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     () => knownSpeakers.map((speaker) => speaker.label),
     [knownSpeakers],
   );
+  const mergeTargetSpeakers = useMemo(
+    () => knownSpeakers.filter((speaker) => speaker.id !== mergeSpeakerSourceId),
+    [knownSpeakers, mergeSpeakerSourceId],
+  );
   const artifactDiarizationUiState = useMemo(
     () => getArtifactDiarizationUiState(activeArtifact, knownSpeakerLabels),
     [activeArtifact, knownSpeakerLabels],
@@ -3308,6 +3420,13 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     && speakerDraft.trim().length > 0
     && speakerDraft.trim() !== selectedSegmentSpeakerLabel;
   const speakerDynamicsAvailable = knownSpeakerLabels.length > 1;
+  const canMergeSpeakers =
+    Boolean(activeArtifact)
+    && knownSpeakers.length > 1
+    && mergeSpeakerSourceId.length > 0
+    && mergeSpeakerTargetId.length > 0
+    && mergeSpeakerSourceId !== mergeSpeakerTargetId;
+  const showSpeakerManagement = detailMode === "segments";
   const emotionAnalysisGeneratedAt =
     activeArtifact?.metadata?.[EMOTION_ANALYSIS_GENERATED_AT_METADATA_KEY] ?? "";
 
@@ -3330,6 +3449,32 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     const selected = detailSegments.find((segment) => segment.sourceIndex === selectedSegmentSourceIndex);
     setSpeakerDraft(selected?.speakerLabel ?? "");
   }, [detailSegments, selectedSegmentSourceIndex]);
+
+  useEffect(() => {
+    if (knownSpeakers.length === 0) {
+      setMergeSpeakerSourceId("");
+      return;
+    }
+
+    setMergeSpeakerSourceId((previous) => (
+      knownSpeakers.some((speaker) => speaker.id === previous)
+        ? previous
+        : knownSpeakers[0]?.id ?? ""
+    ));
+  }, [knownSpeakers]);
+
+  useEffect(() => {
+    if (mergeTargetSpeakers.length === 0) {
+      setMergeSpeakerTargetId("");
+      return;
+    }
+
+    setMergeSpeakerTargetId((previous) => (
+      mergeTargetSpeakers.some((speaker) => speaker.id === previous)
+        ? previous
+        : mergeTargetSpeakers[0]?.id ?? ""
+    ));
+  }, [mergeTargetSpeakers]);
 
   useEffect(() => {
     if (detailMode !== "segments" || selectedSegmentSourceIndex === null) {
@@ -3892,6 +4037,27 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       setError(t("detail.chatCopyFailed", "Copy failed. Please try again."));
     }
   }
+
+  function onStartSidebarResize(
+    side: "left" | "right",
+    event: ReactMouseEvent<HTMLDivElement>,
+  ): void {
+    event.preventDefault();
+    event.stopPropagation();
+    setActiveSidebarResize(side);
+  }
+
+  const windowFrameStyle = useMemo<CSSProperties | undefined>(() => (
+    leftSidebarOpen
+      ? { "--left-sidebar-width": `${leftSidebarWidth}px` } as CSSProperties
+      : undefined
+  ), [leftSidebarOpen, leftSidebarWidth]);
+
+  const detailLayoutStyle = useMemo<CSSProperties | undefined>(() => (
+    effectiveRightSidebarOpen
+      ? { "--detail-inspector-width": `${rightSidebarWidth}px` } as CSSProperties
+      : undefined
+  ), [effectiveRightSidebarOpen, rightSidebarWidth]);
 
   function restoreDetailAfterFailedTranscription(
     detailContext: ActiveDetailContext | null | undefined,
@@ -4783,6 +4949,163 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     }
   }
 
+  async function onMergeSelectedSpeaker(): Promise<void> {
+    if (!activeArtifact) {
+      setError(t("inspector.noTranscript"));
+      return;
+    }
+
+    const sourceSpeaker = knownSpeakers.find((speaker) => speaker.id === mergeSpeakerSourceId);
+    const targetSpeaker = knownSpeakers.find((speaker) => speaker.id === mergeSpeakerTargetId);
+
+    if (!sourceSpeaker) {
+      setError(t("error.selectLabeledSpeakerFirst", "Select a labeled speaker first."));
+      return;
+    }
+
+    if (!targetSpeaker) {
+      setError(t("error.selectDifferentSpeaker", "Select a different target speaker."));
+      return;
+    }
+
+    const mergeResult = mergeSpeakerInTimeline(
+      activeArtifact.metadata?.timeline_v2,
+      sourceSpeaker.id,
+      sourceSpeaker.label,
+      targetSpeaker.id,
+      targetSpeaker.label,
+    );
+
+    if (!mergeResult.ok) {
+      switch (mergeResult.reason) {
+        case "same_speaker":
+        case "target_missing":
+          setError(t("error.selectDifferentSpeaker", "Select a different target speaker."));
+          break;
+        case "speaker_missing":
+          setError(t("error.selectLabeledSpeakerFirst", "Select a labeled speaker first."));
+          break;
+        case "missing_timeline":
+        default:
+          setError(t("error.segmentTimelineInvalid", "Segment timeline metadata is missing or invalid."));
+          break;
+      }
+      return;
+    }
+
+    setIsAssigningSpeaker(true);
+    try {
+      const updated = await updateArtifactTimeline({
+        id: activeArtifact.id,
+        timeline_v2: JSON.stringify(mergeResult.timeline),
+      });
+      if (!updated) {
+        setError(t("error.transcriptNotFoundAssigning", "Transcript not found while assigning speaker."));
+        return;
+      }
+
+      if (mergeResult.sourceSpeakerId !== mergeResult.targetSpeakerId) {
+        try {
+          await onPatchSpeakerDiarizationPreferences((current) => ({
+            ...current,
+            speaker_colors: removeSpeakerColorMapEntry(
+              current.speaker_colors,
+              mergeResult.sourceSpeakerId,
+            ),
+          }));
+        } catch (colorError) {
+          console.warn("failed to remove merged speaker color mapping", colorError);
+        }
+      }
+
+      upsertArtifact(updated);
+      syncArtifactDraftState(updated);
+      setSpeakerDraft(mergeResult.targetSpeakerLabel);
+      setMergeSpeakerSourceId(mergeResult.targetSpeakerId);
+      setError(null);
+    } catch (mergeError) {
+      setError(formatUiError("error.mergeSpeakerFailed", "Failed to merge speakers", mergeError));
+    } finally {
+      setIsAssigningSpeaker(false);
+    }
+  }
+
+  async function onRemoveDetectedSpeaker(speaker: KnownSpeaker): Promise<void> {
+    if (!activeArtifact) {
+      setError(t("inspector.noTranscript"));
+      return;
+    }
+
+    const confirmed = await confirmDialog(
+      t(
+        "inspector.removeSpeakerConfirm",
+        "Remove speaker \"{speaker}\" from this transcript?\n\nAll segments currently assigned to this speaker will become unlabeled.",
+        { speaker: speaker.label },
+      ),
+      {
+        title: t("inspector.removeSpeakerConfirmTitle", "Remove speaker"),
+        kind: "warning",
+      },
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    const removeResult = removeSpeakerFromTimeline(
+      activeArtifact.metadata?.timeline_v2,
+      speaker.id,
+      speaker.label,
+    );
+
+    if (!removeResult.ok) {
+      switch (removeResult.reason) {
+        case "speaker_missing":
+          setError(t("error.selectLabeledSpeakerFirst", "Select a labeled speaker first."));
+          break;
+        case "missing_timeline":
+        default:
+          setError(t("error.segmentTimelineInvalid", "Segment timeline metadata is missing or invalid."));
+          break;
+      }
+      return;
+    }
+
+    setIsAssigningSpeaker(true);
+    try {
+      const updated = await updateArtifactTimeline({
+        id: activeArtifact.id,
+        timeline_v2: JSON.stringify(removeResult.timeline),
+      });
+      if (!updated) {
+        setError(t("error.transcriptNotFoundAssigning", "Transcript not found while assigning speaker."));
+        return;
+      }
+
+      try {
+        await onPatchSpeakerDiarizationPreferences((current) => ({
+          ...current,
+          speaker_colors: removeSpeakerColorMapEntry(
+            current.speaker_colors,
+            removeResult.removedSpeakerId,
+          ),
+        }));
+      } catch (colorError) {
+        console.warn("failed to remove speaker color mapping after speaker removal", colorError);
+      }
+
+      upsertArtifact(updated);
+      syncArtifactDraftState(updated);
+      if (speakerDraft.trim() === speaker.label.trim()) {
+        setSpeakerDraft("");
+      }
+      setError(null);
+    } catch (removeError) {
+      setError(formatUiError("error.removeSpeakerFailed", "Failed to remove speaker", removeError));
+    } finally {
+      setIsAssigningSpeaker(false);
+    }
+  }
+
   async function onClearSpeakerForSegment(sourceIndex: number): Promise<void> {
     await onAssignSpeakerToSegment(sourceIndex, null, false);
   }
@@ -4796,7 +5119,11 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     const matchingSegment = detailSegments.find(
       (segment) => segment.speakerLabel?.trim() === normalizedLabel,
     );
+    const matchingSpeaker = knownSpeakers.find((speaker) => speaker.label.trim() === normalizedLabel);
     setSpeakerDraft(normalizedLabel);
+    if (matchingSpeaker) {
+      setMergeSpeakerSourceId(matchingSpeaker.id);
+    }
     setError(null);
 
     if (matchingSegment) {
@@ -6920,7 +7247,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           >
             {peoplePillText}
           </div>
-          {knownSpeakerLabels.length > 0 ? (
+          {showSpeakerManagement && knownSpeakerLabels.length > 0 ? (
             <div className="speaker-known-list">
               <span className="speaker-known-label">{t("inspector.detectedSpeakers", "Detected speakers")}</span>
               <div className="speaker-chip-list">
@@ -6934,7 +7261,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                       style={buildSpeakerAccentStyle(speaker.color)}
                       onClick={() => onStartRenameSpeakerLabel(speaker.label)}
                     >
-                      {speaker.label}
+                      <span className="speaker-chip-button-label">{speaker.label}</span>
                     </button>
                     <label
                       className="speaker-color-control"
@@ -6953,71 +7280,132 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                         }}
                       />
                     </label>
+                    <button
+                      type="button"
+                      className="icon-button danger-icon-button speaker-chip-inline-remove"
+                      title={t("inspector.removeSpeakerFor", "Remove speaker {speaker}", {
+                        speaker: speaker.label,
+                      })}
+                      aria-label={t("inspector.removeSpeakerFor", "Remove speaker {speaker}", {
+                        speaker: speaker.label,
+                      })}
+                      disabled={isAssigningSpeaker}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void onRemoveDetectedSpeaker(speaker);
+                      }}
+                    >
+                      <Trash2 size={14} />
+                    </button>
                   </div>
                 ))}
               </div>
             </div>
           ) : null}
-          <div className="speaker-edit-row">
-            <input
-              ref={peopleSpeakerInputRef}
-              className="inspector-input"
-              placeholder={
-                detailMode === "segments"
-                  ? t("inspector.addSpeaker", "Add a speaker...")
-                  : t("inspector.openSegments", "Open Segments and select a segment")
-              }
-              list="speaker-suggestions"
-              value={speakerDraft}
-              disabled={detailMode !== "segments" || !activeArtifact || selectedSegmentSourceIndex === null}
-              onChange={(event) => setSpeakerDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  void onAssignSpeakerToSelectedSegment();
-                }
-              }}
-            />
-            <button
-              className="secondary-button speaker-assign-button"
-              disabled={
-                isAssigningSpeaker
-                || detailMode !== "segments"
-                || !activeArtifact
-                || selectedSegmentSourceIndex === null
-                || !speakerDraft.trim()
-              }
-              onClick={() => void onAssignSpeakerToSelectedSegment()}
-            >
-              {isAssigningSpeaker ? "..." : t("inspector.assign", "Assign")}
-            </button>
-            <button
-              className="secondary-button speaker-assign-button"
-              disabled={isAssigningSpeaker || !canRenameSelectedSpeaker}
-              onClick={() => void onRenameSelectedSpeaker()}
-            >
-              {isAssigningSpeaker ? "..." : t("inspector.renameSpeaker", "Rename")}
-            </button>
-          </div>
-          <label className="toggle-row compact">
-            <span>{t("inspector.propagate")}</span>
-            <input
-              type="checkbox"
-              checked={propagateSpeakerAssignment}
-              disabled={detailMode !== "segments"}
-              onChange={(event) => setPropagateSpeakerAssignment(event.target.checked)}
-            />
-          </label>
-          {knownSpeakerLabels.length > 0 ? (
-            <datalist id="speaker-suggestions">
-              {knownSpeakerLabels.map((speaker) => (
-                <option key={speaker} value={speaker} />
-              ))}
-            </datalist>
+          {showSpeakerManagement && knownSpeakers.length > 1 ? (
+            <div className="speaker-merge-panel">
+              <span className="speaker-known-label">{t("inspector.mergeSpeakers", "Merge speakers")}</span>
+              <div className="speaker-merge-row">
+                <select
+                  className="inspector-select"
+                  value={mergeSpeakerSourceId}
+                  disabled={isAssigningSpeaker || !activeArtifact}
+                  onChange={(event) => setMergeSpeakerSourceId(event.target.value)}
+                >
+                  {knownSpeakers.map((speaker) => (
+                    <option key={speaker.id} value={speaker.id}>
+                      {speaker.label}
+                    </option>
+                  ))}
+                </select>
+                <span className="speaker-merge-arrow">{t("inspector.mergeInto", "into")}</span>
+                <select
+                  className="inspector-select"
+                  value={mergeSpeakerTargetId}
+                  disabled={isAssigningSpeaker || !activeArtifact || mergeTargetSpeakers.length === 0}
+                  onChange={(event) => setMergeSpeakerTargetId(event.target.value)}
+                >
+                  {mergeTargetSpeakers.map((speaker) => (
+                    <option key={speaker.id} value={speaker.id}>
+                      {speaker.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="secondary-button speaker-assign-button"
+                  disabled={isAssigningSpeaker || !canMergeSpeakers}
+                  onClick={() => void onMergeSelectedSpeaker()}
+                >
+                  {isAssigningSpeaker ? "..." : t("inspector.mergeSpeakerAction", "Merge")}
+                </button>
+              </div>
+              <small className="muted">
+                {t("inspector.mergeSpeakerHint", "All segments assigned to the first speaker will be reassigned to the second speaker.")}
+              </small>
+            </div>
           ) : null}
-          <small className="muted">
-            {peopleSummaryText}
-          </small>
+          {showSpeakerManagement ? (
+            <>
+              <div className="speaker-edit-row">
+                <input
+                  ref={peopleSpeakerInputRef}
+                  className="inspector-input"
+                  placeholder={t("inspector.addSpeaker", "Add a speaker...")}
+                  list="speaker-suggestions"
+                  value={speakerDraft}
+                  disabled={!activeArtifact || selectedSegmentSourceIndex === null}
+                  onChange={(event) => setSpeakerDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void onAssignSpeakerToSelectedSegment();
+                    }
+                  }}
+                />
+                <button
+                  className="secondary-button speaker-assign-button"
+                  disabled={
+                    isAssigningSpeaker
+                    || !activeArtifact
+                    || selectedSegmentSourceIndex === null
+                    || !speakerDraft.trim()
+                  }
+                  onClick={() => void onAssignSpeakerToSelectedSegment()}
+                >
+                  {isAssigningSpeaker ? "..." : t("inspector.assign", "Assign")}
+                </button>
+                <button
+                  className="secondary-button speaker-assign-button"
+                  disabled={isAssigningSpeaker || !canRenameSelectedSpeaker}
+                  onClick={() => void onRenameSelectedSpeaker()}
+                >
+                  {isAssigningSpeaker ? "..." : t("inspector.renameSpeaker", "Rename")}
+                </button>
+              </div>
+              <label className="toggle-row compact">
+                <span>{t("inspector.propagate")}</span>
+                <input
+                  type="checkbox"
+                  checked={propagateSpeakerAssignment}
+                  onChange={(event) => setPropagateSpeakerAssignment(event.target.checked)}
+                />
+              </label>
+              {knownSpeakerLabels.length > 0 ? (
+                <datalist id="speaker-suggestions">
+                  {knownSpeakerLabels.map((speaker) => (
+                    <option key={speaker} value={speaker} />
+                  ))}
+                </datalist>
+              ) : null}
+              <small className="muted">
+                {peopleSummaryText}
+              </small>
+            </>
+          ) : (
+            <small className="muted">
+              {t("inspector.manageSpeakersInSegments", "Open Segments to manage speakers.")}
+            </small>
+          )}
         </div>
 
         <div className="inspector-block">
@@ -7480,7 +7868,11 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     const isTrimRetranscriptionStarting = isStarting && Boolean(effectiveTrimmedAudioDraft);
 
     return (
-      <div className={effectiveRightSidebarOpen ? "detail-layout" : "detail-layout right-collapsed"}>
+      <div
+        ref={detailLayoutRef}
+        className={effectiveRightSidebarOpen ? "detail-layout" : "detail-layout right-collapsed"}
+        style={detailLayoutStyle}
+      >
         <section className="detail-main" ref={detailMainRef}>
           <DetailToolbar
             leftSidebarOpen={leftSidebarOpen}
@@ -7542,7 +7934,9 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             } : null}
           />
 
-          <div className="detail-body">{renderDetailMain()}</div>
+          <div className={detailMode === "chat" ? "detail-body detail-body--chat" : "detail-body"}>
+            {renderDetailMain()}
+          </div>
 
           {segmentContextMenu ? (
             <div
@@ -7672,6 +8066,15 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
               onHideDetailsPanel={() => setRightSidebarOpen(false)}
             />
             {renderInspector()}
+            {effectiveRightSidebarOpen && !rightSidebarForcedCollapsed ? (
+              <div
+                className="sidebar-resize-handle sidebar-resize-handle-right"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label={t("detail.resizeInspector", "Resize details panel")}
+                onMouseDown={(event) => onStartSidebarResize("right", event)}
+              />
+            ) : null}
           </aside>
 
       </div>
@@ -9640,7 +10043,11 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
   return (
     <main className="app-shell">
-      <section className={leftSidebarOpen ? "window-frame" : "window-frame left-collapsed"}>
+      <section
+        ref={windowFrameRef}
+        className={leftSidebarOpen ? "window-frame" : "window-frame left-collapsed"}
+        style={windowFrameStyle}
+      >
         <aside
           ref={leftSidebarRef}
           className={`left-sidebar ${leftSidebarOpen ? "" : "collapsed"}`}
@@ -9722,6 +10129,15 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                 {t("sidebar.settings", "Settings")}
               </button>
             </div>
+            {leftSidebarOpen ? (
+              <div
+                className="sidebar-resize-handle sidebar-resize-handle-left"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label={t("sidebar.resizeNavigation", "Resize navigation sidebar")}
+                onMouseDown={(event) => onStartSidebarResize("left", event)}
+              />
+            ) : null}
           </aside>
 
         <section ref={mainAreaRef} className="main-area">
