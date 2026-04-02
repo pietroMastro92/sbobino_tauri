@@ -14,6 +14,7 @@ use crate::{
     commands::emotion_analysis::{
         analyze_emotions_with_enhancers, EmotionAnalysisInput, EmotionAnalysisOptions,
     },
+    commands::prepared_transcript::PreparedTranscriptContext,
     error::CommandError,
     state::AppState,
 };
@@ -469,8 +470,7 @@ pub async fn test_prompt(
                 &enhancers,
                 EmotionAnalysisInput {
                     title: "Prompt test".to_string(),
-                    transcript: input.clone(),
-                    timeline_v2_json: None,
+                    prepared: PreparedTranscriptContext::from_transcript(&input),
                 },
                 EmotionAnalysisOptions {
                     language: language.clone(),

@@ -1,5 +1,6 @@
 pub mod artifacts;
 pub mod emotion_analysis;
+pub mod prepared_transcript;
 pub mod provisioning;
 pub mod realtime;
 pub mod runtime;

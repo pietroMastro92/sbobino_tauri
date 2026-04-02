@@ -133,6 +133,18 @@ impl TranscriptEnhancer for FoundationAppleEnhancer {
     fn summary_chunk_concurrency_limit(&self) -> usize {
         1
     }
+
+    fn summary_direct_prompt_char_budget(&self) -> usize {
+        9_000
+    }
+
+    fn emotion_direct_prompt_char_budget(&self) -> usize {
+        6_500
+    }
+
+    fn telemetry_provider_label(&self) -> &'static str {
+        "foundation_apple"
+    }
 }
 
 #[derive(Debug, Serialize)]

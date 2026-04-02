@@ -54,6 +54,18 @@ pub trait TranscriptEnhancer: Send + Sync {
     fn summary_chunk_concurrency_limit(&self) -> usize {
         3
     }
+
+    fn summary_direct_prompt_char_budget(&self) -> usize {
+        14_000
+    }
+
+    fn emotion_direct_prompt_char_budget(&self) -> usize {
+        9_000
+    }
+
+    fn telemetry_provider_label(&self) -> &'static str {
+        "unknown"
+    }
 }
 
 #[async_trait]

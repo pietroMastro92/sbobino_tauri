@@ -211,6 +211,18 @@ impl TranscriptEnhancer for OpenAiCompatibleEnhancer {
     async fn ask(&self, prompt: &str) -> Result<String, ApplicationError> {
         OpenAiCompatibleEnhancer::ask(self, prompt).await
     }
+
+    fn summary_direct_prompt_char_budget(&self) -> usize {
+        18_000
+    }
+
+    fn emotion_direct_prompt_char_budget(&self) -> usize {
+        12_000
+    }
+
+    fn telemetry_provider_label(&self) -> &'static str {
+        "openai_compatible"
+    }
 }
 
 fn normalize_prompt(value: Option<String>) -> Option<String> {

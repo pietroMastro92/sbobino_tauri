@@ -1,8 +1,11 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::{
+    collections::{BTreeSet, HashMap, HashSet},
+    time::Instant,
+};
 
 use futures_util::StreamExt;
-use serde::Deserialize;
 use serde_json::json;
+use tracing::info;
 
 use sbobino_application::{ApplicationError, TranscriptEnhancer};
 use sbobino_domain::{
@@ -11,7 +14,10 @@ use sbobino_domain::{
 };
 use sbobino_infrastructure::AiEnhancerCandidate;
 
-use crate::ai_support::run_with_enhancer_fallback;
+use crate::{
+    ai_support::run_with_enhancer_fallback,
+    commands::prepared_transcript::PreparedTranscriptContext,
+};
 
 const EMOTION_SUMMARY_OVERFLOW_MESSAGE: &str =
     "Exceeded model context window size while analyzing emotions. Try reducing transcript context or speaker/timestamp detail.";
@@ -43,40 +49,7 @@ pub struct EmotionAnalysisOptions {
 #[derive(Debug, Clone, Default)]
 pub struct EmotionAnalysisInput {
     pub title: String,
-    pub transcript: String,
-    pub timeline_v2_json: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-struct TimelineV2Document {
-    #[serde(default)]
-    segments: Vec<TimelineV2Segment>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-struct TimelineV2Segment {
-    #[serde(default)]
-    text: String,
-    #[serde(default)]
-    start_seconds: Option<f32>,
-    #[serde(default)]
-    end_seconds: Option<f32>,
-    #[serde(default)]
-    speaker_id: Option<String>,
-    #[serde(default)]
-    speaker_label: Option<String>,
-    #[serde(default)]
-    words: Vec<TimelineV2Word>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-struct TimelineV2Word {
-    #[serde(default)]
-    text: String,
-    #[serde(default)]
-    start_seconds: Option<f32>,
-    #[serde(default)]
-    end_seconds: Option<f32>,
+    pub prepared: PreparedTranscriptContext,
 }
 
 #[derive(Debug, Clone)]
@@ -110,6 +83,14 @@ struct LanguageResources {
     intensifiers: &'static [&'static str],
     softeners: &'static [&'static str],
     lexicon: &'static [EmotionKeyword],
+}
+
+struct ScoringResources<'a> {
+    stopwords: HashSet<&'a str>,
+    negators: HashSet<&'a str>,
+    intensifiers: HashSet<&'a str>,
+    softeners: HashSet<&'a str>,
+    lexicon_map: HashMap<&'a str, Vec<&'a EmotionKeyword>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -384,12 +365,34 @@ fn language_resources(language_code: &str) -> LanguageResources {
     }
 }
 
+fn scoring_resources<'a>(resources: &'a LanguageResources) -> ScoringResources<'a> {
+    let lexicon_map = resources.lexicon.iter().fold(
+        HashMap::<&str, Vec<&EmotionKeyword>>::new(),
+        |mut map, keyword| {
+            map.entry(keyword.token).or_default().push(keyword);
+            map
+        },
+    );
+
+    ScoringResources {
+        stopwords: resources.stopwords.iter().copied().collect::<HashSet<_>>(),
+        negators: resources.negators.iter().copied().collect::<HashSet<_>>(),
+        intensifiers: resources
+            .intensifiers
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>(),
+        softeners: resources.softeners.iter().copied().collect::<HashSet<_>>(),
+        lexicon_map,
+    }
+}
+
 pub async fn analyze_emotions_with_enhancers(
     enhancers: &[AiEnhancerCandidate],
     input: EmotionAnalysisInput,
     options: EmotionAnalysisOptions,
 ) -> Result<EmotionAnalysisResult, ApplicationError> {
-    let transcript = input.transcript.trim();
+    let transcript = input.prepared.ai_transcript.trim();
     if transcript.is_empty() {
         return Err(ApplicationError::Validation(
             "cannot analyze emotions for an empty transcript".to_string(),
@@ -411,6 +414,7 @@ fn build_local_emotion_analysis(
     options: &EmotionAnalysisOptions,
 ) -> LocalEmotionAnalysis {
     let resources = language_resources(&options.language);
+    let scoring = scoring_resources(&resources);
     let segments = collect_analysis_segments(input, options);
     let mut concept_frequency: HashMap<String, f32> = HashMap::new();
     let mut emotion_frequency: HashMap<String, f32> = HashMap::new();
@@ -420,8 +424,8 @@ fn build_local_emotion_analysis(
     let mut previous_emotion = String::new();
 
     for (order_index, segment) in segments.iter().enumerate() {
-        let tokens = tokenize_text(&segment.text, resources.stopwords);
-        let scored = score_segment(segment.segment_index, segment, &tokens, &resources);
+        let tokens = tokenize_text(&segment.text, &scoring.stopwords);
+        let scored = score_segment(segment.segment_index, segment, &tokens, &scoring);
         if scored.text.trim().is_empty() {
             continue;
         }
@@ -534,38 +538,52 @@ async fn analyze_with_rag(
     options: &EmotionAnalysisOptions,
     local: &LocalEmotionAnalysis,
 ) -> Result<EmotionAnalysisResult, ApplicationError> {
+    let started = Instant::now();
     let chunks = chunk_text_by_words(
-        &input.transcript,
+        &input.prepared.ai_transcript,
         EMOTION_CHUNK_TARGET_WORDS,
         EMOTION_CHUNK_OVERLAP_WORDS,
     );
 
-    let direct_prompt = build_direct_emotion_prompt(input, options, local);
+    let direct_prompt = build_direct_emotion_prompt(input, options, local, enhancer);
+    let direct_prompt_chars = direct_prompt.chars().count();
+    let direct_budget = enhancer.emotion_direct_prompt_char_budget().max(2_800);
+    let should_skip_direct = direct_prompt_chars > direct_budget && chunks.len() > 1;
     let output = if enhancer.prefers_single_pass_summary() {
-        match enhancer.ask(&direct_prompt).await {
-            Ok(answer) if !answer.trim().is_empty() => answer,
-            Ok(_) => {
-                if chunks.len() == 1 {
-                    return Ok(local_analysis_to_result(
-                        local,
-                        build_local_narrative(local, input, options),
-                    ));
+        if should_skip_direct {
+            match synthesize_from_chunks(enhancer, input, options, local, &chunks).await {
+                Ok(output) => output,
+                Err(error) if is_context_window_error(&error) => {
+                    return Ok(local_overflow_fallback_result(local, input, options));
                 }
-                synthesize_from_chunks(enhancer, input, options, local, &chunks).await?
+                Err(error) => return Err(error),
             }
-            Err(error) if is_context_window_error(&error) && chunks.len() > 1 => {
-                match synthesize_from_chunks(enhancer, input, options, local, &chunks).await {
-                    Ok(output) => output,
-                    Err(synthesis_error) if is_context_window_error(&synthesis_error) => {
-                        return Ok(local_overflow_fallback_result(local, input, options));
+        } else {
+            match enhancer.ask(&direct_prompt).await {
+                Ok(answer) if !answer.trim().is_empty() => answer,
+                Ok(_) => {
+                    if chunks.len() == 1 {
+                        return Ok(local_analysis_to_result(
+                            local,
+                            build_local_narrative(local, input, options),
+                        ));
                     }
-                    Err(synthesis_error) => return Err(synthesis_error),
+                    synthesize_from_chunks(enhancer, input, options, local, &chunks).await?
                 }
+                Err(error) if is_context_window_error(&error) && chunks.len() > 1 => {
+                    match synthesize_from_chunks(enhancer, input, options, local, &chunks).await {
+                        Ok(output) => output,
+                        Err(synthesis_error) if is_context_window_error(&synthesis_error) => {
+                            return Ok(local_overflow_fallback_result(local, input, options));
+                        }
+                        Err(synthesis_error) => return Err(synthesis_error),
+                    }
+                }
+                Err(error) if is_context_window_error(&error) => {
+                    return Ok(local_overflow_fallback_result(local, input, options));
+                }
+                Err(error) => return Err(error),
             }
-            Err(error) if is_context_window_error(&error) => {
-                return Ok(local_overflow_fallback_result(local, input, options));
-            }
-            Err(error) => return Err(error),
         }
     } else if chunks.len() == 1 {
         match ask_with_overflow_fallback(
@@ -590,6 +608,21 @@ async fn analyze_with_rag(
             Err(error) => return Err(error),
         }
     };
+
+    info!(
+        target: "sbobino.emotion",
+        provider = enhancer.telemetry_provider_label(),
+        transcript_hash = input.prepared.transcript_hash.as_str(),
+        raw_transcript_chars = input.prepared.transcript.chars().count(),
+        transcript_chars = input.prepared.char_count,
+        transcript_words = input.prepared.word_count,
+        chunk_count = chunks.len(),
+        direct_prompt_chars = direct_prompt_chars,
+        direct_budget = direct_budget,
+        direct_skipped = should_skip_direct,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "emotion analysis completed"
+    );
 
     Ok(parse_emotion_output(&output, local, input, options))
 }
@@ -648,6 +681,7 @@ fn build_direct_emotion_prompt(
     input: &EmotionAnalysisInput,
     options: &EmotionAnalysisOptions,
     local: &LocalEmotionAnalysis,
+    enhancer: &dyn TranscriptEnhancer,
 ) -> String {
     let extra = options
         .prompt_override
@@ -655,6 +689,24 @@ fn build_direct_emotion_prompt(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("");
+    let transcript_chars = input.prepared.ai_transcript.chars().count();
+    let direct_budget = enhancer.emotion_direct_prompt_char_budget().max(2_800);
+    let use_excerpt_view = transcript_chars + local.evidence_json.chars().count() > direct_budget;
+    let transcript_label = if use_excerpt_view {
+        "Salient transcript excerpts"
+    } else {
+        "Transcript"
+    };
+    let transcript_body = if use_excerpt_view {
+        input.prepared.top_salient_excerpts(
+            direct_budget
+                .saturating_sub(local.evidence_json.chars().count())
+                .clamp(1_200, 3_200),
+            options.include_speakers || options.speaker_dynamics,
+        )
+    } else {
+        input.prepared.ai_transcript.clone()
+    };
     format!(
         "You are analyzing emotions in a transcript for reflective review.\n\
          Return valid JSON only.\n\
@@ -667,11 +719,12 @@ fn build_direct_emotion_prompt(
          Additional user instructions: {extra}\n\n\
          Artifact title: {title}\n\n\
          Local evidence JSON:\n{evidence}\n\n\
-         Transcript:\n{transcript}",
+         {transcript_label}:\n{transcript}",
         language = language_display_name(&options.language),
         title = input.title,
         evidence = local.evidence_json,
-        transcript = input.transcript,
+        transcript = transcript_body,
+        transcript_label = transcript_label,
     )
 }
 
@@ -731,8 +784,12 @@ fn parse_emotion_output(
     let parsed = extract_json_object(cleaned)
         .and_then(|json_text| serde_json::from_str::<EmotionAnalysisResult>(json_text).ok());
 
-    let mut result =
-        parsed.unwrap_or_else(|| local_analysis_to_result(local, cleaned.trim().to_string()));
+    let mut result = parsed.unwrap_or_else(|| {
+        local_analysis_to_result(
+            local,
+            fallback_narrative_markdown(cleaned, local, input, options),
+        )
+    });
 
     if result.overview.primary_emotions.is_empty() {
         result.overview = local.overview.clone();
@@ -751,11 +808,41 @@ fn parse_emotion_output(
     }
     if result.narrative_markdown.trim().is_empty() {
         result.narrative_markdown = build_local_narrative(local, input, options);
+    } else if narrative_looks_like_structured_payload(&result.narrative_markdown) {
+        result.narrative_markdown = build_local_narrative(local, input, options);
     }
 
     result.bridges.truncate(MAX_BRIDGES);
     result.reflection_prompts.truncate(MAX_REFLECTION_PROMPTS);
     result
+}
+
+fn fallback_narrative_markdown(
+    output: &str,
+    local: &LocalEmotionAnalysis,
+    input: &EmotionAnalysisInput,
+    options: &EmotionAnalysisOptions,
+) -> String {
+    let trimmed = output.trim();
+    if trimmed.is_empty() || narrative_looks_like_structured_payload(trimmed) {
+        build_local_narrative(local, input, options)
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn narrative_looks_like_structured_payload(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    trimmed.starts_with('{')
+        || trimmed.starts_with('[')
+        || (trimmed.contains("\"overview\"") && trimmed.contains("\"timeline\""))
+        || (trimmed.contains("\"semantic_map\"") && trimmed.contains("\"bridges\""))
+        || (trimmed.contains("\"reflection_prompts\"")
+            && trimmed.contains("\"narrative_markdown\""))
 }
 
 fn build_local_narrative(
@@ -1193,17 +1280,20 @@ fn collect_analysis_segments(
     input: &EmotionAnalysisInput,
     options: &EmotionAnalysisOptions,
 ) -> Vec<SegmentEmotionEvidence> {
-    let segments = parse_timeline_segments(input.timeline_v2_json.as_deref())
+    let segments = input
+        .prepared
+        .timeline_segments
+        .iter()
         .into_iter()
         .map(|value| SegmentEmotionEvidence {
             segment_index: value.source_index,
             speaker_label: if options.include_speakers || options.speaker_dynamics {
-                value.speaker_label
+                value.speaker_label.clone()
             } else {
                 None
             },
             time_label: if options.include_timestamps {
-                value.time_label
+                value.time_label.clone()
             } else {
                 None
             },
@@ -1217,7 +1307,7 @@ fn collect_analysis_segments(
             } else {
                 None
             },
-            text: value.text,
+            text: value.text.clone(),
             dominant_emotions: Vec::new(),
             concept_terms: Vec::new(),
             valence_score: 0.0,
@@ -1229,7 +1319,7 @@ fn collect_analysis_segments(
         return segments;
     }
 
-    chunk_text_by_words(&input.transcript, 260, 12)
+    chunk_text_by_words(&input.prepared.ai_transcript, 260, 12)
         .into_iter()
         .enumerate()
         .map(|(segment_index, text)| SegmentEmotionEvidence {
@@ -1251,39 +1341,23 @@ fn score_segment(
     segment_index: usize,
     segment: &SegmentEmotionEvidence,
     tokens: &[String],
-    resources: &LanguageResources,
+    resources: &ScoringResources<'_>,
 ) -> SegmentEmotionEvidence {
-    let lexicon_map = resources.lexicon.iter().fold(
-        HashMap::<&str, Vec<&EmotionKeyword>>::new(),
-        |mut map, keyword| {
-            map.entry(keyword.token).or_default().push(keyword);
-            map
-        },
-    );
-
-    let negators = resources.negators.iter().copied().collect::<HashSet<_>>();
-    let intensifiers = resources
-        .intensifiers
-        .iter()
-        .copied()
-        .collect::<HashSet<_>>();
-    let softeners = resources.softeners.iter().copied().collect::<HashSet<_>>();
-
     let mut emotion_scores: HashMap<String, f32> = HashMap::new();
     let mut valence_score = 0.0_f32;
     let mut intensity_score = 0.0_f32;
     let mut concept_terms = HashMap::<String, f32>::new();
 
     for (index, token) in tokens.iter().enumerate() {
-        if let Some(matches) = lexicon_map.get(token.as_str()) {
+        if let Some(matches) = resources.lexicon_map.get(token.as_str()) {
             let mut modifier = 1.0_f32;
             let left_window = index.saturating_sub(2);
             for context_token in tokens.iter().take(index).skip(left_window) {
-                if negators.contains(context_token.as_str()) {
+                if resources.negators.contains(context_token.as_str()) {
                     modifier *= -0.75;
-                } else if intensifiers.contains(context_token.as_str()) {
+                } else if resources.intensifiers.contains(context_token.as_str()) {
                     modifier *= 1.35;
-                } else if softeners.contains(context_token.as_str()) {
+                } else if resources.softeners.contains(context_token.as_str()) {
                     modifier *= 0.8;
                 }
             }
@@ -1347,86 +1421,6 @@ fn score_segment(
     }
 }
 
-fn parse_timeline_segments(raw: Option<&str>) -> Vec<TimelineSegmentSnapshot> {
-    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Vec::new();
-    };
-    let Ok(parsed) = serde_json::from_str::<TimelineV2Document>(raw) else {
-        return Vec::new();
-    };
-
-    parsed
-        .segments
-        .into_iter()
-        .enumerate()
-        .filter_map(|(source_index, segment)| {
-            let text = normalize_optional_text(segment.text).unwrap_or_else(|| {
-                segment
-                    .words
-                    .iter()
-                    .map(|word| word.text.trim())
-                    .filter(|word| !word.is_empty())
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            });
-            let text = text.trim();
-            if text.is_empty() {
-                return None;
-            }
-            let start_seconds = segment.start_seconds.filter(|value| value.is_finite());
-            let end_seconds = segment
-                .end_seconds
-                .filter(|value| value.is_finite())
-                .or_else(|| {
-                    segment
-                        .words
-                        .iter()
-                        .find_map(|word| word.end_seconds.filter(|value| value.is_finite()))
-                });
-            let time_label = start_seconds
-                .or_else(|| {
-                    segment
-                        .words
-                        .iter()
-                        .find_map(|word| word.start_seconds.filter(|value| value.is_finite()))
-                })
-                .map(format_mm_ss);
-            let speaker_label = segment
-                .speaker_label
-                .or(segment.speaker_id)
-                .and_then(normalize_optional_text);
-
-            Some(TimelineSegmentSnapshot {
-                source_index,
-                text: text.to_string(),
-                time_label,
-                start_seconds,
-                end_seconds,
-                speaker_label,
-            })
-        })
-        .collect()
-}
-
-#[derive(Debug, Clone)]
-struct TimelineSegmentSnapshot {
-    source_index: usize,
-    text: String,
-    time_label: Option<String>,
-    start_seconds: Option<f32>,
-    end_seconds: Option<f32>,
-    speaker_label: Option<String>,
-}
-
-fn normalize_optional_text(value: String) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
-
 fn chunk_text_by_words(text: &str, target_words: usize, overlap_words: usize) -> Vec<String> {
     let words = text.split_whitespace().collect::<Vec<_>>();
     if words.is_empty() {
@@ -1448,8 +1442,7 @@ fn chunk_text_by_words(text: &str, target_words: usize, overlap_words: usize) ->
     chunks
 }
 
-fn tokenize_text(text: &str, stopwords: &[&str]) -> Vec<String> {
-    let stopwords = stopwords.iter().copied().collect::<HashSet<_>>();
+fn tokenize_text(text: &str, stopwords: &HashSet<&str>) -> Vec<String> {
     text.split(|ch: char| !ch.is_alphanumeric() && ch != '\'')
         .filter_map(|token| {
             let trimmed = token.trim().to_lowercase();
@@ -1475,13 +1468,6 @@ fn language_display_name(language_code: &str) -> &str {
         "ja" => "Japanese",
         _ => "the requested language",
     }
-}
-
-fn format_mm_ss(seconds: f32) -> String {
-    let total_seconds = seconds.floor().max(0.0) as u32;
-    let mm = total_seconds / 60;
-    let ss = total_seconds % 60;
-    format!("{mm:02}:{ss:02}")
 }
 
 fn ordered_pair(left: &str, right: &str) -> (String, String) {
@@ -1598,6 +1584,9 @@ mod tests {
         MAX_PROMPT_CLUSTERS, MAX_PROMPT_REFLECTION_PROMPTS, MAX_PROMPT_SEMANTIC_EDGES,
         MAX_PROMPT_SEMANTIC_NODES, MAX_PROMPT_TIMELINE_ENTRIES,
     };
+    use crate::commands::prepared_transcript::{
+        ArtifactAiContextOptions, PreparedTranscriptContext, TimelineV2Document,
+    };
     use sbobino_domain::EmotionAnalysisResult;
 
     fn make_options() -> EmotionAnalysisOptions {
@@ -1610,13 +1599,56 @@ mod tests {
         }
     }
 
+    fn make_input(
+        title: &str,
+        transcript: &str,
+        timeline_v2_json: Option<String>,
+    ) -> EmotionAnalysisInput {
+        let prepared = if let Some(raw) = timeline_v2_json {
+            let parsed = serde_json::from_str::<TimelineV2Document>(&raw).expect("timeline");
+            let artifact = sbobino_domain::TranscriptArtifact {
+                id: "artifact".to_string(),
+                job_id: "job".to_string(),
+                title: title.to_string(),
+                kind: sbobino_domain::ArtifactKind::File,
+                input_path: "/tmp/test.wav".to_string(),
+                raw_transcript: transcript.to_string(),
+                optimized_transcript: String::new(),
+                summary: String::new(),
+                faqs: String::new(),
+                metadata: std::iter::once((
+                    "timeline_v2".to_string(),
+                    serde_json::to_string(&parsed).expect("serialize"),
+                ))
+                .collect(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            };
+            PreparedTranscriptContext::from_artifact(&artifact, ArtifactAiContextOptions::default())
+        } else {
+            PreparedTranscriptContext {
+                transcript: transcript.to_string(),
+                ai_transcript: transcript.to_string(),
+                transcript_hash: "test".to_string(),
+                char_count: transcript.chars().count(),
+                word_count: transcript.split_whitespace().count(),
+                timeline_segments: Vec::new(),
+            }
+        };
+
+        EmotionAnalysisInput {
+            title: title.to_string(),
+            prepared,
+        }
+    }
+
     #[test]
     fn local_analysis_detects_emotions_and_clusters() {
-        let input = EmotionAnalysisInput {
-            title: "Sprint retro".to_string(),
-            transcript: "We are worried about the deadline but excited about the launch. The team feels frustrated by blockers, then relieved after the fix.".to_string(),
-            timeline_v2_json: None,
-        };
+        let input = make_input(
+            "Sprint retro",
+            "We are worried about the deadline but excited about the launch. The team feels frustrated by blockers, then relieved after the fix.",
+            None,
+        );
         let options = make_options();
 
         let local = build_local_emotion_analysis(&input, &options);
@@ -1628,12 +1660,11 @@ mod tests {
 
     #[test]
     fn local_result_fallback_builds_markdown() {
-        let input = EmotionAnalysisInput {
-            title: "One-on-one".to_string(),
-            transcript: "I am really happy about the progress, but a bit worried about the risk."
-                .to_string(),
-            timeline_v2_json: None,
-        };
+        let input = make_input(
+            "One-on-one",
+            "I am really happy about the progress, but a bit worried about the risk.",
+            None,
+        );
         let options = make_options();
 
         let local = build_local_emotion_analysis(&input, &options);
@@ -1645,27 +1676,15 @@ mod tests {
     #[test]
     fn negators_and_intensifiers_shift_scores() {
         let plain = build_local_emotion_analysis(
-            &EmotionAnalysisInput {
-                title: "Plain".to_string(),
-                transcript: "I am worried about the launch.".to_string(),
-                timeline_v2_json: None,
-            },
+            &make_input("Plain", "I am worried about the launch.", None),
             &make_options(),
         );
         let negated = build_local_emotion_analysis(
-            &EmotionAnalysisInput {
-                title: "Negated".to_string(),
-                transcript: "I am not worried about the launch.".to_string(),
-                timeline_v2_json: None,
-            },
+            &make_input("Negated", "I am not worried about the launch.", None),
             &make_options(),
         );
         let intensified = build_local_emotion_analysis(
-            &EmotionAnalysisInput {
-                title: "Intensified".to_string(),
-                transcript: "I am very worried about the launch.".to_string(),
-                timeline_v2_json: None,
-            },
+            &make_input("Intensified", "I am very worried about the launch.", None),
             &make_options(),
         );
 
@@ -1676,10 +1695,10 @@ mod tests {
 
     #[test]
     fn bridges_and_timestamps_follow_local_controls() {
-        let input = EmotionAnalysisInput {
-            title: "Status review".to_string(),
-            transcript: "unused".to_string(),
-            timeline_v2_json: Some(
+        let input = make_input(
+            "Status review",
+            "unused",
+            Some(
                 r#"{
                     "segments": [
                         {
@@ -1704,7 +1723,7 @@ mod tests {
                 }"#
                 .to_string(),
             ),
-        };
+        );
 
         let local_without_timestamps = build_local_emotion_analysis(&input, &make_options());
         assert!(local_without_timestamps
@@ -1742,11 +1761,11 @@ mod tests {
     #[test]
     fn emotion_result_round_trips_through_json() {
         let local = build_local_emotion_analysis(
-            &EmotionAnalysisInput {
-                title: "Retro".to_string(),
-                transcript: "We felt frustrated, then relieved, and finally hopeful.".to_string(),
-                timeline_v2_json: None,
-            },
+            &make_input(
+                "Retro",
+                "We felt frustrated, then relieved, and finally hopeful.",
+                None,
+            ),
             &make_options(),
         );
         let result = local_analysis_to_result(&local, "Narrative".to_string());
@@ -1796,11 +1815,11 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join(",");
-        let input = EmotionAnalysisInput {
-            title: "Long sync".to_string(),
-            transcript: "risk relief blocker plan ".repeat(900),
-            timeline_v2_json: Some(format!(r#"{{"segments":[{timeline_segments}]}}"#)),
-        };
+        let input = make_input(
+            "Long sync",
+            &"risk relief blocker plan ".repeat(900),
+            Some(format!(r#"{{"segments":[{timeline_segments}]}}"#)),
+        );
 
         let local = build_local_emotion_analysis(
             &input,
@@ -1864,11 +1883,11 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join(",");
-        let input = EmotionAnalysisInput {
-            title: "Full timeline".to_string(),
-            transcript: "planning concern coordination ".repeat(500),
-            timeline_v2_json: Some(format!(r#"{{"segments":[{timeline_segments}]}}"#)),
-        };
+        let input = make_input(
+            "Full timeline",
+            &"planning concern coordination ".repeat(500),
+            Some(format!(r#"{{"segments":[{timeline_segments}]}}"#)),
+        );
         let options = EmotionAnalysisOptions {
             include_timestamps: true,
             ..make_options()
@@ -1892,11 +1911,56 @@ mod tests {
     }
 
     #[test]
+    fn invalid_structured_output_falls_back_to_local_narrative() {
+        let input = make_input(
+            "Fallback",
+            "We are worried about the launch but feel calmer after the review.",
+            None,
+        );
+        let options = make_options();
+        let local = build_local_emotion_analysis(&input, &options);
+        let invalid_output = r#"{
+            "overview": {
+                "emotional_arc": "Broken payload",
+            }
+        }"#;
+
+        let parsed = parse_emotion_output(invalid_output, &local, &input, &options);
+
+        assert!(!parsed.narrative_markdown.trim_start().starts_with('{'));
+        assert!(parsed.narrative_markdown.contains("## Emotional reading"));
+    }
+
+    #[test]
+    fn structured_narrative_field_is_replaced_with_local_markdown() {
+        let input = make_input(
+            "Narrative cleanup",
+            "The team sounds tense before becoming more confident.",
+            None,
+        );
+        let options = make_options();
+        let local = build_local_emotion_analysis(&input, &options);
+        let output = r#"{
+            "overview": {"primary_emotions":["tension"],"emotional_arc":"Tense to calm","speaker_dynamics":null,"confidence_note":null},
+            "timeline": [],
+            "semantic_map": {"nodes":[],"edges":[],"clusters":[]},
+            "bridges": [],
+            "reflection_prompts": [],
+            "narrative_markdown": "{\"overview\":{\"primary_emotions\":[\"tension\"]}}"
+        }"#;
+
+        let parsed = parse_emotion_output(output, &local, &input, &options);
+
+        assert!(!parsed.narrative_markdown.contains("\"overview\""));
+        assert!(parsed.narrative_markdown.contains("## Emotional reading"));
+    }
+
+    #[test]
     fn local_timeline_preserves_original_source_indexes() {
-        let input = EmotionAnalysisInput {
-            title: "Source indexes".to_string(),
-            transcript: "placeholder".to_string(),
-            timeline_v2_json: Some(
+        let input = make_input(
+            "Source indexes",
+            "placeholder",
+            Some(
                 r#"{
                     "segments": [
                         {"text": "Opening concern.", "start_seconds": 0.0},
@@ -1906,7 +1970,7 @@ mod tests {
                 }"#
                 .to_string(),
             ),
-        };
+        );
         let options = EmotionAnalysisOptions {
             include_timestamps: true,
             ..make_options()

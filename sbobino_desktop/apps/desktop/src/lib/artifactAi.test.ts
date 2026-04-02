@@ -7,6 +7,7 @@ import {
   buildSummaryArtifactPayload,
   defaultEmotionControls,
   defaultSummaryControls,
+  normalizeEmotionNarrative,
   parsePersistedEmotionAnalysis,
   shouldAutostartSummary,
 } from "./artifactAi";
@@ -131,6 +132,25 @@ describe("artifactAi helpers", () => {
 
     expect(result?.overview.primary_emotions).toEqual(["joy"]);
     expect(result?.narrative_markdown).toBe("Narrative");
+  });
+
+  it("drops emotion narratives that look like serialized payloads", () => {
+    expect(
+      normalizeEmotionNarrative(`{
+        "overview": {"primary_emotions":["joy"]},
+        "timeline": [],
+        "semantic_map": {"nodes": [], "edges": [], "clusters": []},
+        "bridges": [],
+        "reflection_prompts": [],
+        "narrative_markdown": "Narrative"
+      }`),
+    ).toBe("");
+  });
+
+  it("keeps readable emotion narratives", () => {
+    expect(
+      normalizeEmotionNarrative("## Emotional reading\n\nThe conversation starts tense and softens near the end."),
+    ).toBe("## Emotional reading\n\nThe conversation starts tense and softens near the end.");
   });
 
   it("autostarts only once for empty summaries on ready artifacts", () => {

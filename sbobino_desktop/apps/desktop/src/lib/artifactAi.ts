@@ -116,6 +116,17 @@ export function parsePersistedEmotionAnalysis(
   }
 }
 
+export function normalizeEmotionNarrative(
+  narrative: string | null | undefined,
+): string {
+  const trimmed = narrative?.trim() ?? "";
+  if (!trimmed || looksLikeStructuredEmotionPayload(trimmed)) {
+    return "";
+  }
+
+  return trimmed;
+}
+
 export function shouldAutostartSummary(params: {
   enabled: boolean;
   artifactId: string | null;
@@ -143,4 +154,19 @@ export function shouldAutostartSummary(params: {
 function normalizeOptionalPrompt(value: string): string | null {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function looksLikeStructuredEmotionPayload(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  return (
+    trimmed.startsWith("{") ||
+    trimmed.startsWith("[") ||
+    (trimmed.includes('"overview"') && trimmed.includes('"timeline"')) ||
+    (trimmed.includes('"semantic_map"') && trimmed.includes('"bridges"')) ||
+    (trimmed.includes('"reflection_prompts"') && trimmed.includes('"narrative_markdown"'))
+  );
 }

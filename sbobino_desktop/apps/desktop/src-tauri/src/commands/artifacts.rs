@@ -14,7 +14,9 @@ use serde_json::json;
 use tauri::State;
 use uuid::Uuid;
 
-use sbobino_application::{ApplicationError, ArtifactQuery, TranscriptEnhancer};
+use sbobino_application::{
+    summarize_transcript_adaptive, ApplicationError, ArtifactQuery, TranscriptEnhancer,
+};
 use sbobino_domain::{
     constrain_transcript_edit, merge_optimized_transcript_sections,
     minimize_transcript_repetitions, ArtifactKind, PromptTask, TranscriptArtifact,
@@ -25,6 +27,10 @@ use crate::{
     commands::emotion_analysis::{
         analyze_emotions_with_enhancers, EmotionAnalysisInput, EmotionAnalysisOptions,
     },
+    commands::prepared_transcript::{
+        format_mm_ss, normalize_optional_text, parse_timeline_context_segments,
+        parse_timeline_document, ArtifactAiContextOptions, PreparedTranscriptContext,
+    },
     error::CommandError,
     state::AppState,
 };
@@ -33,10 +39,6 @@ const MIN_TRIMMED_AUDIO_DURATION_SECONDS: f64 = 1.5;
 const SPEAKER_COLOR_PALETTE: &[&str] = &[
     "#4F7CFF", "#EC6A5E", "#27A376", "#B06BF2", "#D88B15", "#1293A5", "#E255A1", "#6C7A2D",
 ];
-
-fn default_true() -> bool {
-    true
-}
 
 fn default_summary_language() -> String {
     "en".to_string()
@@ -56,23 +58,6 @@ fn default_summary_key_points_only() -> bool {
 
 fn default_emotion_speaker_dynamics() -> bool {
     true
-}
-
-#[derive(Debug, Clone, Copy, Deserialize)]
-pub struct ArtifactAiContextOptions {
-    #[serde(default = "default_true")]
-    pub include_timestamps: bool,
-    #[serde(default)]
-    pub include_speakers: bool,
-}
-
-impl Default for ArtifactAiContextOptions {
-    fn default() -> Self {
-        Self {
-            include_timestamps: true,
-            include_speakers: false,
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -144,9 +129,13 @@ const CHAT_CHUNK_OVERLAP_WORDS: usize = 24;
 const OPTIMIZE_CHUNK_TARGET_CHARS: usize = 2600;
 const OPTIMIZE_CHUNK_OVERLAP_WORDS: usize = 28;
 const OPTIMIZE_CHUNK_CONCURRENCY_LIMIT: usize = 3;
+#[cfg(test)]
 const SUMMARY_CHUNK_TARGET_CHARS: usize = 4000;
+#[cfg(test)]
 const SUMMARY_CHUNK_OVERLAP_WORDS: usize = 30;
+#[cfg(test)]
 const SUMMARY_CHUNK_CONCURRENCY_LIMIT: usize = 3;
+#[cfg(test)]
 const SUMMARY_SYNTHESIS_BUDGETS: &[usize] = &[12_000, 8_000, 5_000, 3_000];
 const LOW_CONFIDENCE_WORD_THRESHOLD: f32 = 0.58;
 const LOW_CONFIDENCE_SPAN_CONTINUATION_THRESHOLD: f32 = 0.72;
@@ -154,48 +143,6 @@ const LOW_CONFIDENCE_CONTEXT_RADIUS_WORDS: usize = 3;
 const MAX_LOW_CONFIDENCE_PROMPT_SPANS: usize = 10;
 const SUMMARY_CONTEXT_OVERFLOW_MESSAGE: &str =
     "Exceeded model context window size. The app now uses chunked retrieval, but this request is still too large. Try a shorter custom prompt or fewer summary constraints.";
-
-#[derive(Debug, Clone, Deserialize, Default)]
-struct TimelineV2Document {
-    #[serde(default)]
-    segments: Vec<TimelineV2Segment>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-struct TimelineV2Segment {
-    #[serde(default)]
-    text: String,
-    #[serde(default)]
-    start_seconds: Option<f32>,
-    #[serde(default)]
-    end_seconds: Option<f32>,
-    #[serde(default)]
-    speaker_id: Option<String>,
-    #[serde(default)]
-    speaker_label: Option<String>,
-    #[serde(default)]
-    words: Vec<TimelineV2Word>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-struct TimelineV2Word {
-    #[serde(default)]
-    text: String,
-    #[serde(default)]
-    start_seconds: Option<f32>,
-    #[serde(default)]
-    end_seconds: Option<f32>,
-    #[serde(default)]
-    confidence: Option<f32>,
-}
-
-#[derive(Debug, Clone)]
-struct TimelineContextSegment {
-    text: String,
-    time_label: Option<String>,
-    speaker_id: Option<String>,
-    speaker_label: Option<String>,
-}
 
 #[derive(Debug, Clone)]
 struct LowConfidenceSpan {
@@ -785,8 +732,8 @@ pub async fn summarize_artifact(
         return Err(missing_ai_provider_command_error(reason.as_deref()));
     }
 
-    let transcript = build_artifact_context_transcript(&artifact, payload.context);
-    if transcript.trim().is_empty() {
+    let prepared = PreparedTranscriptContext::from_artifact(&artifact, payload.context);
+    if prepared.ai_transcript.trim().is_empty() {
         return Err(CommandError::new(
             "empty_content",
             "no transcription available to summarize",
@@ -796,9 +743,11 @@ pub async fn summarize_artifact(
     let instructions = build_summary_instructions(&payload);
 
     run_with_enhancer_fallback(&enhancers, "summarize transcript", |enhancer| {
-        let transcript = transcript.clone();
+        let transcript = prepared.ai_transcript.clone();
         let instructions = instructions.clone();
-        Box::pin(async move { summarize_with_rag(enhancer, &transcript, &instructions).await })
+        Box::pin(async move {
+            summarize_transcript_adaptive(enhancer, &transcript, &instructions).await
+        })
     })
     .await
     .map_err(CommandError::from)
@@ -829,8 +778,8 @@ pub async fn analyze_artifact_emotions(
         return Err(missing_ai_provider_command_error(reason.as_deref()));
     }
 
-    let transcript = build_artifact_context_transcript(&artifact, payload.context);
-    if transcript.trim().is_empty() {
+    let prepared = PreparedTranscriptContext::from_artifact(&artifact, payload.context);
+    if prepared.ai_transcript.trim().is_empty() {
         return Err(CommandError::new(
             "empty_content",
             "no transcription available to analyze",
@@ -847,8 +796,7 @@ pub async fn analyze_artifact_emotions(
         &enhancers,
         EmotionAnalysisInput {
             title: artifact.title.clone(),
-            transcript,
-            timeline_v2_json: artifact.metadata.get("timeline_v2").cloned(),
+            prepared,
         },
         EmotionAnalysisOptions {
             language: payload.language.clone(),
@@ -876,83 +824,11 @@ pub async fn analyze_artifact_emotions(
     Ok(result)
 }
 
-fn effective_transcript(artifact: &TranscriptArtifact) -> String {
-    let optimized = artifact.optimized_transcript.trim();
-    if !optimized.is_empty() {
-        return optimized.to_string();
-    }
-    artifact.raw_transcript.trim().to_string()
-}
-
 fn build_artifact_context_transcript(
     artifact: &TranscriptArtifact,
     context: ArtifactAiContextOptions,
 ) -> String {
-    let timeline_segments = parse_timeline_context_segments(artifact);
-    if timeline_segments.is_empty() {
-        return effective_transcript(artifact);
-    }
-
-    timeline_segments
-        .iter()
-        .map(|segment| render_timeline_context_segment(segment, context))
-        .filter(|line| !line.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn parse_timeline_context_segments(artifact: &TranscriptArtifact) -> Vec<TimelineContextSegment> {
-    let raw = artifact
-        .metadata
-        .get("timeline_v2")
-        .map(String::as_str)
-        .unwrap_or_default()
-        .trim();
-    if raw.is_empty() {
-        return Vec::new();
-    }
-
-    let parsed = match serde_json::from_str::<TimelineV2Document>(raw) {
-        Ok(value) => value,
-        Err(_) => return Vec::new(),
-    };
-
-    parsed
-        .segments
-        .into_iter()
-        .filter_map(|segment| {
-            let text = segment.text.trim();
-            if text.is_empty() {
-                return None;
-            }
-
-            let time_label = resolve_timeline_segment_seconds(&segment).map(format_mm_ss);
-            let speaker_id = normalize_optional_text(segment.speaker_id);
-            let speaker_label =
-                normalize_optional_text(segment.speaker_label).or_else(|| speaker_id.clone());
-
-            Some(TimelineContextSegment {
-                text: text.to_string(),
-                time_label,
-                speaker_id,
-                speaker_label,
-            })
-        })
-        .collect()
-}
-
-fn parse_timeline_document(artifact: &TranscriptArtifact) -> Option<TimelineV2Document> {
-    let raw = artifact
-        .metadata
-        .get("timeline_v2")
-        .map(String::as_str)
-        .unwrap_or_default()
-        .trim();
-    if raw.is_empty() {
-        return None;
-    }
-
-    serde_json::from_str::<TimelineV2Document>(raw).ok()
+    PreparedTranscriptContext::from_artifact(artifact, context).ai_transcript
 }
 
 fn build_confidence_aware_optimize_prompt(
@@ -1123,66 +999,6 @@ fn normalize_timeline_word_text(value: &str) -> Option<String> {
 
 fn is_whisper_control_token(token_text: &str) -> bool {
     token_text.starts_with("[_") && token_text.ends_with(']')
-}
-
-fn resolve_timeline_segment_seconds(segment: &TimelineV2Segment) -> Option<f32> {
-    if let Some(start) = segment.start_seconds.filter(|value| value.is_finite()) {
-        return Some(start.max(0.0));
-    }
-    if let Some(end) = segment.end_seconds.filter(|value| value.is_finite()) {
-        return Some(end.max(0.0));
-    }
-
-    for word in &segment.words {
-        if let Some(start) = word.start_seconds.filter(|value| value.is_finite()) {
-            return Some(start.max(0.0));
-        }
-        if let Some(end) = word.end_seconds.filter(|value| value.is_finite()) {
-            return Some(end.max(0.0));
-        }
-    }
-
-    None
-}
-
-fn render_timeline_context_segment(
-    segment: &TimelineContextSegment,
-    context: ArtifactAiContextOptions,
-) -> String {
-    let mut prefix = String::new();
-
-    if context.include_timestamps {
-        if let Some(time_label) = segment.time_label.as_deref() {
-            prefix.push_str(&format!("[{time_label}] "));
-        }
-    }
-
-    if context.include_speakers {
-        if let Some(speaker_label) = segment.speaker_label.as_deref() {
-            prefix.push_str(speaker_label);
-            prefix.push_str(": ");
-        }
-    }
-
-    format!("{prefix}{}", segment.text.trim())
-}
-
-fn normalize_optional_text(value: Option<String>) -> Option<String> {
-    value.and_then(|text| {
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    })
-}
-
-fn format_mm_ss(seconds: f32) -> String {
-    let total_seconds = seconds.floor().max(0.0) as u32;
-    let mm = total_seconds / 60;
-    let ss = total_seconds % 60;
-    format!("{mm:02}:{ss:02}")
 }
 
 fn chunk_text_by_words(text: &str, target_chars: usize, overlap_words: usize) -> Vec<String> {
@@ -1541,6 +1357,7 @@ async fn optimize_with_rag(
     }
 }
 
+#[cfg(test)]
 async fn summarize_with_rag(
     enhancer: &dyn TranscriptEnhancer,
     transcript: &str,
@@ -1625,6 +1442,7 @@ async fn summarize_with_rag(
     ask_with_overflow_fallback(enhancer, candidates).await
 }
 
+#[cfg(test)]
 fn build_direct_summary_prompt(transcript: &str, user_instructions: &str) -> String {
     format!(
         "You are writing the final summary of a transcript.\n\n\
@@ -1645,6 +1463,7 @@ fn build_direct_summary_prompt(transcript: &str, user_instructions: &str) -> Str
     )
 }
 
+#[cfg(test)]
 fn build_chunk_note_prompt(
     chunk_index: usize,
     total_chunks: usize,
@@ -1669,6 +1488,7 @@ fn build_chunk_note_prompt(
     )
 }
 
+#[cfg(test)]
 fn build_summary_synthesis_prompt(chunk_notes: &str, user_instructions: &str) -> String {
     format!(
         "You are writing the final summary of a transcript from the extracted chunk notes below.\n\n\

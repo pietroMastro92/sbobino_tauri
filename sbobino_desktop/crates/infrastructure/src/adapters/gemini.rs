@@ -141,6 +141,18 @@ impl TranscriptEnhancer for GeminiEnhancer {
     async fn ask(&self, prompt: &str) -> Result<String, ApplicationError> {
         GeminiEnhancer::ask(self, prompt).await
     }
+
+    fn summary_direct_prompt_char_budget(&self) -> usize {
+        18_000
+    }
+
+    fn emotion_direct_prompt_char_budget(&self) -> usize {
+        12_000
+    }
+
+    fn telemetry_provider_label(&self) -> &'static str {
+        "gemini"
+    }
 }
 
 fn normalize_prompt(value: Option<String>) -> Option<String> {

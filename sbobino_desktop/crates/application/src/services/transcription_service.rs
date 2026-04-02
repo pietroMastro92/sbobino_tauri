@@ -17,8 +17,9 @@ use sbobino_domain::{
 
 use crate::{
     dto::{RunTranscriptionRequest, SummaryFaq},
-    is_retryable_ai_provider_error, ApplicationError, ArtifactRepository, AudioTranscoder,
-    SpeakerDiarizationEngine, SpeechToTextEngine, TranscriptEnhancer,
+    is_retryable_ai_provider_error, summarize_and_faq_adaptive, ApplicationError,
+    ArtifactRepository, AudioTranscoder, SpeakerDiarizationEngine, SpeechToTextEngine,
+    TranscriptEnhancer,
 };
 
 const HAS_OPTIMIZED_TRANSCRIPT_METADATA_KEY: &str = "has_optimized_transcript";
@@ -430,9 +431,12 @@ impl TranscriptionService {
             let constrained_optimized = constrain_transcript_edit(raw_transcript, &optimized);
             let has_optimized_transcript = constrained_optimized != raw_transcript;
 
-            let summary_faq = match enhancer
-                .summarize_and_faq(&constrained_optimized, language_code)
-                .await
+            let summary_faq = match summarize_and_faq_adaptive(
+                enhancer.as_ref(),
+                &constrained_optimized,
+                language_code,
+            )
+            .await
             {
                 Ok(value) => value,
                 Err(error) if is_retryable_ai_provider_error(&error) => {

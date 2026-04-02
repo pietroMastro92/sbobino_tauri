@@ -192,6 +192,7 @@ import {
   buildSummaryArtifactPayload,
   defaultEmotionControls,
   defaultSummaryControls,
+  normalizeEmotionNarrative,
   parsePersistedEmotionAnalysis,
   shouldAutostartSummary,
 } from "./lib/artifactAi";
@@ -6309,6 +6310,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       const timelineStart = timelineEntries[0] ?? null;
       const timelineEnd = timelineEntries.length > 1 ? timelineEntries[timelineEntries.length - 1] : null;
       const canCollapseTimeline = timelineEntries.length > 2;
+      const emotionNarrative = normalizeEmotionNarrative(draftEmotionAnalysis.narrative_markdown);
 
       return (
         <div className="emotion-view">
@@ -6328,8 +6330,16 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             {draftEmotionAnalysis.overview.confidence_note ? (
               <p className="muted">{draftEmotionAnalysis.overview.confidence_note}</p>
             ) : null}
-            <div className="emotion-narrative">{draftEmotionAnalysis.narrative_markdown}</div>
           </section>
+
+          {emotionNarrative ? (
+            <section className="emotion-section">
+              <div className="emotion-section-header">
+                <h3>{t("emotion.reading", "Narrative reading")}</h3>
+              </div>
+              <div className="emotion-narrative">{emotionNarrative}</div>
+            </section>
+          ) : null}
 
           <section className="emotion-section">
             <div className="emotion-section-header">

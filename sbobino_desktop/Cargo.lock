@@ -4009,6 +4009,7 @@ name = "sbobino-application"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "futures-util",
  "hound",
  "sbobino-domain",
  "serde",

@@ -118,6 +118,32 @@ impl TranscriptEnhancer for MockEnhancer {
             faqs: format!("faqs::{text}"),
         })
     }
+
+    async fn ask(&self, prompt: &str) -> Result<String, ApplicationError> {
+        let transcript = prompt
+            .split("Transcript:\n")
+            .nth(1)
+            .or_else(|| prompt.split("Chunk notes:\n").nth(1))
+            .unwrap_or_default()
+            .trim();
+        let mut summarize_calls = self
+            .summarize_calls
+            .lock()
+            .expect("enhancer summarize lock poisoned");
+        *summarize_calls += 1;
+        if self.fail_summarize {
+            return Err(ApplicationError::PostProcessing(
+                "summary failed".to_string(),
+            ));
+        }
+        Ok(format!(
+            "Summary:\nsummary::{transcript}\nFAQs:\nfaqs::{transcript}"
+        ))
+    }
+
+    fn telemetry_provider_label(&self) -> &'static str {
+        "mock"
+    }
 }
 
 struct RetryableEnhancer {
@@ -157,6 +183,28 @@ impl TranscriptEnhancer for RetryableEnhancer {
             summary: format!("{}::summary::{text}", self.label),
             faqs: String::new(),
         })
+    }
+
+    async fn ask(&self, prompt: &str) -> Result<String, ApplicationError> {
+        let transcript = prompt
+            .split("Transcript:\n")
+            .nth(1)
+            .or_else(|| prompt.split("Chunk notes:\n").nth(1))
+            .unwrap_or_default()
+            .trim();
+        let mut summarize_calls = self
+            .summarize_calls
+            .lock()
+            .expect("retryable enhancer summarize lock poisoned");
+        *summarize_calls += 1;
+        Ok(format!(
+            "Summary:\n{}::summary::{transcript}\nFAQs:\n",
+            self.label
+        ))
+    }
+
+    fn telemetry_provider_label(&self) -> &'static str {
+        self.label
     }
 }
 
