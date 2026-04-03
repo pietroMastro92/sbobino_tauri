@@ -55,7 +55,14 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: npm run tauri:build -- --target aarch64-apple-darwin --bundles dmg,app
+        run: |
+          if [[ -z "$APPLE_CERTIFICATE" || -z "$APPLE_CERTIFICATE_PASSWORD" || -z "$APPLE_SIGNING_IDENTITY" ]]; then
+            echo "Apple signing secrets are not configured; building unsigned macOS bundles."
+            unset APPLE_CERTIFICATE
+            unset APPLE_CERTIFICATE_PASSWORD
+            unset APPLE_SIGNING_IDENTITY
+          fi
+          npm run tauri:build -- --target aarch64-apple-darwin --bundles dmg,app
 
       - name: Package pyannote repair assets
         run: |
