@@ -134,12 +134,15 @@ impl SecureStorage {
         Ok(key)
     }
 
-    pub fn encrypt_bytes(&self, label: &str, plaintext: &[u8]) -> Result<Vec<u8>, ApplicationError> {
+    pub fn encrypt_bytes(
+        &self,
+        label: &str,
+        plaintext: &[u8],
+    ) -> Result<Vec<u8>, ApplicationError> {
         let key_bytes = self.derive_key(label)?;
-        let unbound =
-            UnboundKey::new(&AES_256_GCM, &key_bytes).map_err(|_| {
-                ApplicationError::Persistence("failed to initialize AES-256-GCM key".to_string())
-            })?;
+        let unbound = UnboundKey::new(&AES_256_GCM, &key_bytes).map_err(|_| {
+            ApplicationError::Persistence("failed to initialize AES-256-GCM key".to_string())
+        })?;
         let key = LessSafeKey::new(unbound);
         let rng = SystemRandom::new();
         let mut nonce_bytes = [0_u8; 12];
@@ -157,7 +160,11 @@ impl SecureStorage {
         Ok(output)
     }
 
-    pub fn decrypt_bytes(&self, label: &str, ciphertext: &[u8]) -> Result<Vec<u8>, ApplicationError> {
+    pub fn decrypt_bytes(
+        &self,
+        label: &str,
+        ciphertext: &[u8],
+    ) -> Result<Vec<u8>, ApplicationError> {
         if ciphertext.len() < 12 {
             return Err(ApplicationError::Persistence(
                 "ciphertext is too short to contain a nonce".to_string(),
@@ -165,10 +172,9 @@ impl SecureStorage {
         }
 
         let key_bytes = self.derive_key(label)?;
-        let unbound =
-            UnboundKey::new(&AES_256_GCM, &key_bytes).map_err(|_| {
-                ApplicationError::Persistence("failed to initialize AES-256-GCM key".to_string())
-            })?;
+        let unbound = UnboundKey::new(&AES_256_GCM, &key_bytes).map_err(|_| {
+            ApplicationError::Persistence("failed to initialize AES-256-GCM key".to_string())
+        })?;
         let key = LessSafeKey::new(unbound);
 
         let mut nonce_bytes = [0_u8; 12];
@@ -228,7 +234,9 @@ fn read_keychain_secret(account: &str) -> Result<Option<String>, ApplicationErro
         })?;
 
     if output.status.success() {
-        return Ok(Some(String::from_utf8_lossy(&output.stdout).trim().to_string()));
+        return Ok(Some(
+            String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        ));
     }
 
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -436,12 +444,14 @@ pub fn encrypt_file_with_password(
             output_path.display()
         ))
     })?;
-    writer.write_all(&BACKUP_PBKDF2_ITERATIONS.to_be_bytes()).map_err(|e| {
-        ApplicationError::Persistence(format!(
-            "failed to write backup iteration header to {}: {e}",
-            output_path.display()
-        ))
-    })?;
+    writer
+        .write_all(&BACKUP_PBKDF2_ITERATIONS.to_be_bytes())
+        .map_err(|e| {
+            ApplicationError::Persistence(format!(
+                "failed to write backup iteration header to {}: {e}",
+                output_path.display()
+            ))
+        })?;
     writer
         .write_all(&(BACKUP_CHUNK_SIZE as u32).to_be_bytes())
         .map_err(|e| {
@@ -464,11 +474,9 @@ pub fn encrypt_file_with_password(
     })?;
 
     let key = password_key(password, &salt, BACKUP_PBKDF2_ITERATIONS)?;
-    let cipher = LessSafeKey::new(
-        UnboundKey::new(&AES_256_GCM, &key).map_err(|_| {
-            ApplicationError::Persistence("failed to initialize backup cipher".to_string())
-        })?,
-    );
+    let cipher = LessSafeKey::new(UnboundKey::new(&AES_256_GCM, &key).map_err(|_| {
+        ApplicationError::Persistence("failed to initialize backup cipher".to_string())
+    })?);
     let mut buffer = vec![0_u8; BACKUP_CHUNK_SIZE];
     let mut chunk_index = 0_u32;
 
@@ -586,11 +594,9 @@ pub fn decrypt_file_with_password(
     let mut writer = BufWriter::new(output);
 
     let key = password_key(password, &salt, iterations)?;
-    let cipher = LessSafeKey::new(
-        UnboundKey::new(&AES_256_GCM, &key).map_err(|_| {
-            ApplicationError::Persistence("failed to initialize backup cipher".to_string())
-        })?,
-    );
+    let cipher = LessSafeKey::new(UnboundKey::new(&AES_256_GCM, &key).map_err(|_| {
+        ApplicationError::Persistence("failed to initialize backup cipher".to_string())
+    })?);
 
     let mut chunk_index = 0_u32;
     loop {
@@ -746,10 +752,8 @@ mod tests {
         let error = decrypt_file_with_password(&encrypted, &output, "wrong password")
             .expect_err("wrong password should fail");
 
-        assert!(
-            error
-                .to_string()
-                .contains("backup password is invalid or the backup file is corrupted")
-        );
+        assert!(error
+            .to_string()
+            .contains("backup password is invalid or the backup file is corrupted"));
     }
 }

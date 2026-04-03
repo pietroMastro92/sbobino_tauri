@@ -22,7 +22,10 @@ impl FsSettingsRepository {
             .unwrap_or_else(|| PathBuf::from("."));
         let secure_storage = SecureStorage::load_or_create_with_fallback(&fallback_root)
             .expect("secure storage should initialize before settings repository");
-        Self { path, secure_storage }
+        Self {
+            path,
+            secure_storage,
+        }
     }
 
     pub fn load_sync(&self) -> Result<AppSettings, ApplicationError> {
@@ -158,7 +161,8 @@ impl FsSettingsRepository {
                     .write_secret("settings.gemini_api_key", secret.trim())?;
             }
             _ if !settings.ai.providers.gemini.has_api_key => {
-                self.secure_storage.delete_secret("settings.gemini_api_key")?;
+                self.secure_storage
+                    .delete_secret("settings.gemini_api_key")?;
             }
             _ => {}
         }

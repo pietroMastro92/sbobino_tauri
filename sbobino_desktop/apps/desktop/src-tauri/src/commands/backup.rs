@@ -125,7 +125,11 @@ pub async fn export_app_backup(
     validate_backup_password(&payload.password)?;
 
     let destination_path = normalized_path(&payload.destination_path, "backup destination")?;
-    let settings = state.settings_service.get().await.map_err(CommandError::from)?;
+    let settings = state
+        .settings_service
+        .get()
+        .await
+        .map_err(CommandError::from)?;
     let active_artifacts = collect_all_artifacts(&state, false).await?;
     let deleted_artifacts = collect_all_artifacts(&state, true).await?;
 
@@ -223,7 +227,11 @@ pub async fn export_app_backup(
         result
     })
     .await
-    .map_err(|e| CommandError::from(ApplicationError::Persistence(format!("backup export join error: {e}"))))?
+    .map_err(|e| {
+        CommandError::from(ApplicationError::Persistence(format!(
+            "backup export join error: {e}"
+        )))
+    })?
     .map_err(CommandError::from)?;
 
     Ok(ExportAppBackupResponse {
@@ -244,7 +252,11 @@ pub async fn import_app_backup(
     ensure_backup_idle(&state).await?;
     validate_backup_password(&payload.password)?;
 
-    let previous_settings = state.settings_service.get().await.map_err(CommandError::from)?;
+    let previous_settings = state
+        .settings_service
+        .get()
+        .await
+        .map_err(CommandError::from)?;
     let backup_path = normalized_path(&payload.backup_path, "backup path")?;
     let password = payload.password;
 
@@ -259,19 +271,28 @@ pub async fn import_app_backup(
 
     let data_dir = state.runtime_factory.data_dir().to_path_buf();
     let staging_dir = prepared.staging_dir.clone();
-    let swapped = tokio::task::spawn_blocking(move || swap_storage_with_rollback(&data_dir, &staging_dir))
-        .await
-        .map_err(|e| {
-            CommandError::from(ApplicationError::Persistence(format!(
-                "backup storage swap join error: {e}"
-            )))
-        })?
-        .map_err(CommandError::from)?;
+    let swapped =
+        tokio::task::spawn_blocking(move || swap_storage_with_rollback(&data_dir, &staging_dir))
+            .await
+            .map_err(|e| {
+                CommandError::from(ApplicationError::Persistence(format!(
+                    "backup storage swap join error: {e}"
+                )))
+            })?
+            .map_err(CommandError::from)?;
 
     let imported_settings = prepared.settings.clone();
     let imported_at = Utc::now().to_rfc3339();
-    let artifact_count = prepared.records.iter().filter(|record| !record.is_deleted).count();
-    let deleted_artifact_count = prepared.records.iter().filter(|record| record.is_deleted).count();
+    let artifact_count = prepared
+        .records
+        .iter()
+        .filter(|record| !record.is_deleted)
+        .count();
+    let deleted_artifact_count = prepared
+        .records
+        .iter()
+        .filter(|record| record.is_deleted)
+        .count();
 
     match state.settings_service.update(imported_settings).await {
         Ok(updated) => {
@@ -293,14 +314,15 @@ pub async fn import_app_backup(
         Err(settings_error) => {
             let data_dir = state.runtime_factory.data_dir().to_path_buf();
             let rollback_dir = swapped.rollback_dir.clone();
-            let restore_result =
-                tokio::task::spawn_blocking(move || restore_storage_from_rollback(&data_dir, &rollback_dir))
-                    .await
-                    .map_err(|e| {
-                        CommandError::from(ApplicationError::Persistence(format!(
-                            "backup rollback join error: {e}"
-                        )))
-                    })?;
+            let restore_result = tokio::task::spawn_blocking(move || {
+                restore_storage_from_rollback(&data_dir, &rollback_dir)
+            })
+            .await
+            .map_err(|e| {
+                CommandError::from(ApplicationError::Persistence(format!(
+                    "backup rollback join error: {e}"
+                )))
+            })?;
             if let Err(restore_error) = restore_result {
                 return Err(CommandError::from(ApplicationError::Persistence(format!(
                     "backup import failed while saving settings ({settings_error}) and storage rollback also failed ({restore_error})"
@@ -462,9 +484,7 @@ fn write_zip_json<T: Serialize + ?Sized>(
     options: SimpleFileOptions,
 ) -> Result<(), ApplicationError> {
     archive.start_file(entry_name, options).map_err(|e| {
-        ApplicationError::Persistence(format!(
-            "failed to create backup entry {entry_name}: {e}"
-        ))
+        ApplicationError::Persistence(format!("failed to create backup entry {entry_name}: {e}"))
     })?;
     let bytes = serde_json::to_vec_pretty(value).map_err(|e| {
         ApplicationError::Persistence(format!(
@@ -472,16 +492,11 @@ fn write_zip_json<T: Serialize + ?Sized>(
         ))
     })?;
     archive.write_all(&bytes).map_err(|e| {
-        ApplicationError::Persistence(format!(
-            "failed to write backup entry {entry_name}: {e}"
-        ))
+        ApplicationError::Persistence(format!("failed to write backup entry {entry_name}: {e}"))
     })
 }
 
-fn prepare_import(
-    backup_path: &Path,
-    password: &str,
-) -> Result<PreparedImport, ApplicationError> {
+fn prepare_import(backup_path: &Path, password: &str) -> Result<PreparedImport, ApplicationError> {
     let temp_root = temp_work_dir("backup-import")?;
     let decrypted_zip = temp_root.join("portable-backup.zip");
     decrypt_file_with_password(backup_path, &decrypted_zip, password)?;
@@ -563,20 +578,14 @@ fn read_zip_json<T: DeserializeOwned>(
     entry_name: &str,
 ) -> Result<T, ApplicationError> {
     let mut entry = archive.by_name(entry_name).map_err(|e| {
-        ApplicationError::Persistence(format!(
-            "failed to open backup entry {entry_name}: {e}"
-        ))
+        ApplicationError::Persistence(format!("failed to open backup entry {entry_name}: {e}"))
     })?;
     let mut bytes = Vec::new();
     entry.read_to_end(&mut bytes).map_err(|e| {
-        ApplicationError::Persistence(format!(
-            "failed to read backup entry {entry_name}: {e}"
-        ))
+        ApplicationError::Persistence(format!("failed to read backup entry {entry_name}: {e}"))
     })?;
     serde_json::from_slice(&bytes).map_err(|e| {
-        ApplicationError::Persistence(format!(
-            "failed to parse backup entry {entry_name}: {e}"
-        ))
+        ApplicationError::Persistence(format!("failed to parse backup entry {entry_name}: {e}"))
     })
 }
 
@@ -611,7 +620,9 @@ fn swap_storage_with_rollback(
                 let file_name = current_path
                     .file_name()
                     .ok_or_else(|| {
-                        ApplicationError::Persistence("sqlite path is missing a file name".to_string())
+                        ApplicationError::Persistence(
+                            "sqlite path is missing a file name".to_string(),
+                        )
                     })?
                     .to_os_string();
                 fs::rename(&current_path, rollback_dir.join(file_name)).map_err(|e| {
@@ -636,7 +647,9 @@ fn swap_storage_with_rollback(
                 let file_name = staged_path
                     .file_name()
                     .ok_or_else(|| {
-                        ApplicationError::Persistence("sqlite staging path is missing a file name".to_string())
+                        ApplicationError::Persistence(
+                            "sqlite staging path is missing a file name".to_string(),
+                        )
                     })?
                     .to_os_string();
                 fs::rename(&staged_path, data_dir.join(file_name)).map_err(|e| {
@@ -690,7 +703,9 @@ fn restore_storage_from_rollback(
             let file_name = rollback_path
                 .file_name()
                 .ok_or_else(|| {
-                    ApplicationError::Persistence("rollback sqlite path is missing a file name".to_string())
+                    ApplicationError::Persistence(
+                        "rollback sqlite path is missing a file name".to_string(),
+                    )
                 })?
                 .to_os_string();
             fs::rename(&rollback_path, data_dir.join(file_name)).map_err(|e| {
@@ -750,10 +765,7 @@ fn remove_path_if_exists(path: &Path) -> Result<(), ApplicationError> {
         })
     } else {
         fs::remove_file(path).map_err(|e| {
-            ApplicationError::Persistence(format!(
-                "failed to remove file {}: {e}",
-                path.display()
-            ))
+            ApplicationError::Persistence(format!("failed to remove file {}: {e}", path.display()))
         })
     }
 }
@@ -762,8 +774,8 @@ fn remove_path_if_exists(path: &Path) -> Result<(), ApplicationError> {
 mod tests {
     use super::{
         backup_audio_entry_name, prepare_import, restore_storage_from_rollback,
-        swap_storage_with_rollback, write_backup_zip, PortableBackupManifest,
-        PortableBackupRecord, BACKUP_FORMAT_VERSION,
+        swap_storage_with_rollback, write_backup_zip, PortableBackupManifest, PortableBackupRecord,
+        BACKUP_FORMAT_VERSION,
     };
     use chrono::Utc;
     use tempfile::tempdir;
@@ -824,9 +836,10 @@ mod tests {
         artifact.audio_duration_seconds = Some(12.5);
         artifact.audio_byte_size = Some(2048);
         artifact.parent_artifact_id = Some("parent-artifact".to_string());
-        artifact
-            .metadata
-            .insert("timeline_v2".to_string(), "{\"version\":2,\"segments\":[]}".to_string());
+        artifact.metadata.insert(
+            "timeline_v2".to_string(),
+            "{\"version\":2,\"segments\":[]}".to_string(),
+        );
         artifact.metadata.insert(
             "emotion_analysis_v1".to_string(),
             "{\"overview\":{\"primary_emotions\":[\"calm\"]}}".to_string(),

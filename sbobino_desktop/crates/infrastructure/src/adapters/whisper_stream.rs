@@ -62,16 +62,8 @@ impl WhisperStreamEngine {
     }
 
     fn find_saved_audio_path(session_dir: &Path) -> Option<PathBuf> {
-        const AUDIO_EXTENSIONS: [&str; 8] = [
-            "wav",
-            "m4a",
-            "mp3",
-            "ogg",
-            "opus",
-            "webm",
-            "flac",
-            "aac",
-        ];
+        const AUDIO_EXTENSIONS: [&str; 8] =
+            ["wav", "m4a", "mp3", "ogg", "opus", "webm", "flac", "aac"];
 
         let mut candidates = fs::read_dir(session_dir)
             .ok()?
@@ -196,51 +188,59 @@ impl WhisperStreamEngine {
             let mut pending = Vec::<u8>::new();
             let mut buffer = [0_u8; 2048];
 
-            let process_record = |raw_line: String,
-                                  shared_state: Arc<Mutex<StreamState>>,
-                                  emit_delta: Arc<dyn Fn(RealtimeDelta) + Send + Sync>| async move {
-                let is_preview = raw_line.contains("[2K]") || raw_line.contains("\u{001b}[2K");
-                let cleaned = Self::clean_line(&raw_line);
-                if cleaned.is_empty() {
-                    return;
-                }
-
-                if Self::should_skip_line(&cleaned) {
-                    if Self::should_store_diagnostic(&cleaned) {
-                        let mut state = shared_state.lock().await;
-                        state.diagnostics.push(cleaned);
-                        if state.lines.is_empty()
-                            && state.preview.trim().is_empty()
-                            && state.running
-                            && Self::is_fatal_startup_diagnostic(
-                                state.diagnostics.last().map(String::as_str).unwrap_or_default(),
-                            )
-                        {
-                            state.running = false;
-                            state.paused = false;
-                        }
+            let process_record =
+                |raw_line: String,
+                 shared_state: Arc<Mutex<StreamState>>,
+                 emit_delta: Arc<dyn Fn(RealtimeDelta) + Send + Sync>| async move {
+                    let is_preview = raw_line.contains("[2K]") || raw_line.contains("\u{001b}[2K");
+                    let cleaned = Self::clean_line(&raw_line);
+                    if cleaned.is_empty() {
+                        return;
                     }
-                    return;
-                }
 
-                let mut state = shared_state.lock().await;
-                if state.paused {
-                    return;
-                }
+                    if Self::should_skip_line(&cleaned) {
+                        if Self::should_store_diagnostic(&cleaned) {
+                            let mut state = shared_state.lock().await;
+                            state.diagnostics.push(cleaned);
+                            if state.lines.is_empty()
+                                && state.preview.trim().is_empty()
+                                && state.running
+                                && Self::is_fatal_startup_diagnostic(
+                                    state
+                                        .diagnostics
+                                        .last()
+                                        .map(String::as_str)
+                                        .unwrap_or_default(),
+                                )
+                            {
+                                state.running = false;
+                                state.paused = false;
+                            }
+                        }
+                        return;
+                    }
 
-                if is_preview {
-                    state.preview = cleaned.clone();
-                    emit_delta(RealtimeDelta {
-                        kind: RealtimeDeltaKind::UpdatePreview,
-                        text: cleaned,
-                    });
-                    return;
-                }
+                    let mut state = shared_state.lock().await;
+                    if state.paused {
+                        return;
+                    }
 
-                if let Some(kind) = Self::commit_line(&mut state, cleaned.clone()) {
-                    emit_delta(RealtimeDelta { kind, text: cleaned });
-                }
-            };
+                    if is_preview {
+                        state.preview = cleaned.clone();
+                        emit_delta(RealtimeDelta {
+                            kind: RealtimeDeltaKind::UpdatePreview,
+                            text: cleaned,
+                        });
+                        return;
+                    }
+
+                    if let Some(kind) = Self::commit_line(&mut state, cleaned.clone()) {
+                        emit_delta(RealtimeDelta {
+                            kind,
+                            text: cleaned,
+                        });
+                    }
+                };
 
             loop {
                 match reader.read(&mut buffer).await {
@@ -257,8 +257,10 @@ impl WhisperStreamEngine {
 
                             if index > record_start {
                                 let raw_line =
-                                    String::from_utf8_lossy(&pending[record_start..index]).to_string();
-                                process_record(raw_line, shared_state.clone(), emit_delta.clone()).await;
+                                    String::from_utf8_lossy(&pending[record_start..index])
+                                        .to_string();
+                                process_record(raw_line, shared_state.clone(), emit_delta.clone())
+                                    .await;
                             }
 
                             record_start = index + 1;
@@ -357,7 +359,11 @@ impl WhisperStreamEngine {
         state.session_dir = Some(session_dir);
         drop(state);
 
-        let reader_tasks = vec![Self::spawn_reader_task(self.state.clone(), stdout, emit_delta)];
+        let reader_tasks = vec![Self::spawn_reader_task(
+            self.state.clone(),
+            stdout,
+            emit_delta,
+        )];
 
         let mut state = self.state.lock().await;
         state.reader_tasks = reader_tasks;
@@ -401,14 +407,20 @@ impl WhisperStreamEngine {
                     .status();
             }
 
-            if timeout(Duration::from_millis(900), child.wait()).await.is_err() {
+            if timeout(Duration::from_millis(900), child.wait())
+                .await
+                .is_err()
+            {
                 if let Some(pid) = child.id() {
                     let _ = std::process::Command::new("kill")
                         .arg("-TERM")
                         .arg(pid.to_string())
                         .status();
                 }
-                if timeout(Duration::from_millis(500), child.wait()).await.is_err() {
+                if timeout(Duration::from_millis(500), child.wait())
+                    .await
+                    .is_err()
+                {
                     let _ = child.start_kill();
                     let _ = child.wait().await;
                 }
@@ -416,7 +428,10 @@ impl WhisperStreamEngine {
         }
 
         for mut task in reader_tasks {
-            if timeout(Duration::from_millis(200), &mut task).await.is_err() {
+            if timeout(Duration::from_millis(200), &mut task)
+                .await
+                .is_err()
+            {
                 task.abort();
             }
         }
@@ -430,9 +445,7 @@ impl WhisperStreamEngine {
 
         let session_dir = state.session_dir.take();
         let consolidated = state.lines.join("\n");
-        let saved_audio_path = session_dir
-            .as_deref()
-            .and_then(Self::find_saved_audio_path);
+        let saved_audio_path = session_dir.as_deref().and_then(Self::find_saved_audio_path);
 
         Ok(WhisperStreamStopResult {
             transcript: consolidated,

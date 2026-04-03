@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use sbobino_domain::{ArtifactKind, ArtifactSourceOrigin, LanguageCode, SpeechModel, TranscriptionEngine, WhisperOptions};
+use sbobino_domain::{
+    ArtifactKind, ArtifactSourceOrigin, LanguageCode, SpeechModel, TranscriptionEngine,
+    WhisperOptions,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunTranscriptionRequest {

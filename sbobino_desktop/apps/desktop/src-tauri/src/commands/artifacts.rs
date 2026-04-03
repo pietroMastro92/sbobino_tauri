@@ -1641,9 +1641,12 @@ pub async fn write_trimmed_audio(
             .map_err(CommandError::from)?
             .ok_or_else(|| CommandError::new("trim", "artifact audio is not available"))?;
         let temp_input = temp_dir.join(format!("sbobino_trim_source_{artifact_id}.wav"));
-        tokio::fs::write(&temp_input, bytes)
-            .await
-            .map_err(|e| CommandError::new("trim", format!("failed to write temporary trim source: {e}")))?;
+        tokio::fs::write(&temp_input, bytes).await.map_err(|e| {
+            CommandError::new(
+                "trim",
+                format!("failed to write temporary trim source: {e}"),
+            )
+        })?;
         temp_input
     } else {
         let Some(input_path) = payload.input_path.as_deref() else {

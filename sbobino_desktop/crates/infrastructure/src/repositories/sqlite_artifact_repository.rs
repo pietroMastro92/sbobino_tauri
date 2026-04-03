@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
-use rusqlite::{params, params_from_iter, types::Value, Connection, OptionalExtension, Row, Transaction};
+use rusqlite::{
+    params, params_from_iter, types::Value, Connection, OptionalExtension, Row, Transaction,
+};
 use sha2::{Digest, Sha256};
 
 use sbobino_application::{ApplicationError, ArtifactRepository};
@@ -214,7 +216,9 @@ impl SqliteArtifactRepository {
             PRAGMA secure_delete = ON;
             "#,
         )
-        .map_err(|e| ApplicationError::Persistence(format!("failed to configure sqlite pragmas: {e}")))?;
+        .map_err(|e| {
+            ApplicationError::Persistence(format!("failed to configure sqlite pragmas: {e}"))
+        })?;
         Ok(conn)
     }
 
@@ -225,7 +229,9 @@ impl SqliteArtifactRepository {
         let exists = stmt
             .query_row([], |row| row.get::<_, String>(0))
             .optional()
-            .map_err(|e| ApplicationError::Persistence(format!("failed to inspect sqlite schema: {e}")))?
+            .map_err(|e| {
+                ApplicationError::Persistence(format!("failed to inspect sqlite schema: {e}"))
+            })?
             .is_some();
         if !exists {
             return Ok(false);
@@ -238,12 +244,16 @@ impl SqliteArtifactRepository {
     fn legacy_columns(&self, conn: &Connection) -> Result<Vec<String>, ApplicationError> {
         let mut pragma = conn
             .prepare("PRAGMA table_info(transcript_artifacts)")
-            .map_err(|e| ApplicationError::Persistence(format!("failed to prepare table_info pragma: {e}")))?;
+            .map_err(|e| {
+                ApplicationError::Persistence(format!("failed to prepare table_info pragma: {e}"))
+            })?;
         let columns = pragma
             .query_map([], |row| row.get::<_, String>(1))
             .map_err(|e| ApplicationError::Persistence(format!("failed to query table_info: {e}")))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| ApplicationError::Persistence(format!("failed to parse table_info: {e}")))?;
+            .map_err(|e| {
+                ApplicationError::Persistence(format!("failed to parse table_info: {e}"))
+            })?;
         Ok(columns)
     }
 
@@ -268,7 +278,11 @@ impl SqliteArtifactRepository {
                        {}
                 FROM transcript_artifacts
             "#,
-            if has_column("title") { "COALESCE(title, '')" } else { "''" },
+            if has_column("title") {
+                "COALESCE(title, '')"
+            } else {
+                "''"
+            },
             if has_column("kind") {
                 "COALESCE(kind, 'file')"
             } else {
@@ -279,7 +293,11 @@ impl SqliteArtifactRepository {
             } else {
                 "created_at"
             },
-            if has_column("is_deleted") { "COALESCE(is_deleted, 0)" } else { "0" },
+            if has_column("is_deleted") {
+                "COALESCE(is_deleted, 0)"
+            } else {
+                "0"
+            },
             if has_column("deleted_at") {
                 "deleted_at"
             } else {
@@ -287,9 +305,11 @@ impl SqliteArtifactRepository {
             }
         );
         let legacy = {
-            let mut stmt = conn
-                .prepare(&legacy_query)
-                .map_err(|e| ApplicationError::Persistence(format!("failed to prepare legacy migration query: {e}")))?;
+            let mut stmt = conn.prepare(&legacy_query).map_err(|e| {
+                ApplicationError::Persistence(format!(
+                    "failed to prepare legacy migration query: {e}"
+                ))
+            })?;
 
             let rows = stmt
                 .query_map([], |row| {
@@ -315,22 +335,28 @@ impl SqliteArtifactRepository {
                         deleted_at: row.get(13)?,
                     })
                 })
-                .map_err(|e| ApplicationError::Persistence(format!("failed to read legacy artifacts: {e}")))?;
+                .map_err(|e| {
+                    ApplicationError::Persistence(format!("failed to read legacy artifacts: {e}"))
+                })?;
 
-            rows
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| ApplicationError::Persistence(format!("failed to collect legacy artifacts: {e}")))?
+            rows.collect::<Result<Vec<_>, _>>().map_err(|e| {
+                ApplicationError::Persistence(format!("failed to collect legacy artifacts: {e}"))
+            })?
         };
 
         let tx = conn.transaction().map_err(|e| {
-            ApplicationError::Persistence(format!("failed to start legacy migration transaction: {e}"))
+            ApplicationError::Persistence(format!(
+                "failed to start legacy migration transaction: {e}"
+            ))
         })?;
         tx.execute_batch(
             r#"
             ALTER TABLE transcript_artifacts RENAME TO transcript_artifacts_legacy_backup;
             "#,
         )
-        .map_err(|e| ApplicationError::Persistence(format!("failed to rename legacy artifacts table: {e}")))?;
+        .map_err(|e| {
+            ApplicationError::Persistence(format!("failed to rename legacy artifacts table: {e}"))
+        })?;
 
         tx.execute_batch(
             r#"
@@ -390,7 +416,9 @@ impl SqliteArtifactRepository {
             );
             "#,
         )
-        .map_err(|e| ApplicationError::Persistence(format!("failed to create migrated schema: {e}")))?;
+        .map_err(|e| {
+            ApplicationError::Persistence(format!("failed to create migrated schema: {e}"))
+        })?;
 
         for legacy_artifact in legacy {
             let mut metadata: BTreeMap<String, String> =
@@ -420,7 +448,9 @@ impl SqliteArtifactRepository {
                 legacy_artifact.faqs.clone(),
                 BTreeMap::new(),
             )
-            .map_err(|e| ApplicationError::Persistence(format!("failed to rebuild legacy artifact: {e}")))?;
+            .map_err(|e| {
+                ApplicationError::Persistence(format!("failed to rebuild legacy artifact: {e}"))
+            })?;
             artifact.id = legacy_artifact.id.clone();
             artifact.created_at = chrono::DateTime::parse_from_rfc3339(&legacy_artifact.created_at)
                 .map(|dt| dt.with_timezone(&Utc))
@@ -450,13 +480,23 @@ impl SqliteArtifactRepository {
                     byte_size: None,
                 }
             };
-            self.insert_artifact_tx(&tx, &artifact, &audio, legacy_artifact.is_deleted, legacy_artifact.deleted_at.as_deref())?;
+            self.insert_artifact_tx(
+                &tx,
+                &artifact,
+                &audio,
+                legacy_artifact.is_deleted,
+                legacy_artifact.deleted_at.as_deref(),
+            )?;
         }
 
         tx.execute_batch("DROP TABLE transcript_artifacts_legacy_backup;")
-            .map_err(|e| ApplicationError::Persistence(format!("failed to drop legacy backup table: {e}")))?;
+            .map_err(|e| {
+                ApplicationError::Persistence(format!("failed to drop legacy backup table: {e}"))
+            })?;
         tx.commit().map_err(|e| {
-            ApplicationError::Persistence(format!("failed to commit legacy migration transaction: {e}"))
+            ApplicationError::Persistence(format!(
+                "failed to commit legacy migration transaction: {e}"
+            ))
         })?;
         Ok(())
     }
@@ -465,17 +505,28 @@ impl SqliteArtifactRepository {
         format!("artifact:{artifact_id}:{field}")
     }
 
-    fn encrypt_text(&self, artifact_id: &str, field: &str, value: &str) -> Result<Vec<u8>, ApplicationError> {
+    fn encrypt_text(
+        &self,
+        artifact_id: &str,
+        field: &str,
+        value: &str,
+    ) -> Result<Vec<u8>, ApplicationError> {
         self.secure_storage
             .encrypt_bytes(&Self::encrypted_label(artifact_id, field), value.as_bytes())
     }
 
-    fn decrypt_text(&self, artifact_id: &str, field: &str, value: &[u8]) -> Result<String, ApplicationError> {
+    fn decrypt_text(
+        &self,
+        artifact_id: &str,
+        field: &str,
+        value: &[u8],
+    ) -> Result<String, ApplicationError> {
         let bytes = self
             .secure_storage
             .decrypt_bytes(&Self::encrypted_label(artifact_id, field), value)?;
-        String::from_utf8(bytes)
-            .map_err(|e| ApplicationError::Persistence(format!("failed to decode decrypted UTF-8 text: {e}")))
+        String::from_utf8(bytes).map_err(|e| {
+            ApplicationError::Persistence(format!("failed to decode decrypted UTF-8 text: {e}"))
+        })
     }
 
     fn import_audio_file(
@@ -586,10 +637,9 @@ impl SqliteArtifactRepository {
         is_deleted: bool,
         deleted_at: Option<&str>,
     ) -> Result<(), ApplicationError> {
-        let metadata_json =
-            serde_json::to_string(&artifact.metadata).map_err(|e| {
-                ApplicationError::Persistence(format!("failed to serialize metadata JSON: {e}"))
-            })?;
+        let metadata_json = serde_json::to_string(&artifact.metadata).map_err(|e| {
+            ApplicationError::Persistence(format!("failed to serialize metadata JSON: {e}"))
+        })?;
         let metadata_json_enc = self.encrypt_text(&artifact.id, "metadata_json", &metadata_json)?;
         let title_enc = self.encrypt_text(&artifact.id, "title", &artifact.title)?;
         let source_label_enc =
@@ -673,7 +723,9 @@ impl SqliteArtifactRepository {
                 artifact.parent_artifact_id,
             ],
         )
-        .map_err(|e| ApplicationError::Persistence(format!("failed to insert processing row: {e}")))?;
+        .map_err(|e| {
+            ApplicationError::Persistence(format!("failed to insert processing row: {e}"))
+        })?;
 
         let timeline_v2_json_enc = artifact
             .metadata
@@ -695,10 +747,14 @@ impl SqliteArtifactRepository {
                 artifact.id,
                 timeline_v2_json_enc,
                 emotion_analysis_json_enc,
-                artifact.metadata.get(EMOTION_ANALYSIS_GENERATED_AT_METADATA_KEY),
+                artifact
+                    .metadata
+                    .get(EMOTION_ANALYSIS_GENERATED_AT_METADATA_KEY),
             ],
         )
-        .map_err(|e| ApplicationError::Persistence(format!("failed to insert analysis row: {e}")))?;
+        .map_err(|e| {
+            ApplicationError::Persistence(format!("failed to insert analysis row: {e}"))
+        })?;
 
         tx.execute(
             r#"
@@ -728,9 +784,13 @@ impl SqliteArtifactRepository {
     fn row_to_artifact(&self, row: &ArtifactRow) -> Result<TranscriptArtifact, ApplicationError> {
         let title = self.decrypt_text(&row.id, "title", &row.title_enc)?;
         let source_label = self.decrypt_text(&row.id, "source_label", &row.source_label_enc)?;
-        let raw_transcript = self.decrypt_text(&row.id, "raw_transcript", &row.raw_transcript_enc)?;
-        let optimized_transcript =
-            self.decrypt_text(&row.id, "optimized_transcript", &row.optimized_transcript_enc)?;
+        let raw_transcript =
+            self.decrypt_text(&row.id, "raw_transcript", &row.raw_transcript_enc)?;
+        let optimized_transcript = self.decrypt_text(
+            &row.id,
+            "optimized_transcript",
+            &row.optimized_transcript_enc,
+        )?;
         let summary = self.decrypt_text(&row.id, "summary", &row.summary_enc)?;
         let faqs = self.decrypt_text(&row.id, "faqs", &row.faqs_enc)?;
         let metadata_json = self.decrypt_text(&row.id, "metadata_json", &row.metadata_json_enc)?;
@@ -861,16 +921,20 @@ impl SqliteArtifactRepository {
         }
         sql.push_str(" ORDER BY COALESCE(a.deleted_at, a.created_at) DESC, a.updated_at DESC");
 
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| ApplicationError::Persistence(format!("failed to prepare artifact query: {e}")))?;
+        let mut stmt = conn.prepare(&sql).map_err(|e| {
+            ApplicationError::Persistence(format!("failed to prepare artifact query: {e}"))
+        })?;
         let rows = stmt
             .query_map(params_from_iter(params_values.iter()), Self::row_from_query)
-            .map_err(|e| ApplicationError::Persistence(format!("failed to query artifacts: {e}")))?;
+            .map_err(|e| {
+                ApplicationError::Persistence(format!("failed to query artifacts: {e}"))
+            })?;
 
         rows.map(|row| {
-            row.map_err(|e| ApplicationError::Persistence(format!("failed to parse artifact row: {e}")))
-                .and_then(|parsed| self.row_to_artifact(&parsed))
+            row.map_err(|e| {
+                ApplicationError::Persistence(format!("failed to parse artifact row: {e}"))
+            })
+            .and_then(|parsed| self.row_to_artifact(&parsed))
         })
         .collect()
     }
@@ -909,7 +973,12 @@ impl SqliteArtifactRepository {
         })
     }
 
-    fn load_one(&self, conn: &Connection, id: &str, is_deleted: bool) -> Result<Option<TranscriptArtifact>, ApplicationError> {
+    fn load_one(
+        &self,
+        conn: &Connection,
+        id: &str,
+        is_deleted: bool,
+    ) -> Result<Option<TranscriptArtifact>, ApplicationError> {
         let artifacts = self.fetch_artifacts(conn, is_deleted, None)?;
         Ok(artifacts.into_iter().find(|artifact| artifact.id == id))
     }
@@ -924,9 +993,7 @@ impl SqliteArtifactRepository {
     ) -> Result<(), ApplicationError> {
         let mut conn = self.open_connection()?;
         let tx = conn.transaction().map_err(|e| {
-            ApplicationError::Persistence(format!(
-                "failed to start backup import transaction: {e}"
-            ))
+            ApplicationError::Persistence(format!("failed to start backup import transaction: {e}"))
         })?;
 
         let audio = match audio_bytes {
@@ -949,9 +1016,7 @@ impl SqliteArtifactRepository {
 
         self.insert_artifact_tx(&tx, artifact, &audio, is_deleted, deleted_at)?;
         tx.commit().map_err(|e| {
-            ApplicationError::Persistence(format!(
-                "failed to commit backup artifact import: {e}"
-            ))
+            ApplicationError::Persistence(format!("failed to commit backup artifact import: {e}"))
         })?;
         Ok(())
     }
@@ -970,7 +1035,9 @@ impl ArtifactRepository for SqliteArtifactRepository {
             })?;
 
             let audio = match artifact.source_external_path.as_deref() {
-                Some(path) if Path::new(path).exists() => repo.import_audio_file(&artifact.id, Path::new(path), false)?,
+                Some(path) if Path::new(path).exists() => {
+                    repo.import_audio_file(&artifact.id, Path::new(path), false)?
+                }
                 Some(_) => AudioImportResult {
                     available: false,
                     backfill_status: ArtifactAudioBackfillStatus::Missing,
@@ -1017,7 +1084,9 @@ impl ArtifactRepository for SqliteArtifactRepository {
         offset: usize,
     ) -> Result<Vec<TranscriptArtifact>, ApplicationError> {
         let repo = self.clone();
-        let query = query.map(|value| value.trim().to_ascii_lowercase()).filter(|value| !value.is_empty());
+        let query = query
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| !value.is_empty());
         tokio::task::spawn_blocking(move || {
             let conn = repo.open_connection()?;
             let mut artifacts = repo.fetch_artifacts(&conn, false, kind)?;
@@ -1025,8 +1094,14 @@ impl ArtifactRepository for SqliteArtifactRepository {
                 artifacts.retain(|artifact| {
                     artifact.title.to_ascii_lowercase().contains(&query)
                         || artifact.source_label.to_ascii_lowercase().contains(&query)
-                        || artifact.raw_transcript.to_ascii_lowercase().contains(&query)
-                        || artifact.optimized_transcript.to_ascii_lowercase().contains(&query)
+                        || artifact
+                            .raw_transcript
+                            .to_ascii_lowercase()
+                            .contains(&query)
+                        || artifact
+                            .optimized_transcript
+                            .to_ascii_lowercase()
+                            .contains(&query)
                 });
             }
             Ok(artifacts.into_iter().skip(offset).take(limit).collect())
@@ -1069,17 +1144,23 @@ impl ArtifactRepository for SqliteArtifactRepository {
             if optimized_transcript.trim().is_empty() {
                 metadata.remove(HAS_OPTIMIZED_TRANSCRIPT_METADATA_KEY);
             } else {
-                metadata.insert(HAS_OPTIMIZED_TRANSCRIPT_METADATA_KEY.to_string(), "true".to_string());
+                metadata.insert(
+                    HAS_OPTIMIZED_TRANSCRIPT_METADATA_KEY.to_string(),
+                    "true".to_string(),
+                );
             }
             let metadata_json = serde_json::to_string(&metadata).map_err(|e| {
                 ApplicationError::Persistence(format!("failed to serialize metadata: {e}"))
             })?;
 
             let tx = conn.transaction().map_err(|e| {
-                ApplicationError::Persistence(format!("failed to start content update transaction: {e}"))
+                ApplicationError::Persistence(format!(
+                    "failed to start content update transaction: {e}"
+                ))
             })?;
-            let changed = tx.execute(
-                r#"
+            let changed = tx
+                .execute(
+                    r#"
                 UPDATE transcript_artifacts
                 SET optimized_transcript_enc = ?2,
                     summary_enc = ?3,
@@ -1089,17 +1170,23 @@ impl ArtifactRepository for SqliteArtifactRepository {
                     revision = revision + 1
                 WHERE id = ?1 AND is_deleted = 0 AND revision = ?7
                 "#,
-                params![
-                    id,
-                    repo.encrypt_text(&current.id, "optimized_transcript", &optimized_transcript)?,
-                    repo.encrypt_text(&current.id, "summary", &summary)?,
-                    repo.encrypt_text(&current.id, "faqs", &faqs)?,
-                    repo.encrypt_text(&current.id, "metadata_json", &metadata_json)?,
-                    Utc::now().to_rfc3339(),
-                    current.revision,
-                ],
-            )
-            .map_err(|e| ApplicationError::Persistence(format!("failed to update artifact content: {e}")))?;
+                    params![
+                        id,
+                        repo.encrypt_text(
+                            &current.id,
+                            "optimized_transcript",
+                            &optimized_transcript
+                        )?,
+                        repo.encrypt_text(&current.id, "summary", &summary)?,
+                        repo.encrypt_text(&current.id, "faqs", &faqs)?,
+                        repo.encrypt_text(&current.id, "metadata_json", &metadata_json)?,
+                        Utc::now().to_rfc3339(),
+                        current.revision,
+                    ],
+                )
+                .map_err(|e| {
+                    ApplicationError::Persistence(format!("failed to update artifact content: {e}"))
+                })?;
 
             if changed == 0 {
                 return Err(ApplicationError::Persistence(
@@ -1107,7 +1194,9 @@ impl ArtifactRepository for SqliteArtifactRepository {
                 ));
             }
             tx.commit().map_err(|e| {
-                ApplicationError::Persistence(format!("failed to commit content update transaction: {e}"))
+                ApplicationError::Persistence(format!(
+                    "failed to commit content update transaction: {e}"
+                ))
             })?;
 
             repo.load_one(&repo.open_connection()?, &id, false)
@@ -1217,26 +1306,32 @@ impl ArtifactRepository for SqliteArtifactRepository {
             let Some(current) = repo.load_one(&conn, &id, false)? else {
                 return Ok(None);
             };
-            let changed = conn.execute(
-                r#"
+            let changed = conn
+                .execute(
+                    r#"
                 UPDATE transcript_artifacts
                 SET title_enc = ?2, updated_at = ?3, revision = revision + 1
                 WHERE id = ?1 AND is_deleted = 0 AND revision = ?4
                 "#,
-                params![
-                    id,
-                    repo.encrypt_text(&current.id, "title", &new_title)?,
-                    Utc::now().to_rfc3339(),
-                    current.revision,
-                ],
-            ).map_err(|e| ApplicationError::Persistence(format!("failed to rename artifact: {e}")))?;
+                    params![
+                        id,
+                        repo.encrypt_text(&current.id, "title", &new_title)?,
+                        Utc::now().to_rfc3339(),
+                        current.revision,
+                    ],
+                )
+                .map_err(|e| {
+                    ApplicationError::Persistence(format!("failed to rename artifact: {e}"))
+                })?;
             if changed == 0 {
                 return Err(ApplicationError::Persistence(
                     "artifact rename rejected because a newer revision already exists".to_string(),
                 ));
             }
             repo.load_one(&repo.open_connection()?, &id, false)
-        }).await.map_err(|e| ApplicationError::Persistence(format!("storage task join error: {e}")))?
+        })
+        .await
+        .map_err(|e| ApplicationError::Persistence(format!("storage task join error: {e}")))?
     }
 
     async fn list_deleted(
@@ -1247,7 +1342,9 @@ impl ArtifactRepository for SqliteArtifactRepository {
         offset: usize,
     ) -> Result<Vec<TranscriptArtifact>, ApplicationError> {
         let repo = self.clone();
-        let query = query.map(|value| value.trim().to_ascii_lowercase()).filter(|value| !value.is_empty());
+        let query = query
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| !value.is_empty());
         tokio::task::spawn_blocking(move || {
             let conn = repo.open_connection()?;
             let mut artifacts = repo.fetch_artifacts(&conn, true, kind)?;
@@ -1255,12 +1352,20 @@ impl ArtifactRepository for SqliteArtifactRepository {
                 artifacts.retain(|artifact| {
                     artifact.title.to_ascii_lowercase().contains(&query)
                         || artifact.source_label.to_ascii_lowercase().contains(&query)
-                        || artifact.raw_transcript.to_ascii_lowercase().contains(&query)
-                        || artifact.optimized_transcript.to_ascii_lowercase().contains(&query)
+                        || artifact
+                            .raw_transcript
+                            .to_ascii_lowercase()
+                            .contains(&query)
+                        || artifact
+                            .optimized_transcript
+                            .to_ascii_lowercase()
+                            .contains(&query)
                 });
             }
             Ok(artifacts.into_iter().skip(offset).take(limit).collect())
-        }).await.map_err(|e| ApplicationError::Persistence(format!("storage task join error: {e}")))?
+        })
+        .await
+        .map_err(|e| ApplicationError::Persistence(format!("storage task join error: {e}")))?
     }
 
     async fn restore_many(&self, ids: &[String]) -> Result<usize, ApplicationError> {
@@ -1291,11 +1396,17 @@ impl ArtifactRepository for SqliteArtifactRepository {
             }
             let conn = repo.open_connection()?;
             let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-            let query = format!("DELETE FROM transcript_artifacts WHERE id IN ({placeholders}) AND is_deleted = 1");
+            let query = format!(
+                "DELETE FROM transcript_artifacts WHERE id IN ({placeholders}) AND is_deleted = 1"
+            );
             let values: Vec<Value> = ids.into_iter().map(Value::Text).collect();
             conn.execute(&query, params_from_iter(values.iter()))
-                .map_err(|e| ApplicationError::Persistence(format!("failed to hard-delete artifacts: {e}")))
-        }).await.map_err(|e| ApplicationError::Persistence(format!("storage task join error: {e}")))?
+                .map_err(|e| {
+                    ApplicationError::Persistence(format!("failed to hard-delete artifacts: {e}"))
+                })
+        })
+        .await
+        .map_err(|e| ApplicationError::Persistence(format!("storage task join error: {e}")))?
     }
 
     async fn purge_deleted_older_than_days(&self, days: u32) -> Result<usize, ApplicationError> {
@@ -1333,20 +1444,31 @@ impl ArtifactRepository for SqliteArtifactRepository {
         let id = id.to_string();
         tokio::task::spawn_blocking(move || {
             let conn = repo.open_connection()?;
-            let rel_path: Option<String> = conn.query_row(
-                "SELECT encrypted_rel_path FROM artifact_audio WHERE artifact_id = ?1 LIMIT 1",
-                params![id],
-                |row| row.get(0),
-            ).optional().map_err(|e| {
-                ApplicationError::Persistence(format!("failed to query artifact audio path: {e}"))
-            })?;
+            let rel_path: Option<String> = conn
+                .query_row(
+                    "SELECT encrypted_rel_path FROM artifact_audio WHERE artifact_id = ?1 LIMIT 1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| {
+                    ApplicationError::Persistence(format!(
+                        "failed to query artifact audio path: {e}"
+                    ))
+                })?;
             let Some(rel_path) = rel_path else {
                 return Ok(None);
             };
             let full_path = repo.vault_root.join(rel_path);
-            let bytes = decrypt_from_file(&repo.secure_storage, &format!("audio-vault:{id}"), &full_path)?;
+            let bytes = decrypt_from_file(
+                &repo.secure_storage,
+                &format!("audio-vault:{id}"),
+                &full_path,
+            )?;
             Ok(Some(bytes))
-        }).await.map_err(|e| ApplicationError::Persistence(format!("storage task join error: {e}")))?
+        })
+        .await
+        .map_err(|e| ApplicationError::Persistence(format!("storage task join error: {e}")))?
     }
 }
 

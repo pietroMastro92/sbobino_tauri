@@ -219,7 +219,12 @@ pub async fn stop_realtime(
         .lock()
         .await
         .clone()
-        .or_else(|| payload.title.clone().filter(|title| !title.trim().is_empty()))
+        .or_else(|| {
+            payload
+                .title
+                .clone()
+                .filter(|title| !title.trim().is_empty())
+        })
         .unwrap_or_else(|| format!("live_{}", Utc::now().format("%d%m%Y_%H%M%S")));
 
     let language_code = state.realtime.language_code.lock().await.clone();
@@ -254,7 +259,11 @@ pub async fn stop_realtime(
     let source_label = stop_result
         .saved_audio_path
         .as_ref()
-        .and_then(|path| path.file_name().and_then(|name| name.to_str()).map(str::to_string))
+        .and_then(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_string)
+        })
         .unwrap_or_else(|| format!("{session_title}.wav"));
 
     let mut artifact = TranscriptArtifact::new(
