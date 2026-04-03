@@ -22,6 +22,46 @@ impl ArtifactKind {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactSourceOrigin {
+    #[default]
+    Imported,
+    Trimmed,
+    Realtime,
+    LegacyExternal,
+}
+
+impl ArtifactSourceOrigin {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Imported => "imported",
+            Self::Trimmed => "trimmed",
+            Self::Realtime => "realtime",
+            Self::LegacyExternal => "legacy_external",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactAudioBackfillStatus {
+    #[default]
+    Imported,
+    PendingBackfill,
+    Missing,
+}
+
+impl ArtifactAudioBackfillStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Imported => "imported",
+            Self::PendingBackfill => "pending_backfill",
+            Self::Missing => "missing",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct TimedWord {
     pub text: String,
@@ -178,14 +218,40 @@ pub struct TranscriptArtifact {
     pub job_id: String,
     pub title: String,
     pub kind: ArtifactKind,
-    pub input_path: String,
+    pub source_label: String,
+    pub source_origin: ArtifactSourceOrigin,
+    pub audio_available: bool,
+    pub audio_backfill_status: ArtifactAudioBackfillStatus,
+    pub revision: i64,
     pub raw_transcript: String,
     pub optimized_transcript: String,
     pub summary: String,
     pub faqs: String,
     pub metadata: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_artifact_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processing_engine: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processing_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processing_language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_duration_seconds: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_byte_size: Option<u64>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[serde(skip)]
+    pub source_external_path: Option<String>,
+    #[serde(skip)]
+    pub whisper_options_json: Option<String>,
+    #[serde(skip)]
+    pub diarization_settings_json: Option<String>,
+    #[serde(skip)]
+    pub ai_provider_snapshot_json: Option<String>,
+    #[serde(skip)]
+    pub source_fingerprint_json: Option<String>,
 }
 
 impl TranscriptArtifact {
@@ -194,7 +260,8 @@ impl TranscriptArtifact {
         job_id: impl Into<String>,
         title: impl Into<String>,
         kind: ArtifactKind,
-        input_path: impl Into<String>,
+        source_label: impl Into<String>,
+        source_origin: ArtifactSourceOrigin,
         raw_transcript: impl Into<String>,
         optimized_transcript: impl Into<String>,
         summary: impl Into<String>,
@@ -207,11 +274,11 @@ impl TranscriptArtifact {
         }
 
         let optimized_transcript = optimized_transcript.into();
-        let input_path = input_path.into();
         let now = Utc::now();
+        let source_label = source_label.into();
         let title = title.into();
         let title = if title.trim().is_empty() {
-            input_path.clone()
+            source_label.clone()
         } else {
             title
         };
@@ -221,7 +288,11 @@ impl TranscriptArtifact {
             job_id: job_id.into(),
             title,
             kind,
-            input_path,
+            source_label,
+            source_origin,
+            audio_available: false,
+            audio_backfill_status: ArtifactAudioBackfillStatus::default(),
+            revision: 0,
             raw_transcript,
             optimized_transcript: if optimized_transcript.trim().is_empty() {
                 String::new()
@@ -231,12 +302,27 @@ impl TranscriptArtifact {
             summary: summary.into(),
             faqs: faqs.into(),
             metadata,
+            parent_artifact_id: None,
+            processing_engine: None,
+            processing_model: None,
+            processing_language: None,
+            audio_duration_seconds: None,
+            audio_byte_size: None,
             created_at: now,
             updated_at: now,
+            source_external_path: None,
+            whisper_options_json: None,
+            diarization_settings_json: None,
+            ai_provider_snapshot_json: None,
+            source_fingerprint_json: None,
         })
     }
 
     pub fn touch(&mut self) {
         self.updated_at = Utc::now();
+    }
+
+    pub fn set_source_external_path(&mut self, path: impl Into<String>) {
+        self.source_external_path = Some(path.into());
     }
 }

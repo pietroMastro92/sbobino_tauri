@@ -4,8 +4,13 @@ use sbobino_application::SettingsRepository;
 use sbobino_domain::{LanguageCode, SpeechModel};
 use sbobino_infrastructure::repositories::fs_settings_repository::FsSettingsRepository;
 
+fn enable_local_secure_storage_for_tests() {
+    std::env::set_var("SBOBINO_ALLOW_INSECURE_LOCAL_SECRETS", "1");
+}
+
 #[tokio::test]
 async fn load_creates_default_settings_when_file_is_missing() {
+    enable_local_secure_storage_for_tests();
     let temp = tempdir().expect("failed to create temp dir");
     let settings_path = temp.path().join("config").join("settings.json");
     let repo = FsSettingsRepository::new(settings_path.clone());
@@ -20,6 +25,7 @@ async fn load_creates_default_settings_when_file_is_missing() {
 
 #[tokio::test]
 async fn save_then_load_round_trips_settings() {
+    enable_local_secure_storage_for_tests();
     let temp = tempdir().expect("failed to create temp dir");
     let settings_path = temp.path().join("settings.json");
     let repo = FsSettingsRepository::new(settings_path);
@@ -41,6 +47,7 @@ async fn save_then_load_round_trips_settings() {
 
 #[tokio::test]
 async fn save_then_load_preserves_structured_transcription_settings() {
+    enable_local_secure_storage_for_tests();
     let temp = tempdir().expect("failed to create temp dir");
     let settings_path = temp.path().join("settings.json");
     let repo = FsSettingsRepository::new(settings_path);

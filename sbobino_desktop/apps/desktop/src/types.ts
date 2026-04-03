@@ -14,6 +14,8 @@ export type AppLanguage = "en" | "it" | "es" | "de";
 export type SpeechModel = "tiny" | "base" | "small" | "medium" | "large_turbo";
 export type TranscriptionEngine = "whisper_cpp" | "whisper_kit";
 export type ArtifactKind = "file" | "realtime";
+export type ArtifactSourceOrigin = "imported" | "trimmed" | "realtime" | "legacy_external";
+export type ArtifactAudioBackfillStatus = "imported" | "pending_backfill" | "missing";
 export type AppearanceMode = "system" | "light" | "dark";
 
 export type AiProvider = "none" | "foundation_apple" | "gemini";
@@ -106,6 +108,7 @@ export type FoundationProviderSettings = {
 
 export type GeminiProviderSettings = {
   api_key: string | null;
+  has_api_key: boolean;
   model: string;
 };
 
@@ -133,6 +136,7 @@ export type RemoteServiceConfig = {
   label: string;
   enabled: boolean;
   api_key: string | null;
+  has_api_key: boolean;
   model: string | null;
   base_url: string | null;
 };
@@ -167,6 +171,7 @@ export type AppSettings = {
   ai_post_processing: boolean;
   gemini_model: string;
   gemini_api_key: string | null;
+  gemini_api_key_present: boolean;
   whisper_cli_path: string;
   whisperkit_cli_path: string;
   ffmpeg_path: string;
@@ -214,14 +219,38 @@ export type TranscriptArtifact = {
   job_id: string;
   title: string;
   kind: ArtifactKind;
-  input_path: string;
+  source_label: string;
+  source_origin: ArtifactSourceOrigin;
+  audio_available: boolean;
+  audio_backfill_status: ArtifactAudioBackfillStatus;
+  revision: number;
   raw_transcript: string;
   optimized_transcript: string;
   summary: string;
   faqs: string;
   metadata: Record<string, string>;
+  parent_artifact_id?: string | null;
+  processing_engine?: string | null;
+  processing_model?: string | null;
+  processing_language?: string | null;
+  audio_duration_seconds?: number | null;
+  audio_byte_size?: number | null;
   created_at: string;
   updated_at: string;
+};
+
+export type ExportAppBackupResponse = {
+  path: string;
+  artifact_count: number;
+  deleted_artifact_count: number;
+  audio_file_count: number;
+  exported_at: string;
+};
+
+export type ImportAppBackupResponse = {
+  artifact_count: number;
+  deleted_artifact_count: number;
+  imported_at: string;
 };
 
 export type ArtifactAiContextOptions = {
@@ -338,6 +367,7 @@ export type TimelineV2 = {
 
 export type StartTranscriptionPayload = {
   input_path: string;
+  engine: TranscriptionEngine;
   language: LanguageCode;
   model: SpeechModel;
   enable_ai: boolean;

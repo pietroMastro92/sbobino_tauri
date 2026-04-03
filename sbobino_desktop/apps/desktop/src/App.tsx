@@ -63,6 +63,7 @@ import {
   deleteArtifacts,
   emptyDeletedArtifacts,
   ensureTranscriptionRuntime,
+  exportAppBackup,
   exportArtifact,
   fetchAiCapabilityStatus,
   fetchTranscriptionStartPreflight,
@@ -70,6 +71,7 @@ import {
   fetchSettingsSnapshot,
   getArtifact,
   hardDeleteArtifacts,
+  importAppBackup,
   listDeletedArtifacts,
   listGeminiModels,
   listRecentArtifacts,
@@ -327,6 +329,7 @@ type PreparedImportTrimDraft = TrimmedAudioValidationSnapshot & {
 
 type ActiveDetailContext = {
   title: string;
+  artifactAudioId: string | null;
   inputPath: string | null;
   sourceArtifact: TranscriptArtifact | null;
   trimmedAudioDraft: TrimmedAudioDraft | null;
@@ -730,6 +733,7 @@ function buildLiveSessionTitle(timestamp = new Date()): string {
 }
 
 function buildActiveDetailContext(params: {
+  artifactAudioId?: string | null;
   inputPath: string | null;
   requestedTitle?: string;
   sourceArtifact?: TranscriptArtifact | null;
@@ -737,6 +741,7 @@ function buildActiveDetailContext(params: {
   restoreArtifactOnFailure?: boolean;
 }): ActiveDetailContext {
   const {
+    artifactAudioId = null,
     inputPath,
     requestedTitle,
     sourceArtifact = null,
@@ -747,10 +752,12 @@ function buildActiveDetailContext(params: {
     requestedTitle?.trim()
     || trimmedAudioDraft?.title
     || sourceArtifact?.title
+    || sourceArtifact?.source_label
     || (inputPath ? fileLabel(inputPath) : t("detail.transcribing", "Transcribing"));
 
   return {
     title,
+    artifactAudioId,
     inputPath,
     sourceArtifact,
     trimmedAudioDraft,
@@ -1479,10 +1486,14 @@ function normalizeSettings(settings: AppSettings): AppSettings {
         },
         gemini: {
           ...settings.ai.providers.gemini,
+          has_api_key:
+            settings.ai.providers.gemini.has_api_key
+            || Boolean(settings.ai.providers.gemini.api_key?.trim()),
         },
       },
       remote_services: (settings.ai.remote_services ?? []).map((service) => ({
         ...service,
+        has_api_key: service.has_api_key || Boolean(service.api_key?.trim()),
         label: formatRemoteServiceLabel(service, settings),
       })),
     },
@@ -1509,6 +1520,7 @@ function normalizeSettings(settings: AppSettings): AppSettings {
 
   normalized.gemini_model = normalized.ai.providers.gemini.model;
   normalized.gemini_api_key = normalized.ai.providers.gemini.api_key;
+  normalized.gemini_api_key_present = normalized.ai.providers.gemini.has_api_key;
 
   return normalized;
 }
@@ -2031,6 +2043,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
   const [isStarting, setIsStarting] = useState(false);
   const [isSavingArtifact, setIsSavingArtifact] = useState(false);
+  const [isRunningBackupAction, setIsRunningBackupAction] = useState(false);
 
   const [openArtifacts, setOpenArtifacts] = useState<TranscriptArtifact[]>([]);
   const [activeArtifactId, setActiveArtifactId] = useState<string | null>(null);
@@ -2159,6 +2172,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   const [geminiModelChoices, setGeminiModelChoices] = useState<string[]>(fallbackGeminiModelOptions);
   const [loadingGeminiModels, setLoadingGeminiModels] = useState(false);
   const [geminiModelFetchNonce, setGeminiModelFetchNonce] = useState(0);
+  const [geminiApiKeyDraft, setGeminiApiKeyDraft] = useState("");
+  const [remoteServiceApiKeyDrafts, setRemoteServiceApiKeyDrafts] = useState<Record<string, string>>({});
 
   const [activePromptId, setActivePromptId] = useState("");
   const [promptDraft, setPromptDraft] = useState<PromptTemplate | null>(null);
@@ -2340,6 +2355,42 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   useEffect(() => {
     focusedJobIdRef.current = focusedJobId;
   }, [focusedJobId]);
+
+  useEffect(() => {
+    if (!settings) {
+      return;
+    }
+
+    if (settings.ai.providers.gemini.has_api_key && !settings.ai.providers.gemini.api_key) {
+      setGeminiApiKeyDraft("");
+    }
+
+    setRemoteServiceApiKeyDrafts((previous) => {
+      let changed = false;
+      const next: Record<string, string> = {};
+
+      for (const service of settings.ai.remote_services ?? []) {
+        const existing = previous[service.id] ?? "";
+        if (service.has_api_key && !service.api_key) {
+          if (existing !== "") {
+            changed = true;
+          }
+          next[service.id] = "";
+        } else {
+          next[service.id] = existing;
+        }
+      }
+
+      if (!changed && Object.keys(previous).length === Object.keys(next).length) {
+        const sameKeys = Object.keys(next).every((key) => previous[key] === next[key]);
+        if (sameKeys) {
+          return previous;
+        }
+      }
+
+      return next;
+    });
+  }, [settings]);
 
   useEffect(() => {
     const surfaces = [mainAreaRef.current, leftSidebarRef.current].filter(
@@ -2650,7 +2701,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       }));
       return;
     }
-    if (hasGoogleService && settings.ai.providers.gemini.api_key?.trim()) {
+    if (hasGoogleService && settings.ai.providers.gemini.has_api_key) {
       const googleServiceId =
         settings.ai.remote_services.find((service) => service.kind === "google")?.id ?? null;
       void patchAiSettings((current) => ({
@@ -2664,7 +2715,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     settings?.ai.active_provider,
     settings?.ai.remote_services,
     settings?.ai.providers.foundation_apple.enabled,
-    settings?.ai.providers.gemini.api_key,
+    settings?.ai.providers.gemini.has_api_key,
   ]);
 
   useEffect(() => {
@@ -2693,8 +2744,9 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     if (!googleServiceId || aiServiceConfigOpen !== googleServiceId) {
       return;
     }
-    const apiKey = settings?.ai.providers.gemini.api_key?.trim();
-    if (!apiKey) {
+    const draftApiKey = geminiApiKeyDraft.trim();
+    const hasStoredApiKey = Boolean(settings?.ai.providers.gemini.has_api_key);
+    if (!draftApiKey && !hasStoredApiKey) {
       setGeminiModelChoices(fallbackGeminiModelOptions);
       return;
     }
@@ -2703,7 +2755,9 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     void (async () => {
       setLoadingGeminiModels(true);
       try {
-        const models = await listGeminiModels(apiKey);
+        const models = draftApiKey
+          ? await listGeminiModels(draftApiKey)
+          : await listGeminiModels();
 
         if (!cancelled && models.length > 0) {
           const current = settings?.ai.providers.gemini.model;
@@ -2731,7 +2785,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   }, [
     aiServiceConfigOpen,
     geminiModelFetchNonce,
-    settings?.ai.providers.gemini.api_key,
+    geminiApiKeyDraft,
+    settings?.ai.providers.gemini.has_api_key,
     settings?.ai.providers.gemini.model,
     settings?.ai.remote_services,
   ]);
@@ -2917,11 +2972,10 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           ? {
               ...artifact,
               title: pendingContext.title?.trim() ? pendingContext.title : artifact.title,
-              input_path: pendingContext.inputPath || artifact.input_path,
-              metadata: {
-                ...artifact.metadata,
-                ...(pendingContext.parentId ? { parent_id: pendingContext.parentId } : {}),
-              },
+              source_label: pendingContext.inputPath
+                ? fileLabel(pendingContext.inputPath)
+                : artifact.source_label,
+              parent_artifact_id: pendingContext.parentId ?? artifact.parent_artifact_id,
             }
           : artifact;
 
@@ -3153,7 +3207,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
       return (
         artifact.title?.toLowerCase().includes(needle) ||
-        artifact.input_path?.toLowerCase().includes(needle) ||
+        artifact.source_label?.toLowerCase().includes(needle) ||
         artifact.optimized_transcript?.toLowerCase().includes(needle) ||
         artifact.raw_transcript?.toLowerCase().includes(needle)
       );
@@ -3166,7 +3220,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       if (!needle) return true;
       return (
         artifact.title?.toLowerCase().includes(needle) ||
-        artifact.input_path?.toLowerCase().includes(needle) ||
+        artifact.source_label?.toLowerCase().includes(needle) ||
         artifact.optimized_transcript?.toLowerCase().includes(needle) ||
         artifact.raw_transcript?.toLowerCase().includes(needle)
       );
@@ -3182,8 +3236,9 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     const roots: GroupedArtifact[] = [];
     items.forEach(item => {
       const node = map.get(item.id)!;
-      if (item.metadata?.parent_id && map.has(item.metadata.parent_id)) {
-        map.get(item.metadata.parent_id)!.children!.push(node);
+      const parentArtifactId = item.parent_artifact_id ?? item.metadata?.parent_id ?? null;
+      if (parentArtifactId && map.has(parentArtifactId)) {
+        map.get(parentArtifactId)!.children!.push(node);
       } else {
         roots.push(node);
       }
@@ -3547,6 +3602,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   const effectiveDetailContext = useMemo(() => {
     if (activeTrimmedAudioDraft) {
       return buildActiveDetailContext({
+        artifactAudioId: null,
         inputPath: activeTrimmedAudioDraft.path,
         requestedTitle: activeTrimmedAudioDraft.title,
         sourceArtifact: activeArtifact,
@@ -3557,7 +3613,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
     if (activeArtifact) {
       return buildActiveDetailContext({
-        inputPath: activeArtifact.input_path,
+        artifactAudioId: activeArtifact.audio_available ? activeArtifact.id : null,
+        inputPath: null,
         requestedTitle: activeArtifact.title,
         sourceArtifact: activeArtifact,
         restoreArtifactOnFailure: false,
@@ -3594,22 +3651,40 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     },
     [effectiveDetailContext],
   );
+  const detailAudioArtifactId = useMemo(
+    () => effectiveDetailContext?.artifactAudioId ?? null,
+    [effectiveDetailContext],
+  );
 
   const detailAudioFileLabel = useMemo(
-    () => (detailAudioInputPath ? fileLabel(detailAudioInputPath) : t("inspector.unknown", "Unknown")),
-    [detailAudioInputPath, language],
+    () =>
+      detailAudioInputPath
+        ? fileLabel(detailAudioInputPath)
+        : activeArtifact?.source_label
+        || effectiveDetailContext?.sourceArtifact?.source_label
+        || t("inspector.unknown", "Unknown"),
+    [activeArtifact?.source_label, detailAudioInputPath, effectiveDetailContext, language],
   );
 
   const detailAudioFormat = useMemo(() => {
-    if (!detailAudioInputPath) {
+    const formatSource = detailAudioInputPath
+      ?? activeArtifact?.source_label
+      ?? effectiveDetailContext?.sourceArtifact?.source_label
+      ?? null;
+    if (!formatSource) {
       return t("inspector.unknown", "Unknown");
     }
-    const extension = detailAudioInputPath.split(".").pop();
+    const extension = formatSource.split(".").pop();
     if (!extension) {
       return t("inspector.unknown", "Unknown");
     }
     return extension.toUpperCase();
-  }, [detailAudioInputPath, language]);
+  }, [
+    activeArtifact?.source_label,
+    detailAudioInputPath,
+    effectiveDetailContext,
+    language,
+  ]);
 
   const transcriptSeconds = useMemo(() => {
     if (audioDurationSeconds > 0) {
@@ -3853,7 +3928,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
   useEffect(() => {
     setAudioDurationSeconds(parseArtifactDurationSeconds(activeArtifact));
-  }, [activeArtifact, detailAudioInputPath]);
+  }, [activeArtifact, detailAudioArtifactId, detailAudioInputPath]);
 
   useEffect(() => {
     if (!realtimeSessionOpen || realtimeStartedAtMs === null) {
@@ -4166,6 +4241,142 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     }
   }
 
+  function promptForBackupPassword(message: string): string | null {
+    const first = window.prompt(message, "");
+    if (first === null) return null;
+    if (first.trim().length < 8) {
+      setError(
+        t(
+          "settings.advanced.backupPasswordTooShort",
+          "Backup password must be at least 8 characters long.",
+        ),
+      );
+      return null;
+    }
+    return first;
+  }
+
+  async function onExportAppBackup(): Promise<void> {
+    const destination = await save({
+      defaultPath: `sbobino-backup-${new Date().toISOString().slice(0, 10)}.sbobino-backup`,
+      filters: [
+        {
+          name: t("settings.advanced.backupFile", "Sbobino backup"),
+          extensions: ["sbobino-backup"],
+        },
+      ],
+    });
+
+    if (!destination) {
+      return;
+    }
+
+    const password = promptForBackupPassword(
+      t(
+        "settings.advanced.backupPasswordPrompt",
+        "Enter a password to encrypt this portable backup.",
+      ),
+    );
+    if (!password) {
+      return;
+    }
+
+    const confirmation = window.prompt(
+      t(
+        "settings.advanced.backupPasswordConfirmPrompt",
+        "Re-enter the backup password to confirm.",
+      ),
+      "",
+    );
+    if (confirmation === null) {
+      return;
+    }
+    if (confirmation !== password) {
+      setError(
+        t(
+          "settings.advanced.backupPasswordMismatch",
+          "Backup passwords do not match.",
+        ),
+      );
+      return;
+    }
+
+    setIsRunningBackupAction(true);
+    try {
+      const result = await exportAppBackup({
+        destination_path: destination,
+        password,
+      });
+      setError(null);
+      window.alert(
+        t(
+          "settings.advanced.backupExported",
+          `Backup exported to ${result.path}`,
+        ),
+      );
+    } catch (backupError) {
+      setError(formatUiError("error.backupExportFailed", "Backup export failed", backupError));
+    } finally {
+      setIsRunningBackupAction(false);
+    }
+  }
+
+  async function onImportAppBackup(): Promise<void> {
+    const picked = await open({
+      multiple: false,
+      directory: false,
+      filters: [
+        {
+          name: t("settings.advanced.backupFile", "Sbobino backup"),
+          extensions: ["sbobino-backup"],
+        },
+      ],
+    });
+
+    if (!picked || Array.isArray(picked)) {
+      return;
+    }
+
+    const confirmed = await confirmDialog(
+      t(
+        "settings.advanced.backupImportConfirm",
+        "Importing a backup will replace the current local archive on this device. Continue?",
+      ),
+      {
+        title: t("settings.advanced.backupImportTitle", "Import backup"),
+        kind: "warning",
+        okLabel: t("settings.advanced.importBackup", "Import backup"),
+        cancelLabel: t("action.cancel", "Cancel"),
+      },
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    const password = promptForBackupPassword(
+      t(
+        "settings.advanced.backupImportPasswordPrompt",
+        "Enter the password used to encrypt this backup.",
+      ),
+    );
+    if (!password) {
+      return;
+    }
+
+    setIsRunningBackupAction(true);
+    try {
+      await importAppBackup({
+        backup_path: picked,
+        password,
+      });
+      window.location.reload();
+    } catch (backupError) {
+      setError(formatUiError("error.backupImportFailed", "Backup import failed", backupError));
+    } finally {
+      setIsRunningBackupAction(false);
+    }
+  }
+
   async function refreshProvisioningStatus(): Promise<void> {
     try {
       const status = await provisioningStatus();
@@ -4458,6 +4669,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       const startResult = await withTimeout(
         startTranscription({
           input_path: targetFile,
+          engine: settings.transcription.engine,
           language: settings.transcription.language,
           model: settings.transcription.model,
           enable_ai: false,
@@ -8028,6 +8240,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                 />
               ) : (
                 <AudioPlayer
+                  artifactId={detailAudioArtifactId}
                   inputPath={detailAudioInputPath}
                   trimEnabled
                   onMetadataLoaded={(metadata) => {
@@ -8042,7 +8255,10 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                     if (!trimSourceArtifact) {
                       return;
                     }
-                    const sourceLabel = trimSourceArtifact.title.trim() || fileLabel(trimSourceArtifact.input_path);
+                    const sourceLabel =
+                      trimSourceArtifact.title.trim()
+                      || trimSourceArtifact.source_label
+                      || t("inspector.unknown", "Unknown");
                     setTrimRetranscriptionError(null);
                     setTrimmedAudioDraft({
                       path: trimmedAudio.path,
@@ -8059,7 +8275,9 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           </div>
         </section>
 
-        <aside className={`detail-inspector ${effectiveRightSidebarOpen ? "" : "collapsed"}`}>
+        <aside
+          className={`detail-inspector ${detailMode === "chat" ? "detail-inspector--chat " : ""}${effectiveRightSidebarOpen ? "" : "collapsed"}`}
+        >
             <DetailInspectorHeader
               inspectorMode={inspectorMode}
               onInspectorModeChange={setInspectorMode}
@@ -9154,7 +9372,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           service.id === settings.ai.active_remote_service_id
           && service.kind === "google",
       );
-    const geminiConfigured = Boolean(settings.ai.providers.gemini.api_key?.trim());
+    const geminiConfigured = Boolean(settings.ai.providers.gemini.has_api_key);
     const remoteServices = settings.ai.remote_services ?? [];
     const googleService = remoteServices.find((service) => service.kind === "google");
     const hasGoogleService = Boolean(googleService);
@@ -9170,7 +9388,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         kind,
         label: formatProviderLabel(kind),
         enabled: true,
-        api_key: kind === "google" ? settings.ai.providers.gemini.api_key : null,
+        api_key: null,
+        has_api_key: kind === "google" ? settings.ai.providers.gemini.has_api_key : false,
         model: kind === "google" ? settings.ai.providers.gemini.model : catalog.defaultModel,
         base_url: catalog.defaultBaseUrl,
       };
@@ -9239,6 +9458,14 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           remote_services: nextServices,
         };
       });
+      setRemoteServiceApiKeyDrafts((current) => {
+        if (!(id in current)) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
       if (aiServiceConfigOpen === id) {
         setAiServiceConfigOpen(null);
       }
@@ -9293,7 +9520,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                         ...current,
                         active_provider:
                           !enabled && current.active_provider === "foundation_apple"
-                            ? current.providers.gemini.api_key
+                            ? current.providers.gemini.has_api_key
                               ? "gemini"
                               : "none"
                             : current.active_provider,
@@ -9353,9 +9580,10 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                   <input
                     type="password"
                     placeholder={t("settings.ai.apiKeyPlaceholder", "Enter API Key...")}
-                    value={settings.ai.providers.gemini.api_key ?? ""}
+                    value={geminiApiKeyDraft}
                     onChange={(event) => {
                       const value = event.target.value.trim();
+                      setGeminiApiKeyDraft(event.target.value);
                       void patchAiSettings((current) => ({
                         ...current,
                         providers: {
@@ -9363,6 +9591,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                           gemini: {
                             ...current.providers.gemini,
                             api_key: value.length > 0 ? event.target.value : null,
+                            has_api_key: value.length > 0,
                           },
                         },
                         remote_services: (current.remote_services ?? []).map((service) => (
@@ -9370,6 +9599,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                             ? {
                                 ...service,
                                 api_key: value.length > 0 ? event.target.value : null,
+                                has_api_key: value.length > 0,
                               }
                             : service
                         )),
@@ -9454,6 +9684,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                             gemini: {
                               ...current.providers.gemini,
                               api_key: null,
+                              has_api_key: false,
                             },
                           },
                           remote_services: (current.remote_services ?? []).filter(
@@ -9461,6 +9692,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                           ),
                         };
                       });
+                      setGeminiApiKeyDraft("");
                       setAiServiceConfigOpen(null);
                     }}
                   >
@@ -9557,13 +9789,19 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                       {t("settings.ai.apiKey", "API Key")}
                       <input
                         type="password"
-                        value={service.api_key ?? ""}
-                        onChange={(event) =>
+                        value={remoteServiceApiKeyDrafts[service.id] ?? ""}
+                        onChange={(event) => {
+                          const nextValue = event.target.value;
+                          setRemoteServiceApiKeyDrafts((current) => ({
+                            ...current,
+                            [service.id]: nextValue,
+                          }));
                           patchRemoteService(service.id, (current) => ({
                             ...current,
-                            api_key: event.target.value.trim().length > 0 ? event.target.value : null,
-                          }))
-                        }
+                            api_key: nextValue.trim().length > 0 ? nextValue : null,
+                            has_api_key: nextValue.trim().length > 0,
+                          }));
+                        }}
                       />
                     </label>
                     <label>
@@ -9921,6 +10159,36 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
             </button>
           </div>
         </section>
+
+        <section className="settings-panel">
+          <h3>{t("settings.advanced.backupSection", "Backup & Restore")}</h3>
+          <p className="settings-help-text">
+            {t(
+              "settings.advanced.backupHelp",
+              "Create a password-protected portable backup of the app memory, then import it later on this or another device.",
+            )}
+          </p>
+          <div className="notice-actions">
+            <button
+              className="secondary-button"
+              onClick={() => void onExportAppBackup()}
+              disabled={isRunningBackupAction}
+            >
+              {isRunningBackupAction
+                ? t("settings.advanced.backupWorking", "Working...")
+                : t("settings.advanced.exportBackup", "Export backup")}
+            </button>
+            <button
+              className="secondary-button"
+              onClick={() => void onImportAppBackup()}
+              disabled={isRunningBackupAction}
+            >
+              {isRunningBackupAction
+                ? t("settings.advanced.backupWorking", "Working...")
+                : t("settings.advanced.importBackup", "Import backup")}
+            </button>
+          </div>
+        </section>
       </div>
     );
   }
@@ -9937,6 +10205,8 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   }
 
   function renderSettings(): JSX.Element {
+    const settingsPaneClassName = `settings-pane settings-pane--${settingsPane}`;
+
     return (
       <div className="settings-layout">
         <aside className="settings-sidebar">
@@ -9985,7 +10255,9 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         </aside>
 
         <section className="settings-content">
-          {renderSettingsPane(settingsPane)}
+          <div className={settingsPaneClassName}>
+            {renderSettingsPane(settingsPane)}
+          </div>
         </section>
       </div>
     );

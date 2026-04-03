@@ -7,7 +7,9 @@ import type {
   ChatArtifactPayload,
   EmotionAnalysisPayload,
   EmotionAnalysisResult,
+  ExportAppBackupResponse,
   ArtifactKind,
+  ImportAppBackupResponse,
   EnsureRuntimeResponse,
   JobProgress,
   PromptTask,
@@ -206,6 +208,20 @@ export async function exportArtifact(payload: {
   return invoke<{ path: string }>("export_artifact", { payload });
 }
 
+export async function exportAppBackup(payload: {
+  destination_path: string;
+  password: string;
+}): Promise<ExportAppBackupResponse> {
+  return invoke<ExportAppBackupResponse>("export_app_backup", { payload });
+}
+
+export async function importAppBackup(payload: {
+  backup_path: string;
+  password: string;
+}): Promise<ImportAppBackupResponse> {
+  return invoke<ImportAppBackupResponse>("import_app_backup", { payload });
+}
+
 export async function chatArtifact(payload: ChatArtifactPayload): Promise<string> {
   return invoke<string>("chat_artifact", { payload });
 }
@@ -315,12 +331,20 @@ export async function readAudioFile(path: string): Promise<number[]> {
   return invoke<number[]>("read_audio_file", { payload: { path } });
 }
 
+export async function readArtifactAudio(artifactId: string): Promise<number[]> {
+  return invoke<number[]>("read_artifact_audio", { payload: { artifact_id: artifactId } });
+}
+
 export async function writeTrimmedAudio(
-  inputPath: string,
+  payload: { artifactId?: string | null; inputPath?: string | null },
   regions: Array<{ start: number; end: number }>,
 ): Promise<WriteTrimmedAudioResponse> {
   return invoke<WriteTrimmedAudioResponse>("write_trimmed_audio", {
-    payload: { input_path: inputPath, regions },
+    payload: {
+      artifact_id: payload.artifactId ?? null,
+      input_path: payload.inputPath ?? null,
+      regions,
+    },
   });
 }
 

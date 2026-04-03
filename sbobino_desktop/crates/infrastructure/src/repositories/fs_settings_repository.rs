@@ -6,14 +6,23 @@ use serde_json::json;
 use sbobino_application::{ApplicationError, SettingsRepository};
 use sbobino_domain::AppSettings;
 
+use crate::secure_storage::SecureStorage;
+
 #[derive(Debug, Clone)]
 pub struct FsSettingsRepository {
     path: PathBuf,
+    secure_storage: SecureStorage,
 }
 
 impl FsSettingsRepository {
     pub fn new(path: PathBuf) -> Self {
-        Self { path }
+        let fallback_root = path
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let secure_storage = SecureStorage::load_or_create_with_fallback(&fallback_root)
+            .expect("secure storage should initialize before settings repository");
+        Self { path, secure_storage }
     }
 
     pub fn load_sync(&self) -> Result<AppSettings, ApplicationError> {
@@ -86,17 +95,26 @@ impl FsSettingsRepository {
             settings.sync_sections_from_legacy();
         }
 
+        self.populate_secrets(&mut settings)?;
+
         Ok(settings)
     }
 
     pub fn save_sync(&self, settings: &AppSettings) -> Result<(), ApplicationError> {
         let mut normalized = settings.clone();
+        self.populate_secrets(&mut normalized)?;
         if should_treat_legacy_fields_as_source(&normalized) {
             normalized.sync_sections_from_legacy();
         }
         normalized.sync_legacy_from_sections();
+        normalized.refresh_secret_presence_flags();
 
-        let serialized = serde_json::to_string_pretty(&normalized).map_err(|e| {
+        self.persist_secrets(&normalized)?;
+
+        let mut file_settings = normalized.redacted_clone();
+        file_settings.refresh_secret_presence_flags();
+
+        let serialized = serde_json::to_string_pretty(&file_settings).map_err(|e| {
             ApplicationError::Settings(format!("failed to serialize settings: {e}"))
         })?;
 
@@ -115,6 +133,50 @@ impl FsSettingsRepository {
                 self.path.display()
             ))
         })
+    }
+
+    fn populate_secrets(&self, settings: &mut AppSettings) -> Result<(), ApplicationError> {
+        let gemini_account = "settings.gemini_api_key";
+        settings.ai.providers.gemini.api_key = self.secure_storage.read_secret(gemini_account)?;
+        settings.gemini_api_key = settings.ai.providers.gemini.api_key.clone();
+        settings.ai.providers.gemini.has_api_key = settings.ai.providers.gemini.api_key.is_some();
+        settings.gemini_api_key_present = settings.ai.providers.gemini.has_api_key;
+
+        for service in &mut settings.ai.remote_services {
+            let account = format!("remote_service.{}.api_key", service.id);
+            service.api_key = self.secure_storage.read_secret(&account)?;
+            service.has_api_key = service.api_key.is_some();
+        }
+
+        Ok(())
+    }
+
+    fn persist_secrets(&self, settings: &AppSettings) -> Result<(), ApplicationError> {
+        match settings.ai.providers.gemini.api_key.as_deref() {
+            Some(secret) if !secret.trim().is_empty() => {
+                self.secure_storage
+                    .write_secret("settings.gemini_api_key", secret.trim())?;
+            }
+            _ if !settings.ai.providers.gemini.has_api_key => {
+                self.secure_storage.delete_secret("settings.gemini_api_key")?;
+            }
+            _ => {}
+        }
+
+        for service in &settings.ai.remote_services {
+            let account = format!("remote_service.{}.api_key", service.id);
+            match service.api_key.as_deref() {
+                Some(secret) if !secret.trim().is_empty() => {
+                    self.secure_storage.write_secret(&account, secret.trim())?;
+                }
+                _ if !service.has_api_key => {
+                    self.secure_storage.delete_secret(&account)?;
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
     }
 }
 

@@ -20,7 +20,7 @@ use crate::{
 };
 
 fn emit_settings_updated(app: &tauri::AppHandle, settings: &AppSettings) {
-    let _ = app.emit("settings://updated", settings);
+    let _ = app.emit("settings://updated", settings.redacted_clone());
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -176,6 +176,7 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, Com
         .settings_service
         .get()
         .await
+        .map(|settings| settings.redacted_clone())
         .map_err(CommandError::from)
 }
 
@@ -191,7 +192,7 @@ pub async fn update_settings(
         .await
         .map_err(CommandError::from)?;
     emit_settings_updated(&app, &updated);
-    Ok(updated)
+    Ok(updated.redacted_clone())
 }
 
 #[tauri::command]
@@ -202,6 +203,7 @@ pub async fn get_settings_snapshot(
         .settings_service
         .snapshot()
         .await
+        .map(|settings| settings.redacted_clone())
         .map_err(CommandError::from)
 }
 
@@ -222,7 +224,7 @@ pub async fn update_settings_partial(
         .await
         .map_err(CommandError::from)?;
     emit_settings_updated(&app, &updated);
-    Ok(updated)
+    Ok(updated.redacted_clone())
 }
 
 #[tauri::command]
@@ -231,6 +233,16 @@ pub async fn get_ai_providers(state: State<'_, AppState>) -> Result<AiSettings, 
         .settings_service
         .ai_settings()
         .await
+        .map(|ai| {
+            let mut redacted = ai;
+            redacted.providers.gemini.has_api_key = redacted.providers.gemini.api_key.is_some();
+            redacted.providers.gemini.api_key = None;
+            for service in &mut redacted.remote_services {
+                service.has_api_key = service.api_key.is_some();
+                service.api_key = None;
+            }
+            redacted
+        })
         .map_err(CommandError::from)
 }
 
@@ -255,7 +267,14 @@ pub async fn update_ai_providers(
         emit_settings_updated(&app, &snapshot);
     }
 
-    Ok(ai)
+    let mut redacted = ai;
+    redacted.providers.gemini.has_api_key = redacted.providers.gemini.api_key.is_some();
+    redacted.providers.gemini.api_key = None;
+    for service in &mut redacted.remote_services {
+        service.has_api_key = service.api_key.is_some();
+        service.api_key = None;
+    }
+    Ok(redacted)
 }
 
 #[tauri::command]

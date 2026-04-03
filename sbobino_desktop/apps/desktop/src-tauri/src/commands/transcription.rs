@@ -7,7 +7,10 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use sbobino_application::{ApplicationError, RunTranscriptionRequest};
-use sbobino_domain::{JobProgress, LanguageCode, SpeechModel, WhisperOptions};
+use sbobino_domain::{
+    ArtifactSourceOrigin, JobProgress, LanguageCode, SpeechModel, TranscriptionEngine,
+    WhisperOptions,
+};
 
 use crate::{
     error::CommandError,
@@ -19,6 +22,7 @@ const DELTA_REPLACE_PREFIX: &str = "\u{001F}REPLACE:";
 #[derive(Debug, Deserialize)]
 pub struct StartTranscriptionPayload {
     pub input_path: String,
+    pub engine: TranscriptionEngine,
     pub language: LanguageCode,
     pub model: SpeechModel,
     pub enable_ai: bool,
@@ -65,12 +69,14 @@ pub async fn start_transcription(
     let request = RunTranscriptionRequest {
         job_id: job_id.clone(),
         input_path: payload.input_path,
+        engine: payload.engine,
         language: payload.language,
         model: payload.model,
         enable_ai: payload.enable_ai,
         whisper_options: payload.whisper_options,
         title: payload.title,
         parent_id: payload.parent_id,
+        source_origin: ArtifactSourceOrigin::Imported,
     };
 
     let runtime_factory = state.runtime_factory.clone();

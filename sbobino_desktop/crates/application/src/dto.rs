@@ -1,17 +1,19 @@
 use serde::{Deserialize, Serialize};
 
-use sbobino_domain::{ArtifactKind, LanguageCode, SpeechModel, WhisperOptions};
+use sbobino_domain::{ArtifactKind, ArtifactSourceOrigin, LanguageCode, SpeechModel, TranscriptionEngine, WhisperOptions};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunTranscriptionRequest {
     pub job_id: String,
     pub input_path: String,
+    pub engine: TranscriptionEngine,
     pub language: LanguageCode,
     pub model: SpeechModel,
     pub enable_ai: bool,
     pub whisper_options: WhisperOptions,
     pub title: Option<String>,
     pub parent_id: Option<String>,
+    pub source_origin: ArtifactSourceOrigin,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,4 +1,5 @@
 pub mod artifacts;
+pub mod backup;
 pub mod emotion_analysis;
 pub mod prepared_transcript;
 pub mod provisioning;

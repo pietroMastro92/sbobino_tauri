@@ -117,4 +117,8 @@ impl ArtifactService {
     ) -> Result<usize, ApplicationError> {
         self.artifacts.purge_deleted_older_than_days(days).await
     }
+
+    pub async fn read_audio_bytes(&self, id: &str) -> Result<Option<Vec<u8>>, ApplicationError> {
+        self.artifacts.read_audio_bytes(id).await
+    }
 }

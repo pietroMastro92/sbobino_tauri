@@ -74,6 +74,14 @@ pub enum TranscriptionEngine {
     WhisperCpp,
 }
 
+impl TranscriptionEngine {
+    pub fn as_ref(&self) -> &'static str {
+        match self {
+            Self::WhisperCpp => "whisper_cpp",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AiProvider {
@@ -116,6 +124,7 @@ pub struct RemoteServiceConfig {
     pub label: String,
     pub enabled: bool,
     pub api_key: Option<String>,
+    pub has_api_key: bool,
     pub model: Option<String>,
     pub base_url: Option<String>,
 }
@@ -302,6 +311,7 @@ impl Default for FoundationProviderSettings {
 #[serde(default)]
 pub struct GeminiProviderSettings {
     pub api_key: Option<String>,
+    pub has_api_key: bool,
     pub model: String,
 }
 
@@ -309,6 +319,7 @@ impl Default for GeminiProviderSettings {
     fn default() -> Self {
         Self {
             api_key: None,
+            has_api_key: false,
             model: "gemini-2.5-flash-lite".to_string(),
         }
     }
@@ -396,6 +407,7 @@ pub struct AppSettings {
     pub ai_post_processing: bool,
     pub gemini_model: String,
     pub gemini_api_key: Option<String>,
+    pub gemini_api_key_present: bool,
     pub whisper_cli_path: String,
     #[serde(alias = "whisper_stream_path")]
     pub whisperkit_cli_path: String,
@@ -425,6 +437,7 @@ impl Default for AppSettings {
             ai_post_processing: transcription.enable_ai_post_processing,
             gemini_model: ai.providers.gemini.model.clone(),
             gemini_api_key: ai.providers.gemini.api_key.clone(),
+            gemini_api_key_present: ai.providers.gemini.api_key.is_some(),
             whisper_cli_path: transcription.whisper_cli_path.clone(),
             whisperkit_cli_path: transcription.whisperkit_cli_path.clone(),
             ffmpeg_path: transcription.ffmpeg_path.clone(),
@@ -455,6 +468,8 @@ impl AppSettings {
 
         self.ai.providers.gemini.model = self.gemini_model.clone();
         self.ai.providers.gemini.api_key = self.gemini_api_key.clone();
+        self.ai.providers.gemini.has_api_key =
+            self.gemini_api_key_present || self.gemini_api_key.is_some();
         if self.ai.active_provider == AiProvider::None && self.gemini_api_key.is_some() {
             self.ai.active_provider = AiProvider::Gemini;
         }
@@ -479,6 +494,7 @@ impl AppSettings {
             }
         }
 
+        self.refresh_secret_presence_flags();
         self.ensure_prompt_integrity();
     }
 
@@ -497,6 +513,8 @@ impl AppSettings {
 
         self.gemini_model = self.ai.providers.gemini.model.clone();
         self.gemini_api_key = self.ai.providers.gemini.api_key.clone();
+        self.gemini_api_key_present =
+            self.ai.providers.gemini.has_api_key || self.gemini_api_key.is_some();
         if self.ai.active_provider == AiProvider::Gemini
             && self.ai.active_remote_service_id.is_none()
         {
@@ -518,7 +536,27 @@ impl AppSettings {
             }
         }
 
+        self.refresh_secret_presence_flags();
         self.ensure_prompt_integrity();
+    }
+
+    pub fn refresh_secret_presence_flags(&mut self) {
+        self.ai.providers.gemini.has_api_key = self.ai.providers.gemini.api_key.is_some();
+        self.gemini_api_key_present = self.ai.providers.gemini.has_api_key;
+        for service in &mut self.ai.remote_services {
+            service.has_api_key = service.api_key.is_some();
+        }
+    }
+
+    pub fn redacted_clone(&self) -> Self {
+        let mut redacted = self.clone();
+        redacted.refresh_secret_presence_flags();
+        redacted.gemini_api_key = None;
+        redacted.ai.providers.gemini.api_key = None;
+        for service in &mut redacted.ai.remote_services {
+            service.api_key = None;
+        }
+        redacted
     }
 
     pub fn ensure_prompt_integrity(&mut self) {

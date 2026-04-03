@@ -1,7 +1,7 @@
 import { Pause, Play, Rabbit, Scissors, X, Trash2, Check } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { readAudioFile, writeTrimmedAudio } from "../lib/tauri";
+import { readArtifactAudio, readAudioFile, writeTrimmedAudio } from "../lib/tauri";
 import { useTranslation, type AppLanguage } from "../i18n";
 import type { WriteTrimmedAudioResponse } from "../types";
 
@@ -14,7 +14,8 @@ export type TrimRegion = {
 };
 
 type AudioPlayerProps = {
-  inputPath: string | null;
+  inputPath?: string | null;
+  artifactId?: string | null;
   trimEnabled?: boolean;
   initialTrimRegions?: TrimRegion[];
   onMetadataLoaded?: (metadata: { durationSeconds: number }) => void;
@@ -343,6 +344,7 @@ function drawWaveform(
 
 export function AudioPlayer({
   inputPath,
+  artifactId,
   trimEnabled = true,
   initialTrimRegions,
   onMetadataLoaded,
@@ -442,6 +444,11 @@ export function AudioPlayer({
     if (!inputPath || inputPath.trim().length === 0) return null;
     return inputPath;
   }, [inputPath]);
+  const sourceArtifactId = useMemo(() => {
+    if (!artifactId || artifactId.trim().length === 0) return null;
+    return artifactId;
+  }, [artifactId]);
+  const hasSource = Boolean(sourcePath || sourceArtifactId);
   const preferredLocalSrc = useMemo(() => {
     if (!sourcePath) return null;
     if (sourcePath.startsWith("http://") || sourcePath.startsWith("https://")) {
@@ -471,7 +478,7 @@ export function AudioPlayer({
   useEffect(() => {
     trimPlaybackRegionIndexRef.current = null;
     manualTrimStartRef.current = false;
-  }, [regions, trimMode, sourcePath]);
+  }, [regions, trimMode, sourceArtifactId, sourcePath]);
 
   useEffect(() => () => {
     activePointerCleanupRef.current?.();
@@ -538,7 +545,7 @@ export function AudioPlayer({
     }
     fallbackLoadPromiseRef.current = null;
 
-    if (!sourcePath) {
+    if (!hasSource) {
       setSrc(null);
       setLoadError(null);
       setIsLoading(false);
@@ -554,7 +561,7 @@ export function AudioPlayer({
       return;
     }
 
-    if (sourcePath.startsWith("http://") || sourcePath.startsWith("https://")) {
+    if (sourcePath && (sourcePath.startsWith("http://") || sourcePath.startsWith("https://"))) {
       setSrc(sourcePath);
       setLoadError(null);
       setIsLoading(false);
@@ -572,12 +579,12 @@ export function AudioPlayer({
     const sourceVersion = sourceVersionRef.current + 1;
     sourceVersionRef.current = sourceVersion;
 
-    setSrc(preferredLocalSrc);
+    setSrc(sourceArtifactId ? null : preferredLocalSrc);
     setLoadError(null);
     setIsLoading(true);
     fallbackAttemptedRef.current = false;
     pendingAutoPlayRef.current = false;
-    setNeedsFallback(false);
+    setNeedsFallback(Boolean(sourceArtifactId));
     setCachedPeaks(null);
     audioBufferRef.current = null;
     setRegions(normalizedInitialTrimRegions);
@@ -589,7 +596,7 @@ export function AudioPlayer({
         sourceVersionRef.current += 1;
       }
     };
-  }, [normalizedInitialTrimRegions, preferredLocalSrc, sourcePath]);
+  }, [hasSource, normalizedInitialTrimRegions, preferredLocalSrc, sourceArtifactId, sourcePath]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -611,7 +618,7 @@ export function AudioPlayer({
   // ── LAZY waveform decode — only when trim mode is activated ─
 
   useEffect(() => {
-    if (!trimMode || !src || cachedPeaks) return;
+    if (!trimMode || !hasSource || cachedPeaks) return;
 
     let cancelled = false;
     setIsDecodingWaveform(true);
@@ -621,9 +628,16 @@ export function AudioPlayer({
       try {
         await waitForNextPaint();
         if (cancelled) return;
-        const arrayBuffer = sourcePath && !sourcePath.startsWith("http://") && !sourcePath.startsWith("https://")
+        const arrayBuffer = sourceArtifactId
+          ? new Uint8Array(await readArtifactAudio(sourceArtifactId)).buffer
+          : sourcePath && !sourcePath.startsWith("http://") && !sourcePath.startsWith("https://")
           ? new Uint8Array(await readAudioFile(sourcePath)).buffer
-          : await fetch(src).then((response) => response.arrayBuffer());
+          : src
+          ? await fetch(src).then((response) => response.arrayBuffer())
+          : null;
+        if (!arrayBuffer) {
+          throw new Error("missing audio source");
+        }
         if (cancelled) return;
         audioCtx = new AudioContext();
         const decoded = await audioCtx.decodeAudioData(arrayBuffer);
@@ -648,7 +662,7 @@ export function AudioPlayer({
     })();
 
     return () => { cancelled = true; };
-  }, [trimMode, src, cachedPeaks, sourcePath]);
+  }, [trimMode, src, cachedPeaks, hasSource, sourceArtifactId, sourcePath]);
 
   // ── Canvas redraw — ONLY when state changes, NOT continuous rAF ─
 
@@ -718,7 +732,8 @@ export function AudioPlayer({
 
   const loadFallbackAudio = useCallback(async (autoPlay: boolean, background = false): Promise<boolean> => {
     const currentSourcePath = sourcePath;
-    if (!currentSourcePath) return false;
+    const currentArtifactId = sourceArtifactId;
+    if (!currentSourcePath && !currentArtifactId) return false;
 
     if (fallbackBlobUrlRef.current) {
       setSrc(fallbackBlobUrlRef.current);
@@ -746,9 +761,14 @@ export function AudioPlayer({
     let loadPromise: Promise<boolean> | null = null;
     loadPromise = (async () => {
       try {
-        const bytes = await readAudioFile(currentSourcePath);
+        const bytes = currentArtifactId
+          ? await readArtifactAudio(currentArtifactId)
+          : await readAudioFile(currentSourcePath!);
         if (sourceVersionRef.current !== sourceVersion) return false;
-        const blob = new Blob([new Uint8Array(bytes)], { type: mimeFromPath(currentSourcePath) });
+        const blob = new Blob(
+          [new Uint8Array(bytes)],
+          { type: currentSourcePath ? mimeFromPath(currentSourcePath) : "audio/*" },
+        );
         const objectUrl = URL.createObjectURL(blob);
         if (fallbackBlobUrlRef.current) URL.revokeObjectURL(fallbackBlobUrlRef.current);
         fallbackBlobUrlRef.current = objectUrl;
@@ -777,18 +797,18 @@ export function AudioPlayer({
 
     fallbackLoadPromiseRef.current = loadPromise;
     return loadPromise;
-  }, [sourcePath]);
+  }, [sourceArtifactId, sourcePath]);
 
   useEffect(() => {
-    if (!needsFallback || !sourcePath) {
+    if (!needsFallback || !hasSource) {
       return;
     }
-    if (sourcePath.startsWith("http://") || sourcePath.startsWith("https://")) {
+    if (sourcePath && (sourcePath.startsWith("http://") || sourcePath.startsWith("https://"))) {
       return;
     }
     void loadFallbackAudio(false, false);
     return undefined;
-  }, [loadFallbackAudio, needsFallback, sourcePath]);
+  }, [hasSource, loadFallbackAudio, needsFallback, sourcePath]);
 
   // ── Playback ───────────────────────────────────────────────
 
@@ -1050,7 +1070,7 @@ export function AudioPlayer({
 
   // ── Render ─────────────────────────────────────────────────
 
-  if (!sourcePath) return null;
+  if (!hasSource) return null;
 
   return (
     <footer className={`audio-player ${trimMode ? "audio-player--trim" : ""}`}>
@@ -1108,8 +1128,7 @@ export function AudioPlayer({
         onPause={() => setIsPlaying(false)}
         onPlay={() => setIsPlaying(true)}
         onError={() => {
-          const audioPath = sourcePath;
-          if (!audioPath) { setIsPlaying(false); return; }
+          if (!hasSource) { setIsPlaying(false); return; }
           const fallbackSrc = fallbackBlobUrlRef.current;
           if (fallbackSrc && src !== fallbackSrc) {
             setSrc(fallbackSrc);
@@ -1136,7 +1155,7 @@ export function AudioPlayer({
           className="playback-button"
           onClick={() => void togglePlayback()}
           title={t("audio.playPause", "Play/Pause")}
-          disabled={!sourcePath}
+          disabled={!hasSource}
           aria-label={t("audio.playPause", "Play/Pause")}
         >
           {isPlaying ? <Pause size={16} /> : <Play size={16} />}
@@ -1342,12 +1361,15 @@ export function AudioPlayer({
               <button
                 className="trim-apply-button"
                 onClick={async () => {
-                  if (isApplyingTrim || regions.length === 0 || !sourcePath) return;
+                  if (isApplyingTrim || regions.length === 0 || !hasSource) return;
                   setIsApplyingTrim(true);
                   setLoadError(null);
                   try {
                     const result = await writeTrimmedAudio(
-                      sourcePath,
+                      {
+                        artifactId: sourceArtifactId,
+                        inputPath: sourceArtifactId ? null : sourcePath,
+                      },
                       regions.map((r) => ({ start: r.startTime, end: r.endTime })),
                     );
 

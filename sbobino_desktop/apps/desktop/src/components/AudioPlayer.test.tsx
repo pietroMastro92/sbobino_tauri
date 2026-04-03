@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AudioPlayer } from "./AudioPlayer";
-import { readAudioFile, writeTrimmedAudio } from "../lib/tauri";
+import { readArtifactAudio, readAudioFile, writeTrimmedAudio } from "../lib/tauri";
 import { changeLanguage } from "../i18n";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -10,6 +10,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 vi.mock("../lib/tauri", () => ({
+  readArtifactAudio: vi.fn(),
   readAudioFile: vi.fn(),
   writeTrimmedAudio: vi.fn(),
 }));
@@ -21,6 +22,7 @@ describe("AudioPlayer", () => {
 
   beforeEach(() => {
     changeLanguage("en");
+    vi.mocked(readArtifactAudio).mockReset();
     vi.mocked(readAudioFile).mockReset();
     vi.mocked(writeTrimmedAudio).mockReset();
     HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
@@ -239,10 +241,16 @@ describe("AudioPlayer", () => {
     fireEvent.click(container.querySelector(".trim-apply-button") as HTMLButtonElement);
 
     await vi.waitFor(() => {
-      expect(writeTrimmedAudio).toHaveBeenCalledWith("/tmp/sample.mp3", [
-        { start: 2, end: 6 },
-        { start: 12, end: 16 },
-      ]);
+      expect(writeTrimmedAudio).toHaveBeenCalledWith(
+        {
+          artifactId: null,
+          inputPath: "/tmp/sample.mp3",
+        },
+        [
+          { start: 2, end: 6 },
+          { start: 12, end: 16 },
+        ],
+      );
     });
 
     expect(onTrimApplied).toHaveBeenCalledWith(

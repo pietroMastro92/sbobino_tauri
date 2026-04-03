@@ -15,6 +15,7 @@ function createSettingsFixture(): AppSettings {
     ai_post_processing: false,
     gemini_model: "gemini-2.5-flash",
     gemini_api_key: null,
+    gemini_api_key_present: false,
     whisper_cli_path: "",
     whisperkit_cli_path: "",
     ffmpeg_path: "",
@@ -79,6 +80,7 @@ function createSettingsFixture(): AppSettings {
         },
         gemini: {
           api_key: null,
+          has_api_key: false,
           model: "gemini-2.5-flash",
         },
       },

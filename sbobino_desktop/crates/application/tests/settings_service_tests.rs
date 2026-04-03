@@ -98,6 +98,7 @@ async fn update_partial_persists_ai_remote_services() {
             label: "Google".to_string(),
             enabled: true,
             api_key: Some("AIza-test-key".to_string()),
+            has_api_key: true,
             model: Some("gemini-2.5-flash".to_string()),
             base_url: Some("https://generativelanguage.googleapis.com/v1beta".to_string()),
         },
@@ -107,6 +108,7 @@ async fn update_partial_persists_ai_remote_services() {
             label: "OpenAI".to_string(),
             enabled: true,
             api_key: Some("sk-test".to_string()),
+            has_api_key: true,
             model: Some("gpt-4.1-mini".to_string()),
             base_url: Some("https://api.openai.com/v1".to_string()),
         },
@@ -162,6 +164,7 @@ async fn update_partial_accepts_all_remote_service_kinds() {
             label: format!("{kind:?}"),
             enabled: true,
             api_key: None,
+            has_api_key: false,
             model: None,
             base_url: None,
         })

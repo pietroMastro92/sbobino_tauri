@@ -1,5 +1,6 @@
 pub mod adapters;
 pub mod repositories;
+pub mod secure_storage;
 
 use chrono::Utc;
 use reqwest::Url;
@@ -206,6 +207,14 @@ impl RuntimeTranscriptionFactory {
         bundle_resources_dir: Option<PathBuf>,
     ) -> Result<Self, String> {
         Self::new_with_options(data_dir, bundle_resources_dir, false)
+    }
+
+    pub fn artifacts_db_path(&self) -> PathBuf {
+        self.data_dir.join("artifacts.db")
+    }
+
+    pub fn vault_dir(&self) -> PathBuf {
+        self.data_dir.join("vault")
     }
 
     pub fn build_service(&self) -> Result<Arc<TranscriptionService>, String> {
@@ -2180,6 +2189,7 @@ mod tests {
     use tempfile::tempdir;
 
     fn build_factory() -> (tempfile::TempDir, RuntimeTranscriptionFactory) {
+        std::env::set_var("SBOBINO_ALLOW_INSECURE_LOCAL_SECRETS", "1");
         let temp = tempdir().expect("failed to create tempdir");
         let factory = RuntimeTranscriptionFactory::new_for_tests(temp.path(), None)
             .expect("factory should build");
@@ -2191,6 +2201,7 @@ mod tests {
         RuntimeTranscriptionFactory,
         std::path::PathBuf,
     ) {
+        std::env::set_var("SBOBINO_ALLOW_INSECURE_LOCAL_SECRETS", "1");
         let temp = tempdir().expect("failed to create tempdir");
         let resources_dir = temp.path().join("resources");
         let factory =
@@ -2485,6 +2496,7 @@ mod tests {
                 label: "Google".to_string(),
                 enabled: true,
                 api_key: Some("test-key".to_string()),
+                has_api_key: true,
                 model: Some("gemini-2.5-flash".to_string()),
                 base_url: None,
             },
@@ -2494,6 +2506,7 @@ mod tests {
                 label: "Local Ollama".to_string(),
                 enabled: true,
                 api_key: None,
+                has_api_key: false,
                 model: Some("llama3.1".to_string()),
                 base_url: Some("http://127.0.0.1:11434/v1".to_string()),
             },
@@ -2529,6 +2542,7 @@ mod tests {
             label: "Local Custom".to_string(),
             enabled: true,
             api_key: None,
+            has_api_key: false,
             model: Some("qwen2.5".to_string()),
             base_url: Some("http://localhost:8080/v1".to_string()),
         }];

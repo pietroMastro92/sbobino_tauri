@@ -343,11 +343,16 @@ impl TranscriptionService {
                     .to_string()
             });
 
-            let artifact = TranscriptArtifact::new(
+            let mut artifact = TranscriptArtifact::new(
                 request.job_id.clone(),
                 final_title,
                 ArtifactKind::File,
-                request.input_path.clone(),
+                input_path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(&request.input_path)
+                    .to_string(),
+                request.source_origin.clone(),
                 raw_transcript,
                 optimized,
                 summary_faq.summary,
@@ -355,6 +360,19 @@ impl TranscriptionService {
                 metadata,
             )
             .map_err(|e| ApplicationError::Validation(e.to_string()))?;
+            artifact.audio_duration_seconds = total_audio_seconds;
+            artifact.parent_artifact_id = request.parent_id.clone();
+            artifact.processing_engine = Some(request.engine.as_ref().to_string());
+            artifact.processing_model = Some(request.model.ggml_filename().to_string());
+            artifact.processing_language = Some(request.language.as_whisper_code().to_string());
+            artifact.whisper_options_json = serde_json::to_string(&request.whisper_options).ok();
+            artifact.ai_provider_snapshot_json = Some(
+                serde_json::json!({
+                    "enabled": request.enable_ai,
+                })
+                .to_string(),
+            );
+            artifact.set_source_external_path(request.input_path.clone());
 
             self.run_cancellable(&cancellation_token, self.artifacts.save(&artifact))
                 .await?;

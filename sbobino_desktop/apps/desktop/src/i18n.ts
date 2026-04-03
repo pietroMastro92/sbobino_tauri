@@ -170,6 +170,26 @@ const translations: AllTranslations = {
     "settings.advanced.ffmpegPath": "FFmpeg path",
     "settings.advanced.modelsDir": "Models directory",
     "settings.advanced.reloadFromDisk": "Reload from disk",
+    "settings.advanced.backupSection": "Backup & Restore",
+    "settings.advanced.backupHelp":
+      "Create a password-protected portable backup of the app memory, then import it later on this or another device.",
+    "settings.advanced.backupWorking": "Working...",
+    "settings.advanced.exportBackup": "Export backup",
+    "settings.advanced.importBackup": "Import backup",
+    "settings.advanced.backupFile": "Sbobino backup",
+    "settings.advanced.backupPasswordPrompt":
+      "Enter a password to encrypt this portable backup.",
+    "settings.advanced.backupPasswordConfirmPrompt":
+      "Re-enter the backup password to confirm.",
+    "settings.advanced.backupPasswordMismatch": "Backup passwords do not match.",
+    "settings.advanced.backupPasswordTooShort":
+      "Backup password must be at least 8 characters long.",
+    "settings.advanced.backupExported": "Backup exported successfully.",
+    "settings.advanced.backupImportTitle": "Import backup",
+    "settings.advanced.backupImportConfirm":
+      "Importing a backup will replace the current local archive on this device. Continue?",
+    "settings.advanced.backupImportPasswordPrompt":
+      "Enter the password used to encrypt this backup.",
     "settings.unavailable": "Settings unavailable.",
     "settings.searchPlaceholder": "Search settings...",
     "settings.noMatch": "No section matches your search.",
@@ -654,6 +674,27 @@ const translations: AllTranslations = {
     "settings.advanced.ffmpegPath": "Percorso FFmpeg",
     "settings.advanced.modelsDir": "Cartella modelli",
     "settings.advanced.reloadFromDisk": "Ricarica dal disco",
+    "settings.advanced.backupSection": "Backup e ripristino",
+    "settings.advanced.backupHelp":
+      "Crea un backup portabile protetto da password della memoria dell'app e importalo più tardi su questo o su un altro dispositivo.",
+    "settings.advanced.backupWorking": "Operazione in corso...",
+    "settings.advanced.exportBackup": "Esporta backup",
+    "settings.advanced.importBackup": "Importa backup",
+    "settings.advanced.backupFile": "Backup Sbobino",
+    "settings.advanced.backupPasswordPrompt":
+      "Inserisci una password per cifrare questo backup portabile.",
+    "settings.advanced.backupPasswordConfirmPrompt":
+      "Reinserisci la password del backup per confermare.",
+    "settings.advanced.backupPasswordMismatch":
+      "Le password del backup non coincidono.",
+    "settings.advanced.backupPasswordTooShort":
+      "La password del backup deve contenere almeno 8 caratteri.",
+    "settings.advanced.backupExported": "Backup esportato con successo.",
+    "settings.advanced.backupImportTitle": "Importa backup",
+    "settings.advanced.backupImportConfirm":
+      "Importare un backup sostituirà l'archivio locale attuale su questo dispositivo. Continuare?",
+    "settings.advanced.backupImportPasswordPrompt":
+      "Inserisci la password usata per cifrare questo backup.",
     "settings.unavailable": "Impostazioni non disponibili.",
     "settings.searchPlaceholder": "Cerca impostazioni...",
     "settings.noMatch": "Nessuna sezione corrisponde alla ricerca.",
@@ -1108,6 +1149,27 @@ const translations: AllTranslations = {
     "settings.advanced.ffmpegPath": "Ruta a FFmpeg",
     "settings.advanced.modelsDir": "Directorio de modelos",
     "settings.advanced.reloadFromDisk": "Recargar desde el disco",
+    "settings.advanced.backupSection": "Copia y restauración",
+    "settings.advanced.backupHelp":
+      "Crea una copia portátil protegida con contraseña de la memoria de la app y vuelve a importarla después en este u otro dispositivo.",
+    "settings.advanced.backupWorking": "Procesando...",
+    "settings.advanced.exportBackup": "Exportar copia",
+    "settings.advanced.importBackup": "Importar copia",
+    "settings.advanced.backupFile": "Copia de Sbobino",
+    "settings.advanced.backupPasswordPrompt":
+      "Introduce una contraseña para cifrar esta copia portátil.",
+    "settings.advanced.backupPasswordConfirmPrompt":
+      "Vuelve a introducir la contraseña para confirmar.",
+    "settings.advanced.backupPasswordMismatch":
+      "Las contraseñas de la copia no coinciden.",
+    "settings.advanced.backupPasswordTooShort":
+      "La contraseña de la copia debe tener al menos 8 caracteres.",
+    "settings.advanced.backupExported": "Copia exportada correctamente.",
+    "settings.advanced.backupImportTitle": "Importar copia",
+    "settings.advanced.backupImportConfirm":
+      "Importar una copia reemplazará el archivo local actual en este dispositivo. ¿Continuar?",
+    "settings.advanced.backupImportPasswordPrompt":
+      "Introduce la contraseña usada para cifrar esta copia.",
     "settings.unavailable": "Configuración no disponible.",
     "settings.searchPlaceholder": "Buscar ajustes...",
     "settings.noMatch": "Ninguna sección coincide con tu búsqueda.",
@@ -1606,6 +1668,27 @@ const translations: AllTranslations = {
     "settings.advanced.ffmpegPath": "FFmpeg Pfad",
     "settings.advanced.modelsDir": "Modellverzeichnis",
     "settings.advanced.reloadFromDisk": "Vom Datenträger neu laden",
+    "settings.advanced.backupSection": "Backup und Wiederherstellung",
+    "settings.advanced.backupHelp":
+      "Erstellen Sie ein passwortgeschütztes portables Backup des App-Speichers und importieren Sie es später auf diesem oder einem anderen Gerät.",
+    "settings.advanced.backupWorking": "Wird ausgeführt...",
+    "settings.advanced.exportBackup": "Backup exportieren",
+    "settings.advanced.importBackup": "Backup importieren",
+    "settings.advanced.backupFile": "Sbobino-Backup",
+    "settings.advanced.backupPasswordPrompt":
+      "Geben Sie ein Passwort ein, um dieses portable Backup zu verschlüsseln.",
+    "settings.advanced.backupPasswordConfirmPrompt":
+      "Geben Sie das Backup-Passwort zur Bestätigung erneut ein.",
+    "settings.advanced.backupPasswordMismatch":
+      "Die Backup-Passwörter stimmen nicht überein.",
+    "settings.advanced.backupPasswordTooShort":
+      "Das Backup-Passwort muss mindestens 8 Zeichen lang sein.",
+    "settings.advanced.backupExported": "Backup erfolgreich exportiert.",
+    "settings.advanced.backupImportTitle": "Backup importieren",
+    "settings.advanced.backupImportConfirm":
+      "Beim Import eines Backups wird das aktuelle lokale Archiv auf diesem Gerät ersetzt. Fortfahren?",
+    "settings.advanced.backupImportPasswordPrompt":
+      "Geben Sie das Passwort ein, mit dem dieses Backup verschlüsselt wurde.",
     "settings.unavailable": "Einstellungen nicht verfügbar.",
     "settings.searchPlaceholder": "Einstellungen suchen...",
     "settings.noMatch": "Kein Bereich entspricht Ihrer Suche.",

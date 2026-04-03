@@ -266,6 +266,11 @@ pub struct ReadAudioFilePayload {
     pub path: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ReadArtifactAudioPayload {
+    pub artifact_id: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct DeleteArtifactsResponse {
     pub deleted: usize,
@@ -1573,6 +1578,19 @@ pub async fn read_audio_file(payload: ReadAudioFilePayload) -> Result<Vec<u8>, C
         .map_err(|e| CommandError::new("audio", format!("failed to read audio file: {e}")))
 }
 
+#[tauri::command]
+pub async fn read_artifact_audio(
+    state: State<'_, AppState>,
+    payload: ReadArtifactAudioPayload,
+) -> Result<Vec<u8>, CommandError> {
+    state
+        .artifact_service
+        .read_audio_bytes(&payload.artifact_id)
+        .await
+        .map_err(CommandError::from)?
+        .ok_or_else(|| CommandError::new("audio", "artifact audio is not available"))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct TrimRegion {
     pub start: f64,
@@ -1581,7 +1599,8 @@ pub struct TrimRegion {
 
 #[derive(Debug, Deserialize)]
 pub struct WriteTrimmedAudioPayload {
-    pub input_path: String,
+    pub artifact_id: Option<String>,
+    pub input_path: Option<String>,
     pub regions: Vec<TrimRegion>,
 }
 
@@ -1603,14 +1622,6 @@ pub async fn write_trimmed_audio(
         return Err(CommandError::new("trim", "no regions selected"));
     }
 
-    let input = Path::new(&payload.input_path);
-    if !input.exists() {
-        return Err(CommandError::new(
-            "trim",
-            format!("input file not found: {}", payload.input_path),
-        ));
-    }
-
     // Resolve the bundled ffmpeg binary path
     let settings = state
         .settings_service
@@ -1622,6 +1633,33 @@ pub async fn write_trimmed_audio(
         .resolve_binary_path(&settings.transcription.ffmpeg_path, "ffmpeg");
 
     let temp_dir = std::env::temp_dir();
+    let source_path = if let Some(artifact_id) = payload.artifact_id.as_deref() {
+        let bytes = state
+            .artifact_service
+            .read_audio_bytes(artifact_id)
+            .await
+            .map_err(CommandError::from)?
+            .ok_or_else(|| CommandError::new("trim", "artifact audio is not available"))?;
+        let temp_input = temp_dir.join(format!("sbobino_trim_source_{artifact_id}.wav"));
+        tokio::fs::write(&temp_input, bytes)
+            .await
+            .map_err(|e| CommandError::new("trim", format!("failed to write temporary trim source: {e}")))?;
+        temp_input
+    } else {
+        let Some(input_path) = payload.input_path.as_deref() else {
+            return Err(CommandError::new("trim", "missing input source for trim"));
+        };
+        let input = Path::new(input_path);
+        if !input.exists() {
+            return Err(CommandError::new(
+                "trim",
+                format!("input file not found: {input_path}"),
+            ));
+        }
+        input.to_path_buf()
+    };
+    let input = source_path.as_path();
+
     let stem = input
         .file_stem()
         .and_then(|s| s.to_str())
@@ -2077,7 +2115,8 @@ fn export_json(
         "job_id": artifact.job_id,
         "title": artifact.title,
         "kind": artifact.kind.as_str(),
-        "input_path": artifact.input_path,
+        "source_label": artifact.source_label,
+        "source_origin": artifact.source_origin,
         "created_at": artifact.created_at.to_rfc3339(),
         "updated_at": artifact.updated_at.to_rfc3339(),
         "style": style,
@@ -2903,12 +2942,27 @@ mod tests {
             job_id: "job-1".to_string(),
             title: "Sample".to_string(),
             kind: ArtifactKind::File,
-            input_path: "/tmp/sample.wav".to_string(),
+            source_label: "/tmp/sample.wav".to_string(),
+            source_origin: sbobino_domain::ArtifactSourceOrigin::Imported,
+            audio_available: true,
+            audio_backfill_status: sbobino_domain::ArtifactAudioBackfillStatus::Imported,
+            revision: 1,
             raw_transcript: text.to_string(),
             optimized_transcript: String::new(),
             summary: String::new(),
             faqs: String::new(),
             metadata: BTreeMap::new(),
+            parent_artifact_id: None,
+            processing_engine: Some("whisper_cpp".to_string()),
+            processing_model: Some("base".to_string()),
+            processing_language: Some("en".to_string()),
+            audio_duration_seconds: Some(42.0),
+            audio_byte_size: Some(2048),
+            source_external_path: None,
+            whisper_options_json: None,
+            diarization_settings_json: None,
+            ai_provider_snapshot_json: None,
+            source_fingerprint_json: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }

@@ -118,6 +118,7 @@ pub trait ArtifactRepository: Send + Sync {
     async fn hard_delete_many(&self, ids: &[String]) -> Result<usize, ApplicationError>;
     async fn purge_deleted_older_than_days(&self, days: u32) -> Result<usize, ApplicationError>;
     async fn delete_many(&self, ids: &[String]) -> Result<usize, ApplicationError>;
+    async fn read_audio_bytes(&self, id: &str) -> Result<Option<Vec<u8>>, ApplicationError>;
 }
 
 #[async_trait]

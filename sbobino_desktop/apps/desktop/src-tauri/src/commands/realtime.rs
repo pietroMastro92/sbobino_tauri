@@ -8,7 +8,9 @@ use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
 use sbobino_application::{ApplicationError, RealtimeDelta};
-use sbobino_domain::{ArtifactKind, LanguageCode, SpeechModel, TranscriptArtifact};
+use sbobino_domain::{
+    ArtifactKind, ArtifactSourceOrigin, LanguageCode, SpeechModel, TranscriptArtifact,
+};
 
 use crate::{error::CommandError, state::AppState};
 
@@ -249,17 +251,18 @@ pub async fn stop_realtime(
         },
     );
 
-    let input_path = stop_result
+    let source_label = stop_result
         .saved_audio_path
         .as_ref()
-        .map(|path| path.to_string_lossy().to_string())
+        .and_then(|path| path.file_name().and_then(|name| name.to_str()).map(str::to_string))
         .unwrap_or_else(|| format!("{session_title}.wav"));
 
-    let artifact = TranscriptArtifact::new(
+    let mut artifact = TranscriptArtifact::new(
         Uuid::new_v4().to_string(),
         session_title.clone(),
         ArtifactKind::Realtime,
-        input_path,
+        source_label,
+        ArtifactSourceOrigin::Realtime,
         stop_result.transcript,
         optimized,
         summary,
@@ -267,6 +270,13 @@ pub async fn stop_realtime(
         metadata,
     )
     .map_err(|e| CommandError::new("validation", e.to_string()))?;
+    artifact.audio_available = stop_result.saved_audio_path.is_some();
+    artifact.audio_duration_seconds = payload.elapsed_seconds.map(|value| value as f32);
+    artifact.processing_engine = Some("whisper_stream".to_string());
+    artifact.processing_language = Some(state.realtime.language_code.lock().await.clone());
+    if let Some(path) = stop_result.saved_audio_path.as_ref() {
+        artifact.set_source_external_path(path.to_string_lossy().to_string());
+    }
 
     state
         .artifact_service

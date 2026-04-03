@@ -6,8 +6,12 @@ use rusqlite::Connection;
 use tempfile::tempdir;
 
 use sbobino_application::ArtifactRepository;
-use sbobino_domain::{ArtifactKind, TranscriptArtifact};
+use sbobino_domain::{ArtifactKind, ArtifactSourceOrigin, TranscriptArtifact};
 use sbobino_infrastructure::repositories::sqlite_artifact_repository::SqliteArtifactRepository;
+
+fn enable_local_secure_storage_for_tests() {
+    std::env::set_var("SBOBINO_ALLOW_INSECURE_LOCAL_SECRETS", "1");
+}
 
 fn artifact_with_job(job_id: &str, input_path: &str, transcript: &str) -> TranscriptArtifact {
     TranscriptArtifact::new(
@@ -19,6 +23,7 @@ fn artifact_with_job(job_id: &str, input_path: &str, transcript: &str) -> Transc
             .to_string(),
         ArtifactKind::File,
         input_path.to_string(),
+        ArtifactSourceOrigin::Imported,
         transcript.to_string(),
         transcript.to_string(),
         String::new(),
@@ -30,6 +35,7 @@ fn artifact_with_job(job_id: &str, input_path: &str, transcript: &str) -> Transc
 
 #[tokio::test]
 async fn save_then_get_by_id_returns_persisted_artifact() {
+    enable_local_secure_storage_for_tests();
     let temp = tempdir().expect("failed to create temp dir");
     let db_path = temp.path().join("artifacts.db");
     let repo = SqliteArtifactRepository::new(db_path).expect("repo should initialize");
@@ -52,6 +58,7 @@ async fn save_then_get_by_id_returns_persisted_artifact() {
 
 #[tokio::test]
 async fn list_recent_returns_newest_first_with_limit() {
+    enable_local_secure_storage_for_tests();
     let temp = tempdir().expect("failed to create temp dir");
     let db_path = temp.path().join("artifacts.db");
     let repo = SqliteArtifactRepository::new(db_path).expect("repo should initialize");
@@ -81,14 +88,15 @@ async fn list_recent_returns_newest_first_with_limit() {
 }
 
 #[tokio::test]
-async fn rename_updates_title_without_mutating_input_path() {
+async fn rename_updates_title_without_mutating_source_label() {
+    enable_local_secure_storage_for_tests();
     let temp = tempdir().expect("failed to create temp dir");
     let db_path = temp.path().join("artifacts.db");
     let repo = SqliteArtifactRepository::new(db_path).expect("repo should initialize");
 
     let artifact = artifact_with_job("job-a", "/tmp/my-audio-file.wav", "hello transcript");
     let artifact_id = artifact.id.clone();
-    let original_input_path = artifact.input_path.clone();
+    let original_source_label = artifact.source_label.clone();
 
     repo.save(&artifact).await.expect("save should succeed");
 
@@ -99,7 +107,7 @@ async fn rename_updates_title_without_mutating_input_path() {
         .expect("artifact should exist");
 
     assert_eq!(renamed.title, "renamed title");
-    assert_eq!(renamed.input_path, original_input_path);
+    assert_eq!(renamed.source_label, original_source_label);
 
     let loaded = repo
         .get_by_id(&artifact_id)
@@ -108,11 +116,12 @@ async fn rename_updates_title_without_mutating_input_path() {
         .expect("artifact should exist");
 
     assert_eq!(loaded.title, "renamed title");
-    assert_eq!(loaded.input_path, original_input_path);
+    assert_eq!(loaded.source_label, original_source_label);
 }
 
 #[tokio::test]
 async fn soft_delete_restore_and_hard_delete_follow_trash_flow() {
+    enable_local_secure_storage_for_tests();
     let temp = tempdir().expect("failed to create temp dir");
     let db_path = temp.path().join("artifacts.db");
     let repo = SqliteArtifactRepository::new(db_path).expect("repo should initialize");
@@ -170,6 +179,7 @@ async fn soft_delete_restore_and_hard_delete_follow_trash_flow() {
 
 #[tokio::test]
 async fn purge_deleted_older_than_days_removes_only_expired_items() {
+    enable_local_secure_storage_for_tests();
     let temp = tempdir().expect("failed to create temp dir");
     let db_path = temp.path().join("artifacts.db");
     let repo = SqliteArtifactRepository::new(db_path.clone()).expect("repo should initialize");
@@ -216,6 +226,7 @@ async fn purge_deleted_older_than_days_removes_only_expired_items() {
 
 #[test]
 fn migrates_legacy_schema_before_creating_kind_index() {
+    enable_local_secure_storage_for_tests();
     let temp = tempdir().expect("failed to create temp dir");
     let db_path = temp.path().join("artifacts.db");
 
@@ -256,9 +267,11 @@ fn migrates_legacy_schema_before_creating_kind_index() {
         .collect::<Result<Vec<_>, _>>()
         .expect("pragma rows should parse");
 
-    assert!(names.contains(&"title".to_string()));
+    assert!(names.contains(&"title_enc".to_string()));
     assert!(names.contains(&"kind".to_string()));
     assert!(names.contains(&"updated_at".to_string()));
     assert!(names.contains(&"is_deleted".to_string()));
     assert!(names.contains(&"deleted_at".to_string()));
+    assert!(names.contains(&"source_label_enc".to_string()));
+    assert!(names.contains(&"audio_backfill_status".to_string()));
 }

@@ -14,8 +14,9 @@ use sbobino_application::{
     TranscriptionService,
 };
 use sbobino_domain::{
-    ArtifactKind, JobProgress, JobStage, LanguageCode, SpeakerTurn, SpeechModel, TimedSegment,
-    TranscriptArtifact, TranscriptionOutput, WhisperOptions,
+    ArtifactKind, ArtifactSourceOrigin, JobProgress, JobStage, LanguageCode, SpeakerTurn,
+    SpeechModel, TimedSegment, TranscriptArtifact, TranscriptionEngine, TranscriptionOutput,
+    WhisperOptions,
 };
 
 const HAS_OPTIMIZED_TRANSCRIPT_METADATA_KEY: &str = "has_optimized_transcript";
@@ -268,7 +269,7 @@ impl ArtifactRepository for InMemoryArtifactRepository {
                     .is_none_or(|expected| &artifact.kind == expected);
                 let query_match = query.as_ref().is_none_or(|needle| {
                     artifact.title.to_lowercase().contains(needle)
-                        || artifact.input_path.to_lowercase().contains(needle)
+                        || artifact.source_label.to_lowercase().contains(needle)
                         || artifact
                             .optimized_transcript
                             .to_lowercase()
@@ -422,7 +423,7 @@ impl ArtifactRepository for InMemoryArtifactRepository {
                     .is_none_or(|expected| &artifact.kind == expected);
                 let query_match = query.as_ref().is_none_or(|needle| {
                     artifact.title.to_lowercase().contains(needle)
-                        || artifact.input_path.to_lowercase().contains(needle)
+                        || artifact.source_label.to_lowercase().contains(needle)
                         || artifact
                             .optimized_transcript
                             .to_lowercase()
@@ -469,6 +470,12 @@ impl ArtifactRepository for InMemoryArtifactRepository {
     async fn purge_deleted_older_than_days(&self, _days: u32) -> Result<usize, ApplicationError> {
         Ok(0)
     }
+
+    async fn read_audio_bytes(&self, _id: &str) -> Result<Option<Vec<u8>>, ApplicationError> {
+        Err(ApplicationError::Persistence(
+            "audio bytes not available in test repository".to_string(),
+        ))
+    }
 }
 
 #[tokio::test]
@@ -500,7 +507,9 @@ async fn run_file_transcription_without_ai_emits_expected_stages_and_persists() 
                 input_path: input_path.to_string_lossy().to_string(),
                 language: LanguageCode::En,
                 model: SpeechModel::Base,
+                engine: TranscriptionEngine::WhisperCpp,
                 enable_ai: false,
+                source_origin: ArtifactSourceOrigin::Imported,
                 whisper_options: WhisperOptions::default(),
                 title: None,
                 parent_id: None,
@@ -595,7 +604,9 @@ async fn run_file_transcription_emits_final_transcript_snapshot_before_post_proc
                 input_path: input_path.to_string_lossy().to_string(),
                 language: LanguageCode::En,
                 model: SpeechModel::Base,
+                engine: TranscriptionEngine::WhisperCpp,
                 enable_ai: false,
+                source_origin: ArtifactSourceOrigin::Imported,
                 whisper_options: WhisperOptions::default(),
                 title: None,
                 parent_id: None,
@@ -649,7 +660,9 @@ async fn run_file_transcription_with_ai_runs_enhancer_steps() {
                 input_path: input_path.to_string_lossy().to_string(),
                 language: LanguageCode::En,
                 model: SpeechModel::Small,
+                engine: TranscriptionEngine::WhisperCpp,
                 enable_ai: true,
+                source_origin: ArtifactSourceOrigin::Imported,
                 whisper_options: WhisperOptions::default(),
                 title: None,
                 parent_id: None,
@@ -722,7 +735,9 @@ async fn run_file_transcription_rejects_missing_input_path() {
                 input_path: "non-existent-file.wav".to_string(),
                 language: LanguageCode::En,
                 model: SpeechModel::Base,
+                engine: TranscriptionEngine::WhisperCpp,
                 enable_ai: false,
+                source_origin: ArtifactSourceOrigin::Imported,
                 whisper_options: WhisperOptions::default(),
                 title: None,
                 parent_id: None,
@@ -798,7 +813,9 @@ async fn run_file_transcription_assigns_speakers_into_timeline_metadata() {
                 input_path: input_path.to_string_lossy().to_string(),
                 language: LanguageCode::En,
                 model: SpeechModel::Base,
+                engine: TranscriptionEngine::WhisperCpp,
                 enable_ai: false,
+                source_origin: ArtifactSourceOrigin::Imported,
                 whisper_options: WhisperOptions::default(),
                 title: None,
                 parent_id: None,
@@ -861,7 +878,9 @@ async fn run_file_transcription_persists_diarization_failure_metadata() {
                 input_path: input_path.to_string_lossy().to_string(),
                 language: LanguageCode::En,
                 model: SpeechModel::Base,
+                engine: TranscriptionEngine::WhisperCpp,
                 enable_ai: false,
+                source_origin: ArtifactSourceOrigin::Imported,
                 whisper_options: WhisperOptions::default(),
                 title: None,
                 parent_id: None,
@@ -917,7 +936,9 @@ async fn run_file_transcription_keeps_raw_transcript_when_ai_fails() {
                 input_path: input_path.to_string_lossy().to_string(),
                 language: LanguageCode::En,
                 model: SpeechModel::Small,
+                engine: TranscriptionEngine::WhisperCpp,
                 enable_ai: true,
+                source_origin: ArtifactSourceOrigin::Imported,
                 whisper_options: WhisperOptions::default(),
                 title: None,
                 parent_id: None,
@@ -989,7 +1010,9 @@ async fn run_file_transcription_falls_back_to_secondary_ai_provider() {
                 input_path: input_path.to_string_lossy().to_string(),
                 language: LanguageCode::En,
                 model: SpeechModel::Small,
+                engine: TranscriptionEngine::WhisperCpp,
                 enable_ai: true,
+                source_origin: ArtifactSourceOrigin::Imported,
                 whisper_options: WhisperOptions::default(),
                 title: None,
                 parent_id: None,

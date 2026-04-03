@@ -4399,6 +4399,10 @@ body.sidebar-resizing {
   align-content: start;
 }
 
+.detail-inspector--chat .inspector-body {
+  overflow: hidden;
+}
+
 .inspector-body > * {
   min-width: 0;
 }
@@ -5339,6 +5343,7 @@ body.sidebar-resizing {
 .settings-window-frame .settings-layout {
   flex: 1 1 auto;
   min-height: 0;
+  height: 100%;
 }
 
 .settings-window-error {
@@ -5351,6 +5356,8 @@ body.sidebar-resizing {
   display: grid;
   grid-template-columns: clamp(220px, 24vw, 280px) minmax(0, 1fr);
   flex: 1;
+  min-height: 0;
+  height: 100%;
   background: transparent;
 }
 
@@ -5362,6 +5369,7 @@ body.sidebar-resizing {
   display: flex;
   flex-direction: column;
   gap: 20px;
+  min-height: 0;
   align-content: start;
   overflow: auto;
 }
@@ -5481,10 +5489,22 @@ body.sidebar-resizing {
   padding: clamp(20px, 2.8vw, 32px);
   overflow: auto;
   min-width: 0;
+  min-height: 0;
   width: 100%;
   max-width: none;
   display: grid;
   align-content: start;
+}
+
+.settings-pane {
+  width: 100%;
+  min-width: 0;
+}
+
+.settings-pane--advanced,
+.settings-pane--ai_services,
+.settings-pane--prompts {
+  min-height: 100%;
 }
 
 .settings-stack,
@@ -5525,6 +5545,13 @@ body.sidebar-resizing {
   margin: 0;
   color: var(--muted);
   font-size: 0.86rem;
+}
+
+.settings-help-text {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.45;
 }
 
 .settings-row {
@@ -5807,6 +5834,16 @@ body.sidebar-resizing {
   gap: 12px;
 }
 
+.settings-pane--ai_services > .settings-stack {
+  min-height: 100%;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.settings-pane--ai_services .ai-services-panel {
+  min-height: 100%;
+  align-content: start;
+}
+
 .ai-services-notice {
   display: flex;
   align-items: center;
@@ -6030,12 +6067,20 @@ body.sidebar-resizing {
   display: grid;
   grid-template-columns: 300px 1fr;
   gap: 12px;
+  align-items: start;
+}
+
+.settings-pane--prompts > .settings-prompts-layout {
+  min-height: 100%;
+  align-items: stretch;
 }
 
 .prompt-sidebar {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 10px;
-  align-content: start;
+  min-height: 0;
+  align-content: stretch;
 }
 
 .prompt-template-list {
@@ -6043,7 +6088,8 @@ body.sidebar-resizing {
   border-radius: 12px;
   background: var(--surface);
   overflow: auto;
-  max-height: 420px;
+  max-height: none;
+  min-height: 0;
 }
 
 .prompt-template-row {
@@ -6075,7 +6121,20 @@ body.sidebar-resizing {
 }
 
 .prompt-editor-pane {
-  min-height: 640px;
+  min-height: 0;
+  overflow: auto;
+  align-content: start;
+}
+
+.settings-pane--advanced > .settings-stack {
+  min-height: 100%;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.settings-pane--advanced .settings-panel:first-child {
+  min-height: 0;
+  align-content: start;
 }
 
 .prompt-test-row {
@@ -6590,7 +6649,7 @@ body.sidebar-resizing {
   }
 
   [data-theme="dark"] .sidebar-resize-handle::before {
-    background: rgba(223, 208, 184, 0.22);
+    background: transparent;
   }
 
   [data-theme="dark"] .sidebar-resize-handle:hover::before,
