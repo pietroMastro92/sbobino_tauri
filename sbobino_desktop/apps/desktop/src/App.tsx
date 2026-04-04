@@ -4612,7 +4612,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
       if (!snapshot.runtimeHealth.pyannote.ready) {
         setInitialSetupStepLabel(
-          t("setup.firstLaunch.preparingPyannote", "Preparing bundled diarization runtime..."),
+          t("setup.firstLaunch.preparingPyannote", "Installing speaker diarization runtime..."),
         );
         await waitForProvisioningRun(() => provisioningInstallPyannote(false));
         snapshot = await loadStartupRequirements();

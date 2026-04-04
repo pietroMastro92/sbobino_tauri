@@ -37,10 +37,10 @@
 - Staple notarization ticket with `xcrun stapler`.
 - Inject the updater public key in CI before `tauri build`:
   - `./scripts/prepare_release_updater_config.sh apps/desktop/src-tauri/tauri.conf.json "$TAURI_UPDATER_PUBLIC_KEY"`
-- Before `tauri build`, hydrate the bundled pyannote resources on the macOS build machine:
+- Before `tauri build`, hydrate the pyannote source assets on the macOS build machine:
   - `./scripts/setup_bundled_pyannote.sh --force`
   - this populates `apps/desktop/src-tauri/resources/pyannote/model` and `apps/desktop/src-tauri/resources/pyannote/python/<target-triple>`
-  - the packaged app then ships pyannote offline and auto-installs it on first launch without asking the end user to download anything
+  - the packaged app no longer bundles these files inside the DMG; CI zips them as release assets and the app installs them during first-launch setup
 - Build pyannote release assets before publishing the tag:
   - `./scripts/package_pyannote_asset.sh <runtime_aarch64_dir> python <output_zip>`
   - `./scripts/package_pyannote_asset.sh <model_dir> model <output_zip>`
@@ -80,7 +80,7 @@
 5. Migrate live transcription and recorder controls with a process/session manager abstraction.
 6. Migrate model management (download, validation, checksum, upgrades).
 7. Migrate advanced post-processing prompts and language variants.
-8. Validate updater flow by shipping `v0.1.0`, then publish `v0.1.1` and verify in-app update from the notarized arm64 release.
+8. Validate updater flow by shipping `v0.1.0`, then publish `v0.1.1` and verify in-app update from the public arm64 release.
 9. Run side-by-side comparison runs between Python and Tauri app outputs for confidence.
 10. Cut over when parity checklist is green and error telemetry is stable.
 

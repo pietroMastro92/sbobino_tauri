@@ -40,7 +40,7 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Prepare bundled pyannote runtime
+      - name: Prepare pyannote setup assets
         run: ../../scripts/setup_bundled_pyannote.sh --force
 
       - name: Inject updater public key
@@ -192,22 +192,23 @@ jobs:
           ### What is included
 
           - Native desktop app for macOS Apple Silicon.
-          - Bundled local backend components required to launch the app.
-          - Bundled pyannote runtime and model for local speaker diarization support.
-          - Automatic first-launch setup that downloads the Whisper models needed by the app.
+          - Guided first-launch setup for the local transcription runtime.
+          - Automatic first-launch download of the required Whisper models.
+          - Automatic first-launch installation of the pyannote diarization runtime and model when speaker diarization is enabled.
           - In-app update support for future releases.
 
           ### Download and installation
 
           - Download the \`.dmg\` file for the recommended macOS installation flow.
           - Open the disk image and drag **Sbobino** into the **Applications** folder.
-          - On first launch, accept the privacy terms and let the app complete the guided model setup.
+          - On first launch, accept the privacy terms and let the app complete the guided local runtime setup.
 
           ### Important notes
 
           - This release is intended for macOS Apple Silicon.
           - Apple notarization is applied only when Apple release credentials are configured in CI.
-          - The app stores local runtime assets on first use to complete the initial setup.
+          - Whisper models are downloaded on first launch.
+          - Pyannote diarization assets are provided as separate release downloads and installed by the app during setup instead of being bundled inside the DMG.
           EOF
 
       - name: Generate updater feed

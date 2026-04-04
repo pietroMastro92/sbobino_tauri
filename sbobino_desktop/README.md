@@ -26,8 +26,8 @@ From workspace root:
 
 1. `./scripts/setup_runtime.sh` (downloads `ggml-base.bin` into app data models dir)
 2. In app, keep `Model = Base` for first run.
-3. For a standalone build with bundled speaker diarization, run `./scripts/setup_bundled_pyannote.sh` before `npm run tauri:build`.
-4. If you are only testing diarization in development and do not bundle it, you can still install pyannote assets from `Settings > Local Models > Speaker Diarization`.
+3. For release builds, run `./scripts/setup_bundled_pyannote.sh` before `npm run tauri:build` so CI can publish the separate pyannote setup assets for first launch.
+4. The DMG itself no longer bundles pyannote; the app installs pyannote during the guided first-launch setup or from `Settings > Local Models > Speaker Diarization`.
 
 ## Current Milestone
 
