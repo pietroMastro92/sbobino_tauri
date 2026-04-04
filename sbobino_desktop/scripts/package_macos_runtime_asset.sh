@@ -40,8 +40,9 @@ PRIMARY_BINARIES=(
   "$FFMPEG_PREFIX/bin/ffmpeg"
 )
 
-declare -A COPIED_PATHS=()
 declare -a PENDING_TARGETS=()
+COPIED_PATHS_FILE="$STAGE_DIR/copied_paths.tsv"
+touch "$COPIED_PATHS_FILE"
 
 canonical_path() {
   realpath "$1"
@@ -100,15 +101,17 @@ copy_and_queue() {
   local base_name
   base_name=$(basename "$canonical")
   local target="$TARGET_ROOT/$base_name"
+  local existing_target
 
-  if [[ -n "${COPIED_PATHS[$canonical]:-}" ]]; then
-    echo "$target"
+  existing_target=$(awk -F $'\t' -v canonical="$canonical" '$1 == canonical { print $2; exit }' "$COPIED_PATHS_FILE")
+  if [[ -n "$existing_target" ]]; then
+    echo "$existing_target"
     return 0
   fi
 
   cp -L "$canonical" "$target"
   chmod u+w "$target"
-  COPIED_PATHS[$canonical]=$target
+  printf '%s\t%s\n' "$canonical" "$target" >> "$COPIED_PATHS_FILE"
   PENDING_TARGETS+=("$target::$canonical")
   echo "$target"
 }
