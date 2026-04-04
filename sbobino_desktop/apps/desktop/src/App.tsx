@@ -80,6 +80,7 @@ import {
   provisioningCancel,
   provisioningDownloadModel,
   provisioningInstallPyannote,
+  provisioningInstallRuntime,
   provisioningModels,
   provisioningStart,
   provisioningStatus,
@@ -1373,7 +1374,7 @@ function formatRealtimeStatusMessage(state: string): string {
 function formatRuntimeNotReadyMessage(): string {
   return t(
     "error.runtimeNotReadyDetails",
-    "Transcription runtime is not ready. Check Whisper CLI and Whisper Stream in Settings > Local Models.",
+    "Transcription runtime is not ready. Check FFmpeg, Whisper CLI, and Whisper Stream in Settings > Local Models.",
   );
 }
 
@@ -1392,6 +1393,10 @@ function formatTranscriptionPreflightMessage(preflight: TranscriptionStartPrefli
       "Model file '{model}' was not found at '{path}'. Download models from Settings > Local Models.",
       { model: preflight.model_filename, path: preflight.model_path },
     );
+  }
+
+  if (preflight.reason_code === "ffmpeg_missing") {
+    return preflight.message;
   }
 
   if (preflight.reason_code.startsWith("pyannote_")) {
@@ -2269,9 +2274,11 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   const windowFrameRef = useRef<HTMLElement | null>(null);
   const detailLayoutRef = useRef<HTMLDivElement | null>(null);
   const autoInitialSetupAttemptedRef = useRef(false);
+  const provisioningProgressKindRef = useRef<ProvisioningProgressEvent["asset_kind"] | null>(null);
 
   const privacyPolicyAccepted = hasAcceptedCurrentPrivacyPolicy(settings);
-  const runtimeToolchainReady = runtimeHealth?.whisper_cli_available === true
+  const runtimeToolchainReady = runtimeHealth?.ffmpeg_available === true
+    && runtimeHealth?.whisper_cli_available === true
     && runtimeHealth?.whisper_stream_available === true;
   const pyannoteReady = runtimeHealth?.pyannote.ready ?? false;
   const missingInitialSetupModels = getInitialSetupMissingModels(modelCatalog, platformIsAppleSilicon);
@@ -3219,6 +3226,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       if (unmounted) { uRealtimeSaved(); } else { unsubRealtimeSaved = uRealtimeSaved; }
 
       const uProvisioningProgress = await subscribeProvisioningProgress((event) => {
+        provisioningProgressKindRef.current = event.asset_kind;
         setProvisioning((previous) => ({
           ...previous,
           running: true,
@@ -3231,7 +3239,9 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       const uProvisioningStatus = await subscribeProvisioningStatus((event) => {
         const localizedStatusMessage =
           event.state === "completed"
-            ? t("settings.localModels.readyMessage", "Local models are ready")
+            ? provisioningProgressKindRef.current === "speech_runtime"
+              ? t("provisioning.runtimeReady", "Local transcription runtime is ready")
+              : t("settings.localModels.readyMessage", "Local models are ready")
             : event.state === "cancelled"
               ? t("provisioning.cancelled", "Provisioning cancelled")
               : event.reason_code === "pyannote_runtime_missing"
@@ -3247,10 +3257,14 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           progress: event.state === "completed" ? previous.progress : null,
           ready: event.state === "completed" ? true : previous.ready,
         }));
+        if (event.state !== "running") {
+          provisioningProgressKindRef.current = null;
+        }
 
         if (event.state === "completed") {
           void refreshProvisioningStatus();
           void refreshProvisioningModels();
+          void refreshRuntimeHealth();
         }
       });
       if (unmounted) { uProvisioningStatus(); } else { unsubProvisioningStatus = uProvisioningStatus; }
@@ -4604,7 +4618,20 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       let snapshot = await loadStartupRequirements();
 
       if (
-        !snapshot.runtimeHealth.whisper_cli_available
+        !snapshot.runtimeHealth.ffmpeg_available
+        || !snapshot.runtimeHealth.whisper_cli_available
+        || !snapshot.runtimeHealth.whisper_stream_available
+      ) {
+        setInitialSetupStepLabel(
+          t("setup.firstLaunch.preparingRuntime", "Installing local transcription runtime..."),
+        );
+        await waitForProvisioningRun(() => provisioningInstallRuntime(false));
+        snapshot = await loadStartupRequirements();
+      }
+
+      if (
+        !snapshot.runtimeHealth.ffmpeg_available
+        || !snapshot.runtimeHealth.whisper_cli_available
         || !snapshot.runtimeHealth.whisper_stream_available
       ) {
         throw new Error(formatRuntimeNotReadyMessage());
@@ -6329,6 +6356,26 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         running: false,
       }));
       setError(formatUiError("error.modelDownloadFailed", "Model download failed", downloadError));
+    }
+  }
+
+  async function onInstallRuntime(force = false): Promise<void> {
+    try {
+      setProvisioning((previous) => ({
+        ...previous,
+        running: true,
+        progress: null,
+        statusMessage: force
+          ? t("provisioning.repairingRuntime", "Repairing local transcription runtime...")
+          : t("provisioning.installingRuntime", "Installing local transcription runtime..."),
+      }));
+      await provisioningInstallRuntime(force);
+    } catch (installError) {
+      setProvisioning((previous) => ({
+        ...previous,
+        running: false,
+      }));
+      setError(formatUiError("error.runtimeInstallFailed", "Local runtime install failed", installError));
     }
   }
 
@@ -9389,6 +9436,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       return <div className="settings-placeholder">{t("settings.unavailable")}</div>;
     }
     const pyannoteHealth = runtimeHealth?.pyannote ?? provisioning.pyannote;
+    const runtimeBusy = provisioning.running && provisioning.progress?.asset_kind === "speech_runtime";
     const pyannoteBusy = provisioning.running
       && (provisioning.progress?.asset_kind === "pyannote_runtime"
         || provisioning.progress?.asset_kind === "pyannote_model");
@@ -9429,6 +9477,17 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                       <span className="kind-chip">{t("settings.localModels.aligned")}</span>
                     ) : (
                       <span className="missing-chip">{t("settings.localModels.willAutoFix")}</span>
+                    )}
+                  </span>
+                </div>
+                <div className="settings-health-row">
+                  <span className="settings-health-label">{t("settings.advanced.ffmpegPath", "FFmpeg path")}</span>
+                  <span className="settings-health-value-inline">
+                    <code className="settings-health-value">{runtimeHealth.ffmpeg_resolved || runtimeHealth.ffmpeg_path}</code>
+                    {runtimeHealth.ffmpeg_available ? (
+                      <span className="kind-chip">{t("settings.localModels.runnable")}</span>
+                    ) : (
+                      <span className="missing-chip">{t("settings.localModels.unavailable")}</span>
                     )}
                   </span>
                 </div>
@@ -9510,6 +9569,20 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
           </div>
 
           <div className="notice-actions">
+            <button
+              className="secondary-button"
+              onClick={() => void onInstallRuntime(false)}
+              disabled={provisioning.running || runtimeToolchainReady}
+            >
+              {t("settings.localModels.installRuntime", "Install Local Runtime")}
+            </button>
+            <button
+              className="secondary-button"
+              onClick={() => void onInstallRuntime(true)}
+              disabled={provisioning.running}
+            >
+              {t("settings.localModels.repairRuntime", "Repair Runtime")}
+            </button>
             <button className="primary-button" onClick={() => void onProvisionModels()} disabled={provisioning.running}>
               {t("settings.localModels.downloadMissing", "Download Missing Models")}
             </button>
@@ -9523,7 +9596,9 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
               <div style={{ width: `${provisioning.progress.percentage}%` }} />
             </div>
           ) : null}
-          {provisioning.statusMessage ? <small className="muted">{provisioning.statusMessage}</small> : null}
+          {(runtimeBusy || provisioning.progress?.asset_kind !== "speech_runtime") && provisioning.statusMessage
+            ? <small className="muted">{provisioning.statusMessage}</small>
+            : null}
         </section>
 
         <section className="settings-panel">
@@ -10602,7 +10677,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
               <LoadingAnimation />
               <div>
                 <strong>{t("setup.firstLaunch.inspecting", "Inspecting local runtime...")}</strong>
-                <p>{t("setup.firstLaunch.inspectingDesc", "Checking bundled tools and local prerequisites.")}</p>
+                <p>{t("setup.firstLaunch.inspectingDesc", "Checking local tools and prerequisites.")}</p>
               </div>
             </div>
           ) : null}

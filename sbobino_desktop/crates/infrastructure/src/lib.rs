@@ -112,6 +112,9 @@ pub struct RuntimeHealth {
     pub is_apple_silicon: bool,
     pub preferred_engine: TranscriptionEngine,
     pub configured_engine: TranscriptionEngine,
+    pub ffmpeg_path: String,
+    pub ffmpeg_resolved: String,
+    pub ffmpeg_available: bool,
     pub whisper_cli_path: String,
     pub whisper_cli_resolved: String,
     pub whisper_cli_available: bool,
@@ -910,6 +913,9 @@ impl RuntimeTranscriptionFactory {
             self.resolve_binary_details(&whisper_cli_configured, "whisper-cli");
         let whisper_stream_resolution =
             self.resolve_binary_details(&whisper_stream_configured, "whisper-stream");
+        let ffmpeg_resolution =
+            self.resolve_binary_details(&settings.transcription.ffmpeg_path, "ffmpeg");
+        let ffmpeg_available = self.binary_path_is_runnable(&ffmpeg_resolution.resolved_path);
         let whisper_cli_available =
             self.binary_path_is_runnable(&whisper_cli_resolution.resolved_path);
         let whisper_stream_available =
@@ -931,6 +937,9 @@ impl RuntimeTranscriptionFactory {
             is_apple_silicon: is_apple_silicon_host(),
             preferred_engine: preferred_transcription_engine(),
             configured_engine: settings.transcription.engine.clone(),
+            ffmpeg_path: settings.transcription.ffmpeg_path.clone(),
+            ffmpeg_resolved: ffmpeg_resolution.resolved_path,
+            ffmpeg_available,
             whisper_cli_path: whisper_cli_configured,
             whisper_cli_resolved: whisper_cli_resolution.resolved_path,
             whisper_cli_available,

@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 1 ]]; then
+  echo "Usage: $0 <output_zip>" >&2
+  exit 1
+fi
+
+OUTPUT_ZIP=$1
+ROOT_NAME="bin"
+STAGE_DIR=$(mktemp -d)
+TARGET_ROOT="$STAGE_DIR/$ROOT_NAME"
+
+cleanup() {
+  rm -rf "$STAGE_DIR"
+}
+trap cleanup EXIT
+
+mkdir -p "$TARGET_ROOT"
+mkdir -p "$(dirname "$OUTPUT_ZIP")"
+rm -f "$OUTPUT_ZIP"
+
+WHISPER_CPP_PREFIX=$(brew --prefix whisper-cpp)
+FFMPEG_PREFIX=$(brew --prefix ffmpeg)
+SDL2_PREFIX=$(brew --prefix sdl2)
+
+SEARCH_DIRS=(
+  "$WHISPER_CPP_PREFIX/bin"
+  "$WHISPER_CPP_PREFIX/lib"
+  "$WHISPER_CPP_PREFIX/libexec/bin"
+  "$WHISPER_CPP_PREFIX/libexec/lib"
+  "$FFMPEG_PREFIX/bin"
+  "$FFMPEG_PREFIX/lib"
+  "$SDL2_PREFIX/lib"
+)
+
+PRIMARY_BINARIES=(
+  "$WHISPER_CPP_PREFIX/bin/whisper-cli"
+  "$WHISPER_CPP_PREFIX/bin/whisper-stream"
+  "$FFMPEG_PREFIX/bin/ffmpeg"
+)
+
+declare -A COPIED_PATHS=()
+declare -a PENDING_TARGETS=()
+
+canonical_path() {
+  realpath "$1"
+}
+
+should_skip_dependency() {
+  local dep=$1
+  [[ "$dep" == /System/* || "$dep" == /usr/lib/* ]]
+}
+
+resolve_dependency_path() {
+  local dep=$1
+  local source_dir=$2
+
+  if [[ "$dep" == /* ]]; then
+    if [[ -e "$dep" ]]; then
+      canonical_path "$dep"
+      return 0
+    fi
+    return 1
+  fi
+
+  local relative=${dep#@rpath/}
+  if [[ "$dep" == @loader_path/* ]]; then
+    relative=${dep#@loader_path/}
+    if [[ -e "$source_dir/$relative" ]]; then
+      canonical_path "$source_dir/$relative"
+      return 0
+    fi
+  fi
+
+  if [[ "$dep" == @executable_path/* ]]; then
+    relative=${dep#@executable_path/}
+    if [[ -e "$source_dir/$relative" ]]; then
+      canonical_path "$source_dir/$relative"
+      return 0
+    fi
+  fi
+
+  local base_name
+  base_name=$(basename "$relative")
+  for dir in "$source_dir" "${SEARCH_DIRS[@]}"; do
+    if [[ -e "$dir/$base_name" ]]; then
+      canonical_path "$dir/$base_name"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+copy_and_queue() {
+  local source=$1
+  local canonical
+  canonical=$(canonical_path "$source")
+  local base_name
+  base_name=$(basename "$canonical")
+  local target="$TARGET_ROOT/$base_name"
+
+  if [[ -n "${COPIED_PATHS[$canonical]:-}" ]]; then
+    echo "$target"
+    return 0
+  fi
+
+  cp -L "$canonical" "$target"
+  chmod u+w "$target"
+  COPIED_PATHS[$canonical]=$target
+  PENDING_TARGETS+=("$target::$canonical")
+  echo "$target"
+}
+
+for binary in "${PRIMARY_BINARIES[@]}"; do
+  if [[ ! -x "$binary" ]]; then
+    echo "Missing runtime binary: $binary" >&2
+    exit 1
+  fi
+  copy_and_queue "$binary" >/dev/null
+done
+
+while [[ ${#PENDING_TARGETS[@]} -gt 0 ]]; do
+  entry=${PENDING_TARGETS[0]}
+  PENDING_TARGETS=("${PENDING_TARGETS[@]:1}")
+
+  target=${entry%%::*}
+  source=${entry##*::}
+  source_dir=$(dirname "$source")
+
+  while IFS= read -r dep; do
+    if [[ -z "$dep" ]] || should_skip_dependency "$dep"; then
+      continue
+    fi
+
+    if ! resolved=$(resolve_dependency_path "$dep" "$source_dir"); then
+      echo "Unable to resolve dependency '$dep' for '$source'." >&2
+      exit 1
+    fi
+
+    copied_target=$(copy_and_queue "$resolved")
+    install_name_tool -change "$dep" "@executable_path/$(basename "$copied_target")" "$target"
+  done < <(otool -L "$source" | tail -n +2 | awk '{print $1}')
+
+  if [[ "$target" == *.dylib ]]; then
+    install_name_tool -id "@executable_path/$(basename "$target")" "$target"
+  fi
+done
+
+while IFS= read -r file; do
+  if file "$file" | grep -q "Mach-O"; then
+    codesign --force --sign - "$file" >/dev/null 2>&1 || true
+  fi
+done < <(find "$TARGET_ROOT" -type f | sort)
+
+ditto -c -k --sequesterRsrc --keepParent "$TARGET_ROOT" "$OUTPUT_ZIP"
+echo "Created $OUTPUT_ZIP"

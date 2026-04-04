@@ -309,6 +309,12 @@ export async function provisioningInstallPyannote(force = false): Promise<{ star
   });
 }
 
+export async function provisioningInstallRuntime(force = false): Promise<{ started: boolean }> {
+  return invoke<{ started: boolean }>("provisioning_install_runtime", {
+    payload: { force },
+  });
+}
+
 export async function provisioningCancel(): Promise<void> {
   return invoke<void>("provisioning_cancel");
 }

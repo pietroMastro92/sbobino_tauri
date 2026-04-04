@@ -82,6 +82,8 @@ const MODEL_CATALOG: [(&str, &str, &str, &str, &str); 5] = [
 
 const MODEL_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/";
 const RELEASE_REPOSITORY: &str = "pietroMastro92/sbobino_tauri";
+const RUNTIME_MANIFEST_ASSET: &str = "runtime-manifest.json";
+const RUNTIME_AARCH64_ASSET: &str = "speech-runtime-macos-aarch64.zip";
 const PYANNOTE_MANIFEST_ASSET: &str = "pyannote-manifest.json";
 const PYANNOTE_RUNTIME_AARCH64_ASSET: &str = "pyannote-runtime-macos-aarch64.zip";
 const PYANNOTE_RUNTIME_X86_64_ASSET: &str = "pyannote-runtime-macos-x86_64.zip";
@@ -104,6 +106,25 @@ struct PyannoteReleaseAsset {
 struct PyannoteAssetSelection {
     runtime_asset: PyannoteReleaseAsset,
     model_asset: PyannoteReleaseAsset,
+    release_version: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RuntimeReleaseManifest {
+    app_version: String,
+    assets: Vec<RuntimeReleaseAsset>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RuntimeReleaseAsset {
+    kind: String,
+    name: String,
+    sha256: String,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeAssetSelection {
+    runtime_asset: RuntimeReleaseAsset,
     release_version: String,
 }
 
@@ -146,6 +167,11 @@ pub struct ProvisioningDownloadModelPayload {
 
 #[derive(Debug, Deserialize)]
 pub struct ProvisioningInstallPyannotePayload {
+    pub force: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProvisioningInstallRuntimePayload {
     pub force: Option<bool>,
 }
 
@@ -426,6 +452,38 @@ pub async fn provisioning_install_pyannote(
         cancel_token,
         health.pyannote.ready,
     );
+
+    Ok(ProvisioningStartResponse { started: true })
+}
+
+#[tauri::command]
+pub async fn provisioning_install_runtime(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    payload: Option<ProvisioningInstallRuntimePayload>,
+) -> Result<ProvisioningStartResponse, CommandError> {
+    let force = payload.and_then(|value| value.force).unwrap_or(false);
+    let health = state
+        .runtime_factory
+        .runtime_health()
+        .map_err(|e| CommandError::new("runtime_health", e))?;
+    let runtime_ready =
+        health.ffmpeg_available && health.whisper_cli_available && health.whisper_stream_available;
+
+    if runtime_ready && !force {
+        emit_provisioning_status(
+            &app,
+            "completed",
+            "Local transcription runtime is already installed.",
+            None,
+        );
+        return Ok(ProvisioningStartResponse { started: false });
+    }
+
+    let cancel_token = CancellationToken::new();
+    *state.provisioning.cancel_token.lock().await = Some(cancel_token.clone());
+
+    spawn_runtime_provisioning_download(app, state.runtime_factory.clone(), cancel_token);
 
     Ok(ProvisioningStartResponse { started: true })
 }
@@ -837,6 +895,142 @@ fn spawn_pyannote_provisioning_download(
     });
 }
 
+fn spawn_runtime_provisioning_download(
+    app: tauri::AppHandle,
+    runtime_factory: std::sync::Arc<RuntimeTranscriptionFactory>,
+    cancel_token: CancellationToken,
+) {
+    tauri::async_runtime::spawn(async move {
+        let client = reqwest::Client::new();
+        let selection = match fetch_runtime_asset_selection(&client).await {
+            Ok(value) => value,
+            Err(error) => {
+                emit_provisioning_status(&app, "error", &error, Some("runtime_install_incomplete"));
+                return;
+            }
+        };
+
+        let data_dir = runtime_factory.data_dir().to_path_buf();
+        let runtime_dir = data_dir.join("runtime");
+        let destination = data_dir.join("bin");
+
+        if let Err(error) = tokio::fs::create_dir_all(&runtime_dir).await {
+            emit_provisioning_status(
+                &app,
+                "error",
+                &format!("Failed to create runtime directory: {error}"),
+                Some("runtime_install_incomplete"),
+            );
+            return;
+        }
+
+        let asset = selection.runtime_asset;
+        let url = release_asset_url(&selection.release_version, &asset.name);
+        let archive_path = runtime_dir.join(format!(".download-{}", asset.name));
+
+        if let Err(error) = download_to_path(&client, &url, &archive_path, &cancel_token).await {
+            let _ = tokio::fs::remove_file(&archive_path).await;
+            if error == "cancelled" {
+                emit_provisioning_status(
+                    &app,
+                    "cancelled",
+                    "Local runtime installation cancelled.",
+                    Some("cancelled"),
+                );
+                return;
+            }
+            emit_provisioning_status(
+                &app,
+                "error",
+                &format!("Failed to download {}: {error}", asset.name),
+                Some("runtime_install_incomplete"),
+            );
+            return;
+        }
+
+        match verify_file_sha256(&archive_path, &asset.sha256) {
+            Ok(()) => {}
+            Err(error) => {
+                let _ = tokio::fs::remove_file(&archive_path).await;
+                emit_provisioning_status(&app, "error", &error, Some("runtime_checksum_invalid"));
+                return;
+            }
+        }
+
+        let extraction = tokio::task::spawn_blocking({
+            let archive_path = archive_path.clone();
+            let runtime_dir = runtime_dir.clone();
+            let destination = destination.clone();
+            move || install_runtime_archive(&archive_path, &runtime_dir, &destination)
+        })
+        .await;
+
+        let _ = tokio::fs::remove_file(&archive_path).await;
+
+        match extraction {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                emit_provisioning_status(&app, "error", &error, Some("runtime_install_incomplete"));
+                return;
+            }
+            Err(error) => {
+                emit_provisioning_status(
+                    &app,
+                    "error",
+                    &format!("Failed to install local runtime: task join error: {error}"),
+                    Some("runtime_install_incomplete"),
+                );
+                return;
+            }
+        }
+
+        let health = match runtime_factory.runtime_health() {
+            Ok(value) => value,
+            Err(error) => {
+                emit_provisioning_status(
+                    &app,
+                    "error",
+                    &format!("Runtime installed but verification failed: {error}"),
+                    Some("runtime_install_incomplete"),
+                );
+                return;
+            }
+        };
+
+        if !(health.ffmpeg_available
+            && health.whisper_cli_available
+            && health.whisper_stream_available)
+        {
+            emit_provisioning_status(
+                &app,
+                "error",
+                "Local runtime was installed but is still not runnable.",
+                Some("runtime_install_incomplete"),
+            );
+            return;
+        }
+
+        let _ = app.emit(
+            "provisioning://progress",
+            ProvisioningProgressEvent {
+                current: 1,
+                total: 1,
+                asset: asset.name,
+                asset_kind: "speech_runtime".to_string(),
+                stage: "installed".to_string(),
+                percentage: 100,
+            },
+        );
+
+        emit_provisioning_status(
+            &app,
+            "completed",
+            "Local transcription runtime installed successfully.",
+            None,
+        );
+    });
+}
+
 async fn fetch_pyannote_asset_selection(
     client: &reqwest::Client,
 ) -> Result<PyannoteAssetSelection, String> {
@@ -901,6 +1095,53 @@ async fn fetch_pyannote_asset_selection(
     Ok(PyannoteAssetSelection {
         runtime_asset,
         model_asset,
+        release_version: version,
+    })
+}
+
+async fn fetch_runtime_asset_selection(
+    client: &reqwest::Client,
+) -> Result<RuntimeAssetSelection, String> {
+    let version = env!("CARGO_PKG_VERSION").to_string();
+    let manifest_url = release_asset_url(&version, RUNTIME_MANIFEST_ASSET);
+    let response = client
+        .get(&manifest_url)
+        .send()
+        .await
+        .map_err(|e| format!("failed to fetch runtime release manifest: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("failed to download runtime release manifest: {e}"))?;
+    let manifest = response
+        .json::<RuntimeReleaseManifest>()
+        .await
+        .map_err(|e| format!("invalid runtime release manifest: {e}"))?;
+
+    if manifest.app_version.trim() != version {
+        return Err(format!(
+            "Runtime manifest version '{}' does not match app version '{}'.",
+            manifest.app_version.trim(),
+            version
+        ));
+    }
+
+    let runtime_asset = manifest
+        .assets
+        .iter()
+        .find(|asset| asset.kind == "speech_runtime_macos_aarch64")
+        .cloned()
+        .ok_or_else(|| {
+            "Runtime release manifest is missing the speech runtime asset.".to_string()
+        })?;
+
+    if runtime_asset.name != RUNTIME_AARCH64_ASSET {
+        return Err(format!(
+            "Runtime asset name mismatch: expected '{}', got '{}'.",
+            RUNTIME_AARCH64_ASSET, runtime_asset.name
+        ));
+    }
+
+    Ok(RuntimeAssetSelection {
+        runtime_asset,
         release_version: version,
     })
 }
@@ -1019,6 +1260,43 @@ fn install_pyannote_archive(
 
     std::fs::rename(&staged_root, destination)
         .map_err(|e| format!("failed to move staged pyannote asset into place: {e}"))?;
+
+    remove_path_if_exists(&stage_dir)?;
+    Ok(())
+}
+
+fn install_runtime_archive(
+    archive_path: &Path,
+    runtime_dir: &Path,
+    destination: &Path,
+) -> Result<(), String> {
+    let stage_dir = runtime_dir.join(".stage-bin");
+    remove_path_if_exists(&stage_dir)?;
+    std::fs::create_dir_all(&stage_dir)
+        .map_err(|e| format!("failed to create runtime staging directory: {e}"))?;
+
+    if let Err(error) = extract_zip_archive(archive_path, &stage_dir) {
+        let _ = remove_path_if_exists(&stage_dir);
+        return Err(error);
+    }
+
+    let staged_root = stage_dir.join("bin");
+    if !staged_root.exists() {
+        let _ = remove_path_if_exists(&stage_dir);
+        return Err(format!(
+            "Runtime archive '{}' does not contain expected 'bin' directory.",
+            archive_path.display()
+        ));
+    }
+
+    remove_path_if_exists(destination)?;
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create runtime destination parent: {e}"))?;
+    }
+
+    std::fs::rename(&staged_root, destination)
+        .map_err(|e| format!("failed to move staged runtime asset into place: {e}"))?;
 
     remove_path_if_exists(&stage_dir)?;
     Ok(())

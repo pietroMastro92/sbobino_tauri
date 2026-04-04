@@ -40,6 +40,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Install macOS runtime packaging dependencies
+        run: brew install whisper-cpp ffmpeg sdl2
+
       - name: Prepare pyannote setup assets
         run: ../../scripts/setup_bundled_pyannote.sh --force
 
@@ -132,6 +135,25 @@ jobs:
           }
           JSON
 
+      - name: Package local runtime setup assets
+        run: |
+          ASSET_DIR=../../target/aarch64-apple-darwin/release/bundle/runtime-release
+          mkdir -p "$ASSET_DIR"
+          ../../scripts/package_macos_runtime_asset.sh "$ASSET_DIR/speech-runtime-macos-aarch64.zip"
+          RUNTIME_SHA=$(shasum -a 256 "$ASSET_DIR/speech-runtime-macos-aarch64.zip" | awk '{print $1}')
+          cat >"$ASSET_DIR/runtime-manifest.json" <<JSON
+          {
+            "app_version": "${GITHUB_REF_NAME#v}",
+            "assets": [
+              {
+                "kind": "speech_runtime_macos_aarch64",
+                "name": "speech-runtime-macos-aarch64.zip",
+                "sha256": "$RUNTIME_SHA"
+              }
+            ]
+          }
+          JSON
+
       - name: Notarize and staple macOS DMG
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -193,6 +215,7 @@ jobs:
 
           - Native desktop app for macOS Apple Silicon.
           - Guided first-launch setup for the local transcription runtime.
+          - Automatic first-launch installation of FFmpeg, Whisper CLI, and Whisper Stream.
           - Automatic first-launch download of the required Whisper models.
           - Automatic first-launch installation of the pyannote diarization runtime and model when speaker diarization is enabled.
           - In-app update support for future releases.
@@ -207,8 +230,7 @@ jobs:
 
           - This release is intended for macOS Apple Silicon.
           - Apple notarization is applied only when Apple release credentials are configured in CI.
-          - Whisper models are downloaded on first launch.
-          - Pyannote diarization assets are provided as separate release downloads and installed by the app during setup instead of being bundled inside the DMG.
+          - The DMG stays lighter because the local runtime toolchain, Whisper models, and pyannote diarization assets are installed during setup instead of being bundled inside the app.
           EOF
 
       - name: Generate updater feed
@@ -250,4 +272,6 @@ jobs:
             dist/macos/Sbobino.app.tar.gz.sig
             dist/pyannote-release/*.zip
             dist/pyannote-release/*.json
+            dist/runtime-release/*.zip
+            dist/runtime-release/*.json
             latest.json

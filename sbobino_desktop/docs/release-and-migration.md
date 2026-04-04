@@ -13,6 +13,9 @@
   - `macos-14` -> `aarch64-apple-darwin` (DMG + APP).
 - Produces updater artifacts/signatures (`createUpdaterArtifacts: true` in `tauri.conf.json`).
 - Publishes all generated bundle assets to the GitHub Release for that tag.
+- Must also publish the local runtime setup assets for the same tag:
+  - `speech-runtime-macos-aarch64.zip`
+  - `runtime-manifest.json`
 - Must also publish pyannote provisioning assets for the same tag:
   - `pyannote-runtime-macos-aarch64.zip`
   - `pyannote-model-community-1.zip`
@@ -45,6 +48,9 @@
   - `./scripts/package_pyannote_asset.sh <runtime_aarch64_dir> python <output_zip>`
   - `./scripts/package_pyannote_asset.sh <model_dir> model <output_zip>`
   - generate `pyannote-manifest.json` with checksums for the same GitHub Release as the app bundles.
+- Build the local runtime setup asset before publishing the tag:
+  - `./scripts/package_macos_runtime_asset.sh <output_zip>`
+  - generate `runtime-manifest.json` with checksums for the same GitHub Release as the app bundles.
 
 ### Windows
 - Out of scope for the initial public release.

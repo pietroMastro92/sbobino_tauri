@@ -408,7 +408,12 @@ export type ProvisioningProgressEvent = {
   current: number;
   total: number;
   asset: string;
-  asset_kind: "whisper_model" | "whisper_encoder" | "pyannote_runtime" | "pyannote_model";
+  asset_kind:
+    | "speech_runtime"
+    | "whisper_model"
+    | "whisper_encoder"
+    | "pyannote_runtime"
+    | "pyannote_model";
   stage: string;
   percentage: number;
 };
@@ -427,6 +432,9 @@ export type RuntimeHealth = {
   is_apple_silicon: boolean;
   preferred_engine: TranscriptionEngine;
   configured_engine: TranscriptionEngine;
+  ffmpeg_path: string;
+  ffmpeg_resolved: string;
+  ffmpeg_available: boolean;
   whisper_cli_path: string;
   whisper_cli_resolved: string;
   whisper_cli_available: boolean;
@@ -472,6 +480,7 @@ export type EnsureRuntimeResponse = {
   engine: TranscriptionEngine;
   did_setup: boolean;
   message: string;
+  ffmpeg_resolved: string;
   whisper_cli_resolved: string;
   whisper_stream_resolved: string;
 };

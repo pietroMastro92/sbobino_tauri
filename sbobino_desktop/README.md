@@ -27,7 +27,7 @@ From workspace root:
 1. `./scripts/setup_runtime.sh` (downloads `ggml-base.bin` into app data models dir)
 2. In app, keep `Model = Base` for first run.
 3. For release builds, run `./scripts/setup_bundled_pyannote.sh` before `npm run tauri:build` so CI can publish the separate pyannote setup assets for first launch.
-4. The DMG itself no longer bundles pyannote; the app installs pyannote during the guided first-launch setup or from `Settings > Local Models > Speaker Diarization`.
+4. The DMG no longer bundles the full local runtime. On first launch the app installs FFmpeg, Whisper CLI, Whisper Stream, Whisper models, and pyannote assets into app data through the guided setup flow.
 
 ## Current Milestone
 

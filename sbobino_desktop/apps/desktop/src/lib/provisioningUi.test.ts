@@ -7,6 +7,17 @@ describe("provisioningUi", () => {
     expect(
       formatProvisioningAssetLabel({
         current: 1,
+        total: 1,
+        asset: "speech-runtime-macos-aarch64.zip",
+        asset_kind: "speech_runtime",
+        stage: "installed",
+        percentage: 100,
+      }),
+    ).toBe("Installing speech-runtime-macos-aarch64");
+
+    expect(
+      formatProvisioningAssetLabel({
+        current: 1,
         total: 2,
         asset: "pyannote-runtime-macos-aarch64.zip",
         asset_kind: "pyannote_runtime",

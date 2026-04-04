@@ -16,6 +16,9 @@ pub struct RuntimeHealthResponse {
     pub is_apple_silicon: bool,
     pub preferred_engine: String,
     pub configured_engine: String,
+    pub ffmpeg_path: String,
+    pub ffmpeg_resolved: String,
+    pub ffmpeg_available: bool,
     pub whisper_cli_path: String,
     pub whisper_cli_resolved: String,
     pub whisper_cli_available: bool,
@@ -56,6 +59,7 @@ pub struct EnsureRuntimeResponse {
     pub engine: String,
     pub did_setup: bool,
     pub message: String,
+    pub ffmpeg_resolved: String,
     pub whisper_cli_resolved: String,
     pub whisper_stream_resolved: String,
 }
@@ -66,8 +70,12 @@ fn engine_to_wire(engine: &TranscriptionEngine) -> &'static str {
     }
 }
 
-fn runtime_toolchain_ready(whisper_cli_available: bool, whisper_stream_available: bool) -> bool {
-    whisper_cli_available && whisper_stream_available
+fn runtime_toolchain_ready(
+    ffmpeg_available: bool,
+    whisper_cli_available: bool,
+    whisper_stream_available: bool,
+) -> bool {
+    ffmpeg_available && whisper_cli_available && whisper_stream_available
 }
 
 fn is_legacy_whisperkit_path(path: &str) -> bool {
@@ -75,6 +83,8 @@ fn is_legacy_whisperkit_path(path: &str) -> bool {
 }
 
 fn runtime_toolchain_message(
+    ffmpeg_available: bool,
+    ffmpeg_resolved: &str,
     whisper_cli_available: bool,
     whisper_cli_resolved: &str,
     whisper_stream_available: bool,
@@ -82,6 +92,9 @@ fn runtime_toolchain_message(
     setup_note: Option<&str>,
 ) -> String {
     let mut missing = Vec::new();
+    if !ffmpeg_available {
+        missing.push(format!("FFmpeg is not runnable at '{}'.", ffmpeg_resolved));
+    }
     if !whisper_cli_available {
         missing.push(format!(
             "Whisper CLI is not runnable at '{}'.",
@@ -118,6 +131,7 @@ pub async fn ensure_transcription_runtime(
         .map_err(|e| CommandError::new("runtime_health", e))?;
 
     if runtime_toolchain_ready(
+        health.ffmpeg_available,
         health.whisper_cli_available,
         health.whisper_stream_available,
     ) {
@@ -126,6 +140,7 @@ pub async fn ensure_transcription_runtime(
             engine: "whisper_cpp".to_string(),
             did_setup: false,
             message: "Whisper.cpp runtime available.".to_string(),
+            ffmpeg_resolved: health.ffmpeg_resolved,
             whisper_cli_resolved: health.whisper_cli_resolved,
             whisper_stream_resolved: health.whisper_stream_resolved,
         });
@@ -199,6 +214,7 @@ pub async fn ensure_transcription_runtime(
         .map_err(|e| CommandError::new("runtime_health", e))?;
 
     let ready = runtime_toolchain_ready(
+        refreshed.ffmpeg_available,
         refreshed.whisper_cli_available,
         refreshed.whisper_stream_available,
     );
@@ -210,6 +226,8 @@ pub async fn ensure_transcription_runtime(
         }
     } else {
         runtime_toolchain_message(
+            refreshed.ffmpeg_available,
+            &refreshed.ffmpeg_resolved,
             refreshed.whisper_cli_available,
             &refreshed.whisper_cli_resolved,
             refreshed.whisper_stream_available,
@@ -223,6 +241,7 @@ pub async fn ensure_transcription_runtime(
         engine: "whisper_cpp".to_string(),
         did_setup,
         message,
+        ffmpeg_resolved: refreshed.ffmpeg_resolved,
         whisper_cli_resolved: refreshed.whisper_cli_resolved,
         whisper_stream_resolved: refreshed.whisper_stream_resolved,
     })
@@ -245,6 +264,23 @@ pub async fn get_transcription_start_preflight(
         .join(&model_filename)
         .to_string_lossy()
         .to_string();
+
+    if !health.ffmpeg_available {
+        return Ok(StartPreflightResponse {
+            allowed: false,
+            reason_code: "ffmpeg_missing".to_string(),
+            message: format!(
+                "FFmpeg is not runnable at '{}'. Configure FFmpeg path in Settings > Advanced.",
+                health.ffmpeg_resolved
+            ),
+            engine: "whisper_cpp".to_string(),
+            model_filename,
+            model_path,
+            whisper_cli_resolved: health.whisper_cli_resolved,
+            whisper_stream_resolved: health.whisper_stream_resolved,
+            pyannote: health.pyannote,
+        });
+    }
 
     if !health.whisper_cli_available {
         return Ok(StartPreflightResponse {
@@ -322,6 +358,9 @@ pub async fn get_transcription_runtime_health(
         is_apple_silicon: health.is_apple_silicon,
         preferred_engine: engine_to_wire(&health.preferred_engine).to_string(),
         configured_engine: engine_to_wire(&health.configured_engine).to_string(),
+        ffmpeg_path: health.ffmpeg_path,
+        ffmpeg_resolved: health.ffmpeg_resolved,
+        ffmpeg_available: health.ffmpeg_available,
         whisper_cli_path: health.whisper_cli_path,
         whisper_cli_resolved: health.whisper_cli_resolved,
         whisper_cli_available: health.whisper_cli_available,
