@@ -153,8 +153,45 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Prepare release notes
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cat > release-notes.md <<EOF
+          ## Sbobino Desktop ${VERSION}
+
+          Sbobino Desktop is the first public standalone release for macOS Apple Silicon.
+
+          ### What is included
+
+          - Native desktop app for macOS Apple Silicon.
+          - Bundled local backend components required to launch the app.
+          - Bundled pyannote runtime and model for local speaker diarization support.
+          - Automatic first-launch setup that downloads the Whisper models needed by the app.
+          - In-app update support for future releases.
+
+          ### Download and installation
+
+          - Download the \`.dmg\` file for the recommended macOS installation flow.
+          - Open the disk image and drag **Sbobino Desktop** into the **Applications** folder.
+          - On first launch, accept the privacy terms and let the app complete the guided model setup.
+
+          ### Important notes
+
+          - This release is intended for macOS Apple Silicon.
+          - Apple notarization is applied only when Apple release credentials are configured in CI.
+          - The app stores local runtime assets on first use to complete the initial setup.
+          EOF
+
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/**
-          generate_release_notes: true
+          draft: false
+          prerelease: false
+          body_path: release-notes.md
+          generate_release_notes: false
+          files: |
+            dist/dmg/*.dmg
+            dist/macos/*.app.tar.gz
+            dist/macos/*.app.tar.gz.sig
+            dist/pyannote-release/*.zip
+            dist/pyannote-release/*.json
