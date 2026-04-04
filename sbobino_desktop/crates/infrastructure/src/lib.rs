@@ -1077,6 +1077,9 @@ impl RuntimeTranscriptionFactory {
     fn managed_pyannote_python_path(&self) -> Option<String> {
         let _ = ensure_embedded_libpython_is_present(&self.managed_pyannote_python_dir());
         let _ = ensure_embedded_pyannote_stdlib_is_present(&self.managed_pyannote_python_dir());
+        if pyannote_external_framework_reference(&self.managed_pyannote_python_dir()).is_some() {
+            return None;
+        }
         for candidate in self.managed_pyannote_python_candidates() {
             if is_runnable_binary_file(&candidate) {
                 return Some(candidate.to_string_lossy().to_string());
@@ -2053,6 +2056,48 @@ fn pyannote_python_home(runtime_root: &Path) -> Option<PathBuf> {
     }
 }
 
+fn parse_external_python_framework_reference(otool_output: &str) -> Option<String> {
+    otool_output.lines().skip(1).find_map(|line| {
+        let dependency = line.split_whitespace().next()?;
+        if dependency.starts_with('/')
+            && dependency.contains("Python.framework/Versions/")
+            && dependency.ends_with("/Python")
+        {
+            Some(dependency.to_string())
+        } else {
+            None
+        }
+    })
+}
+
+fn pyannote_external_framework_reference(runtime_root: &Path) -> Option<String> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+
+    let python_app = runtime_root
+        .join("lib")
+        .join("Resources")
+        .join("Python.app")
+        .join("Contents")
+        .join("MacOS")
+        .join("Python");
+    if !python_app.is_file() {
+        return None;
+    }
+
+    let output = std::process::Command::new("/usr/bin/otool")
+        .arg("-L")
+        .arg(&python_app)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    parse_external_python_framework_reference(&String::from_utf8_lossy(&output.stdout))
+}
+
 fn find_pyannote_source_stdlib_dir(runtime_root: &Path, version_dir_name: &str) -> Option<PathBuf> {
     let pyvenv_cfg = runtime_root.join("pyvenv.cfg");
     let body = std::fs::read_to_string(pyvenv_cfg).ok()?;
@@ -2084,6 +2129,12 @@ fn validate_pyannote_python_runtime(
     runtime_root: &Path,
     python_binary: &Path,
 ) -> Result<(), String> {
+    if let Some(reference) = pyannote_external_framework_reference(runtime_root) {
+        return Err(format!(
+            "Pyannote runtime still depends on an external Python framework ('{reference}'). Repair or reinstall it from Settings > Local Models."
+        ));
+    }
+
     if !is_runnable_binary_file(python_binary) {
         return Err(format!(
             "Pyannote runtime binary is not runnable at '{}'.",
@@ -2191,7 +2242,8 @@ fn expand_home(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        target_triple_suffix, ManagedPyannoteManifest, RuntimeTranscriptionFactory,
+        parse_external_python_framework_reference, target_triple_suffix, ManagedPyannoteManifest,
+        RuntimeTranscriptionFactory,
         PYANNOTE_STATUS_FILENAME,
     };
     use sbobino_domain::{AiProvider, AppSettings, RemoteServiceConfig, RemoteServiceKind};
@@ -2582,5 +2634,31 @@ mod tests {
             .unavailable_reason
             .expect("reason should exist")
             .contains("Settings > AI Services"));
+    }
+
+    #[test]
+    fn parse_external_python_framework_reference_detects_absolute_framework_link() {
+        let output = r#"
+/tmp/Python:
+    /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation (compatibility version 150.0.0, current version 1.0.0)
+    /Library/Frameworks/Python.framework/Versions/3.11/Python (compatibility version 3.11.0, current version 3.11.0)
+    /usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1.0.0)
+"#;
+
+        assert_eq!(
+            parse_external_python_framework_reference(output).as_deref(),
+            Some("/Library/Frameworks/Python.framework/Versions/3.11/Python")
+        );
+    }
+
+    #[test]
+    fn parse_external_python_framework_reference_ignores_relocatable_rpath_link() {
+        let output = r#"
+/tmp/Python:
+    @rpath/libpython3.11.dylib (compatibility version 3.11.0, current version 3.11.0)
+    /usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1.0.0)
+"#;
+
+        assert!(parse_external_python_framework_reference(output).is_none());
     }
 }

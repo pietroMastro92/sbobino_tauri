@@ -60,6 +60,7 @@ need_cmd git-lfs
 need_cmd rsync
 need_cmd install_name_tool
 need_cmd codesign
+need_cmd otool
 
 python_matches_version() {
   local python_bin=$1
@@ -80,6 +81,52 @@ import csv
 import encodings
 print("ok")
 PY
+}
+
+rewrite_embedded_python_app_launcher() {
+  local runtime_dir=$1
+  local libpython_target=$2
+  local python_app="$runtime_dir/lib/Resources/Python.app/Contents/MacOS/Python"
+
+  if [[ ! -x "$python_app" ]]; then
+    return 0
+  fi
+
+  local python_app_dep=""
+  while IFS= read -r dep; do
+    if [[ "$dep" == /*Python.framework/Versions/*/Python ]]; then
+      python_app_dep=$dep
+      break
+    fi
+  done < <(otool -L "$python_app" | tail -n +2 | awk '{print $1}')
+
+  if [[ -z "$python_app_dep" ]]; then
+    return 0
+  fi
+
+  install_name_tool -add_rpath "@executable_path/../../../../" "$python_app" 2>/dev/null || true
+  install_name_tool -change "$python_app_dep" "@rpath/$(basename "$libpython_target")" "$python_app"
+  codesign --force --sign - "$python_app" >/dev/null 2>&1 || true
+}
+
+verify_no_external_python_framework_refs() {
+  local runtime_dir=$1
+  local candidate
+
+  for candidate in \
+    "$runtime_dir/bin/python" \
+    "$runtime_dir/bin/python3" \
+    "$runtime_dir/lib/Resources/Python.app/Contents/MacOS/Python"; do
+    if [[ ! -e "$candidate" ]]; then
+      continue
+    fi
+
+    if otool -L "$candidate" | tail -n +2 | awk '{print $1}' | grep -E '^/.+Python\.framework/Versions/.+/Python$' >/dev/null; then
+      echo "Bundled runtime still references an external Python.framework in $candidate" >&2
+      otool -L "$candidate" >&2
+      exit 1
+    fi
+  done
 }
 
 resolve_python_executable() {
@@ -257,7 +304,9 @@ for python_bin in "$STAGE_RUNTIME_DIR"/bin/python*; do
     codesign --force --sign - "$python_bin" >/dev/null 2>&1 || true
   fi
 done
+rewrite_embedded_python_app_launcher "$STAGE_RUNTIME_DIR" "$LIBPY_TARGET"
 codesign --force --sign - "$LIBPY_TARGET" >/dev/null 2>&1 || true
+verify_no_external_python_framework_refs "$STAGE_RUNTIME_DIR"
 echo "embedded $LIBPY_SOURCE -> $LIBPY_TARGET"
 
 echo "Repairing Python config symlinks for standalone bundling"
