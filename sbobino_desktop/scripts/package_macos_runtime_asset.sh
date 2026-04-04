@@ -7,16 +7,18 @@ if [[ $# -ne 1 ]]; then
 fi
 
 OUTPUT_ZIP=$1
-ROOT_NAME="bin"
+ROOT_NAME="runtime"
 STAGE_DIR=$(mktemp -d)
 TARGET_ROOT="$STAGE_DIR/$ROOT_NAME"
+TARGET_BIN="$TARGET_ROOT/bin"
+TARGET_LIB="$TARGET_ROOT/lib"
 
 cleanup() {
   rm -rf "$STAGE_DIR"
 }
 trap cleanup EXIT
 
-mkdir -p "$TARGET_ROOT"
+mkdir -p "$TARGET_BIN" "$TARGET_LIB"
 mkdir -p "$(dirname "$OUTPUT_ZIP")"
 rm -f "$OUTPUT_ZIP"
 
@@ -41,6 +43,7 @@ PRIMARY_BINARIES=(
 )
 
 declare -a PENDING_TARGETS=()
+LAST_COPIED_TARGET=""
 COPIED_PATHS_FILE="$STAGE_DIR/copied_paths.tsv"
 touch "$COPIED_PATHS_FILE"
 
@@ -96,16 +99,17 @@ resolve_dependency_path() {
 
 copy_and_queue() {
   local source=$1
+  local target_dir=$2
   local canonical
   canonical=$(canonical_path "$source")
   local base_name
   base_name=$(basename "$canonical")
-  local target="$TARGET_ROOT/$base_name"
+  local target="$target_dir/$base_name"
   local existing_target
 
-  existing_target=$(awk -F $'\t' -v canonical="$canonical" '$1 == canonical { print $2; exit }' "$COPIED_PATHS_FILE")
+  existing_target=$(awk -F $'\t' -v canonical="$canonical" -v target_dir="$target_dir" '$1 == canonical && index($2, target_dir "/") == 1 { print $2; exit }' "$COPIED_PATHS_FILE")
   if [[ -n "$existing_target" ]]; then
-    echo "$existing_target"
+    LAST_COPIED_TARGET="$existing_target"
     return 0
   fi
 
@@ -113,7 +117,23 @@ copy_and_queue() {
   chmod u+w "$target"
   printf '%s\t%s\n' "$canonical" "$target" >> "$COPIED_PATHS_FILE"
   PENDING_TARGETS+=("$target::$canonical")
-  echo "$target"
+  LAST_COPIED_TARGET="$target"
+}
+
+ensure_alias_link() {
+  local requested_base_name=$1
+  local target_path=$2
+  local target_dir
+  target_dir=$(dirname "$target_path")
+  local actual_base_name
+  actual_base_name=$(basename "$target_path")
+  local alias_path="$target_dir/$requested_base_name"
+
+  if [[ "$requested_base_name" == "$actual_base_name" || -e "$alias_path" ]]; then
+    return 0
+  fi
+
+  ln -sf "$actual_base_name" "$alias_path"
 }
 
 for binary in "${PRIMARY_BINARIES[@]}"; do
@@ -121,7 +141,7 @@ for binary in "${PRIMARY_BINARIES[@]}"; do
     echo "Missing runtime binary: $binary" >&2
     exit 1
   fi
-  copy_and_queue "$binary" >/dev/null
+  copy_and_queue "$binary" "$TARGET_BIN" >/dev/null
 done
 
 while [[ ${#PENDING_TARGETS[@]} -gt 0 ]]; do
@@ -137,17 +157,27 @@ while [[ ${#PENDING_TARGETS[@]} -gt 0 ]]; do
       continue
     fi
 
+    dep_base_name=$(basename "${dep#@rpath/}")
     if ! resolved=$(resolve_dependency_path "$dep" "$source_dir"); then
       echo "Unable to resolve dependency '$dep' for '$source'." >&2
       exit 1
     fi
 
-    copied_target=$(copy_and_queue "$resolved")
-    install_name_tool -change "$dep" "@executable_path/$(basename "$copied_target")" "$target"
+    copy_and_queue "$resolved" "$TARGET_LIB"
+    copied_target="$LAST_COPIED_TARGET"
+    ensure_alias_link "$dep_base_name" "$copied_target"
+
+    if [[ "$target" == "$TARGET_BIN/"* ]]; then
+      install_name_tool -change "$dep" "@executable_path/../lib/$dep_base_name" "$target"
+    else
+      install_name_tool -change "$dep" "@loader_path/$dep_base_name" "$target"
+    fi
   done < <(otool -L "$source" | tail -n +2 | awk '{print $1}')
 
   if [[ "$target" == *.dylib ]]; then
-    install_name_tool -id "@executable_path/$(basename "$target")" "$target"
+    install_name_tool -id "@rpath/$(basename "$target")" "$target"
+  else
+    install_name_tool -add_rpath "@executable_path/../lib" "$target" 2>/dev/null || true
   fi
 done
 

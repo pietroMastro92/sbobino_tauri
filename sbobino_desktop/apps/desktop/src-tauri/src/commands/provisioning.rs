@@ -1270,7 +1270,7 @@ fn install_runtime_archive(
     runtime_dir: &Path,
     destination: &Path,
 ) -> Result<(), String> {
-    let stage_dir = runtime_dir.join(".stage-bin");
+    let stage_dir = runtime_dir.join(".stage-runtime");
     remove_path_if_exists(&stage_dir)?;
     std::fs::create_dir_all(&stage_dir)
         .map_err(|e| format!("failed to create runtime staging directory: {e}"))?;
@@ -1280,23 +1280,42 @@ fn install_runtime_archive(
         return Err(error);
     }
 
-    let staged_root = stage_dir.join("bin");
+    let staged_root = stage_dir.join("runtime");
     if !staged_root.exists() {
         let _ = remove_path_if_exists(&stage_dir);
         return Err(format!(
-            "Runtime archive '{}' does not contain expected 'bin' directory.",
+            "Runtime archive '{}' does not contain expected 'runtime' directory.",
             archive_path.display()
         ));
     }
 
-    remove_path_if_exists(destination)?;
-    if let Some(parent) = destination.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("failed to create runtime destination parent: {e}"))?;
+    let staged_bin = staged_root.join("bin");
+    let staged_lib = staged_root.join("lib");
+    if !staged_bin.is_dir() || !staged_lib.is_dir() {
+        let _ = remove_path_if_exists(&stage_dir);
+        return Err(format!(
+            "Runtime archive '{}' is missing expected 'bin' or 'lib' directories.",
+            archive_path.display()
+        ));
     }
 
-    std::fs::rename(&staged_root, destination)
-        .map_err(|e| format!("failed to move staged runtime asset into place: {e}"))?;
+    let install_root = destination.parent().ok_or_else(|| {
+        format!(
+            "failed to determine runtime install root from '{}'.",
+            destination.display()
+        )
+    })?;
+    let lib_destination = install_root.join("lib");
+
+    remove_path_if_exists(destination)?;
+    remove_path_if_exists(&lib_destination)?;
+    std::fs::create_dir_all(install_root)
+        .map_err(|e| format!("failed to create runtime install root: {e}"))?;
+
+    std::fs::rename(&staged_bin, destination)
+        .map_err(|e| format!("failed to move staged runtime binaries into place: {e}"))?;
+    std::fs::rename(&staged_lib, &lib_destination)
+        .map_err(|e| format!("failed to move staged runtime libraries into place: {e}"))?;
 
     remove_path_if_exists(&stage_dir)?;
     Ok(())
