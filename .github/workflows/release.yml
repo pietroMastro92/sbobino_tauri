@@ -191,18 +191,6 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Normalize release asset names
-        run: |
-          if [[ -f "dist/macos/Sbobino.app.tar.gz" ]]; then
-            mv "dist/macos/Sbobino.app.tar.gz" "dist/macos/Sbobino.app.tar.gz"
-          fi
-          if [[ -f "dist/macos/Sbobino.app.tar.gz.sig" ]]; then
-            mv "dist/macos/Sbobino.app.tar.gz.sig" "dist/macos/Sbobino.app.tar.gz.sig"
-          fi
-          if [[ -f "dist/dmg/Sbobino_${GITHUB_REF_NAME#v}_aarch64.dmg" ]]; then
-            mv "dist/dmg/Sbobino_${GITHUB_REF_NAME#v}_aarch64.dmg" "dist/dmg/Sbobino_${GITHUB_REF_NAME#v}_aarch64.dmg"
-          fi
-
       - name: Prepare release notes
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
