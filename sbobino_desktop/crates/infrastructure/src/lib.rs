@@ -1311,7 +1311,7 @@ impl RuntimeTranscriptionFactory {
         } else if let Some(error) = runtime_validation_error {
             (false, "pyannote_install_incomplete".to_string(), error)
         } else if let Some(manifest) = manifest.as_ref() {
-            if manifest.runtime_arch.trim() != target_triple_suffix() {
+            if !pyannote_runtime_arch_matches_host(manifest.runtime_arch.trim()) {
                 (
                     false,
                     "pyannote_install_incomplete".to_string(),
@@ -1765,6 +1765,30 @@ fn target_triple_suffix() -> &'static str {
     {
         "aarch64-pc-windows-msvc"
     }
+}
+
+fn pyannote_runtime_arch_matches_host(installed_arch: &str) -> bool {
+    let installed = installed_arch.trim().to_ascii_lowercase();
+    if installed.is_empty() {
+        return false;
+    }
+
+    if installed == target_triple_suffix() {
+        return true;
+    }
+
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        return matches!(
+            installed.as_str(),
+            "macos-aarch64" | "macos-arm64" | "arm64-apple-darwin"
+        );
+    }
+
+    if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        return matches!(installed.as_str(), "macos-x86_64" | "x86_64-apple-darwin");
+    }
+
+    false
 }
 
 fn binary_name_variants(base_name: &str) -> Vec<String> {
@@ -2422,8 +2446,9 @@ fn expand_home(path: &str) -> String {
 mod tests {
     use super::{
         parse_external_python_framework_reference, parse_otool_rpath_entries,
-        parse_pyannote_python_framework_version, target_triple_suffix, ManagedPyannoteManifest,
-        RuntimeTranscriptionFactory, PYANNOTE_STATUS_FILENAME,
+        parse_pyannote_python_framework_version, pyannote_runtime_arch_matches_host,
+        target_triple_suffix, ManagedPyannoteManifest, RuntimeTranscriptionFactory,
+        PYANNOTE_STATUS_FILENAME,
     };
     use sbobino_domain::{AiProvider, AppSettings, RemoteServiceConfig, RemoteServiceKind};
     use tempfile::tempdir;
@@ -2553,6 +2578,52 @@ mod tests {
                 model_asset: "pyannote-model-community-1.zip".to_string(),
                 model_sha256: "def".to_string(),
                 runtime_arch: super::target_triple_suffix().to_string(),
+                installed_at: "2026-03-13T00:00:00Z".to_string(),
+            })
+            .expect("manifest should write");
+        factory
+            .write_managed_pyannote_status("ok", "ready")
+            .expect("status should write");
+
+        let health = factory
+            .runtime_health()
+            .expect("runtime health should load");
+        assert!(health.pyannote.ready);
+        assert_eq!(health.pyannote.reason_code, "ok");
+    }
+
+    #[test]
+    fn runtime_health_accepts_legacy_macos_arch_label_when_otherwise_ready() {
+        let (_temp, factory) = build_factory();
+        persist_enabled_diarization(&factory);
+
+        write_executable_file(
+            &factory
+                .managed_pyannote_python_dir()
+                .join("bin")
+                .join("python3"),
+            "#!/bin/sh\nexit 0\n",
+        );
+        write_fake_pyannote_stdlib(&factory.managed_pyannote_python_dir(), "python3.11");
+        let model_dir = factory.managed_pyannote_model_dir();
+        std::fs::create_dir_all(&model_dir).expect("model dir should exist");
+        std::fs::write(model_dir.join("config.yaml"), "name: test\n").expect("config should write");
+        let legacy_arch = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            "macos-aarch64".to_string()
+        } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+            "macos-x86_64".to_string()
+        } else {
+            super::target_triple_suffix().to_string()
+        };
+        factory
+            .write_managed_pyannote_manifest(&ManagedPyannoteManifest {
+                source: "release_asset".to_string(),
+                app_version: env!("CARGO_PKG_VERSION").to_string(),
+                runtime_asset: "pyannote-runtime-macos-aarch64.zip".to_string(),
+                runtime_sha256: "abc".to_string(),
+                model_asset: "pyannote-model-community-1.zip".to_string(),
+                model_sha256: "def".to_string(),
+                runtime_arch: legacy_arch,
                 installed_at: "2026-03-13T00:00:00Z".to_string(),
             })
             .expect("manifest should write");
@@ -2913,5 +2984,18 @@ Load command 14
 
         let entries = parse_otool_rpath_entries(output);
         assert_eq!(entries, vec!["@executable_path/../../../../", "/usr/lib"]);
+    }
+
+    #[test]
+    fn pyannote_runtime_arch_matches_host_accepts_current_and_legacy_labels() {
+        assert!(pyannote_runtime_arch_matches_host(target_triple_suffix()));
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            assert!(pyannote_runtime_arch_matches_host("macos-aarch64"));
+        }
+        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+        {
+            assert!(pyannote_runtime_arch_matches_host("macos-x86_64"));
+        }
     }
 }

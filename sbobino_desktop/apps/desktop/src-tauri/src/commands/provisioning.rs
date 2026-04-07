@@ -1168,15 +1168,15 @@ fn host_pyannote_runtime_kind() -> &'static str {
 fn host_pyannote_arch_label() -> &'static str {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        "macos-aarch64"
+        "aarch64-apple-darwin"
     }
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
     {
-        "macos-x86_64"
+        "x86_64-apple-darwin"
     }
     #[cfg(not(target_os = "macos"))]
     {
-        "macos-aarch64"
+        "aarch64-apple-darwin"
     }
 }
 
