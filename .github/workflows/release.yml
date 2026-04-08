@@ -26,6 +26,11 @@ jobs:
           cache: npm
           cache-dependency-path: sbobino_desktop/apps/desktop/package-lock.json
 
+      - name: Check version coherence before packaging
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ../../scripts/check_release_versions.sh "$VERSION"
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -204,11 +209,12 @@ jobs:
           cat > release-notes.md <<EOF
           ## Sbobino ${VERSION}
 
-          Sbobino is the first public standalone release for macOS Apple Silicon.
+          Sbobino ${VERSION} is the corrective macOS Apple Silicon release that supersedes the broken first-launch setup shipped in v0.1.5.
 
           ### What is included
 
           - Native desktop app for macOS Apple Silicon.
+          - Fix for the first-launch pyannote setup version mismatch that blocked v0.1.5.
           - Guided first-launch setup for the local transcription runtime.
           - Automatic first-launch installation of FFmpeg, Whisper CLI, and Whisper Stream.
           - Automatic first-launch download of the required Whisper models.
@@ -219,11 +225,13 @@ jobs:
 
           - Download the \`.dmg\` file for the recommended macOS installation flow.
           - Open the disk image and drag **Sbobino** into the **Applications** folder.
+          - If macOS warns that the app is from an unidentified developer, Control-click **Sbobino** in Applications and choose **Open**, or go to **System Settings > Privacy & Security** and click **Open Anyway**.
           - On first launch, accept the privacy terms and let the app complete the guided local runtime setup before entering the main UI.
 
           ### Important notes
 
           - This release is intended for macOS Apple Silicon.
+          - This public build may be unsigned if Apple release credentials are not configured in CI, so Gatekeeper approval can be required once on first launch.
           - Apple notarization is applied only when Apple release credentials are configured in CI.
           - The DMG stays lighter because the local runtime toolchain, Whisper models, and pyannote diarization assets are installed during setup instead of being bundled inside the app.
           EOF

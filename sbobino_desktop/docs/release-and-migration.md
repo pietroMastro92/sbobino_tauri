@@ -35,9 +35,10 @@
 - `TAURI_UPDATER_PUBLIC_KEY`
 
 ### macOS
-- Build signed bundles in CI.
+- Build signed bundles in CI when Apple credentials are available.
 - Submit DMG to Apple Notary Service with `xcrun notarytool`.
 - Staple notarization ticket with `xcrun stapler`.
+- If Apple signing or notarization credentials are not configured, the workflow still produces an unsigned Apple Silicon release. In that fallback mode, users must open the app once via Gatekeeper by Control-clicking **Sbobino** and choosing **Open**, or by using **System Settings > Privacy & Security > Open Anyway**.
 - Inject the updater public key in CI before `tauri build`:
   - `./scripts/prepare_release_updater_config.sh apps/desktop/src-tauri/tauri.conf.json "$TAURI_UPDATER_PUBLIC_KEY"`
 - Before `tauri build`, hydrate the pyannote source assets on the macOS build machine:
