@@ -201,6 +201,20 @@ pub struct WriteSetupReportPayload {
     pub steps: Vec<SetupReportStepPayload>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ReadSetupReportResponse {
+    pub build_version: String,
+    pub privacy_accepted: bool,
+    pub setup_complete: bool,
+    pub final_reason_code: Option<String>,
+    pub final_error: Option<String>,
+    pub runtime_health: Option<serde_json::Value>,
+    pub steps: Vec<SetupReportStepPayload>,
+    pub updated_at: String,
+    #[serde(default)]
+    pub trusted_for_fast_start: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ProvisioningModelCatalogEntry {
     pub key: String,
@@ -566,6 +580,41 @@ pub async fn write_setup_report(
         )
     })?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn read_setup_report(
+    state: State<'_, AppState>,
+) -> Result<Option<ReadSetupReportResponse>, CommandError> {
+    let report_path = state.runtime_factory.data_dir().join("setup-report.json");
+    let body = match tokio::fs::read_to_string(&report_path).await {
+        Ok(body) => body,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(CommandError::new(
+                "setup_report",
+                format!(
+                    "failed to read setup report '{}': {error}",
+                    report_path.display()
+                ),
+            ))
+        }
+    };
+
+    let mut report: ReadSetupReportResponse = serde_json::from_str(&body).map_err(|error| {
+        CommandError::new(
+            "setup_report",
+            format!(
+                "failed to parse setup report '{}': {error}",
+                report_path.display()
+            ),
+        )
+    })?;
+    report.trusted_for_fast_start = report.build_version.trim() == env!("CARGO_PKG_VERSION")
+        && report.setup_complete
+        && report.final_error.as_deref().unwrap_or("").trim().is_empty()
+        && report.final_reason_code.as_deref() == Some("setup_complete");
+    Ok(Some(report))
 }
 
 fn spawn_provisioning_download(

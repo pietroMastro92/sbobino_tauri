@@ -116,6 +116,7 @@ import {
   shouldOfferLocalModelsCta,
 } from "./lib/provisioningUi";
 import {
+  canWarmStartFromSetupReport,
   type InitialSetupReport,
   type InitialSetupStepId,
   INITIAL_SETUP_REQUIRES_PYANNOTE,
@@ -2044,11 +2045,52 @@ function TranscriptSegmentsTileSwitch({
 
 type AppProps = {
   standaloneSettingsWindow?: boolean;
+  initialBootstrap?: {
+    runtimeHealth: RuntimeHealth | null;
+    provisioning: ProvisioningStatus | null;
+    modelCatalog: ProvisioningModelCatalogEntry[] | null;
+    startupRequirementsLoaded: boolean;
+    setupReport: InitialSetupReport | null;
+  };
 };
 
 export type GroupedArtifact = TranscriptArtifact & { children?: GroupedArtifact[] };
 
-export function App({ standaloneSettingsWindow = false }: AppProps) {
+function createProvisioningUiState(
+  status: ProvisioningStatus | null | undefined,
+): {
+  ready: boolean;
+  modelsDir: string;
+  missing: string[];
+  pyannote: RuntimeHealth["pyannote"] | null;
+  running: boolean;
+  progress: ProvisioningProgressEvent | null;
+  statusMessage: string;
+} {
+  if (!status) {
+    return {
+      ready: true,
+      modelsDir: "",
+      missing: [],
+      pyannote: null,
+      running: false,
+      progress: null,
+      statusMessage: "",
+    };
+  }
+
+  return {
+    ready: status.ready,
+    modelsDir: status.models_dir,
+    missing: [...status.missing_models, ...status.missing_encoders],
+    pyannote: status.pyannote,
+    running: false,
+    progress: null,
+    statusMessage: "",
+  };
+}
+
+export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppProps) {
   const { t, language } = useTranslation();
   const initialStandaloneSettingsPane = standaloneSettingsWindow
     ? parseStandaloneSettingsPaneFromLocation()
@@ -2244,8 +2286,12 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
 
   const [queueItems, setQueueItems] = useState<JobProgress[]>([]);
   const [queuedTranscriptionStarts, setQueuedTranscriptionStarts] = useState<QueuedTranscriptionStart[]>([]);
-  const [modelCatalog, setModelCatalog] = useState<ProvisioningModelCatalogEntry[]>([]);
-  const [runtimeHealth, setRuntimeHealth] = useState<RuntimeHealth | null>(null);
+  const [modelCatalog, setModelCatalog] = useState<ProvisioningModelCatalogEntry[]>(
+    () => initialBootstrap?.modelCatalog ?? [],
+  );
+  const [runtimeHealth, setRuntimeHealth] = useState<RuntimeHealth | null>(
+    () => initialBootstrap?.runtimeHealth ?? initialBootstrap?.setupReport?.runtime_health ?? null,
+  );
   const platformIsAppleSilicon = runtimeHealth?.is_apple_silicon ?? guessAppleSiliconFromUA();
   const transcriptionEngineOptions = useMemo(() => allTranscriptionEngineOptions, []);
   const settingsPaneDefinitions = useMemo(() => getSettingsPaneDefinitions(), [language]);
@@ -2267,17 +2313,14 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     running: boolean;
     progress: ProvisioningProgressEvent | null;
     statusMessage: string;
-  }>({
-    ready: true,
-    modelsDir: "",
-    missing: [],
-    pyannote: null,
-    running: false,
-    progress: null,
-    statusMessage: "",
-  });
-  const [startupRequirementsLoaded, setStartupRequirementsLoaded] = useState(standaloneSettingsWindow);
+  }>(() => createProvisioningUiState(initialBootstrap?.provisioning));
+  const [startupRequirementsLoaded, setStartupRequirementsLoaded] = useState(
+    standaloneSettingsWindow || initialBootstrap?.startupRequirementsLoaded || false,
+  );
   const [startupRequirementsError, setStartupRequirementsError] = useState<string | null>(null);
+  const [startupGateBypass, setStartupGateBypass] = useState(
+    () => !standaloneSettingsWindow && Boolean(initialBootstrap?.setupReport?.trusted_for_fast_start),
+  );
   const [initialSetupRunning, setInitialSetupRunning] = useState(false);
   const [initialSetupError, setInitialSetupError] = useState<string | null>(null);
   const [initialSetupStepLabel, setInitialSetupStepLabel] = useState<string | null>(null);
@@ -2344,10 +2387,16 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
   const detailLayoutRef = useRef<HTMLDivElement | null>(null);
   const autoInitialSetupAttemptedRef = useRef(false);
   const provisioningProgressKindRef = useRef<ProvisioningProgressEvent["asset_kind"] | null>(null);
-  const initialSetupReportRef = useRef<InitialSetupReport>(createInitialSetupReport());
+  const initialSetupReportRef = useRef<InitialSetupReport>(
+    initialBootstrap?.setupReport ?? createInitialSetupReport(),
+  );
   const initialSetupStepIdRef = useRef<InitialSetupStepId | null>(null);
 
   const privacyPolicyAccepted = hasAcceptedCurrentPrivacyPolicy(settings);
+  const warmStartEligible = canWarmStartFromSetupReport(
+    privacyPolicyAccepted,
+    startupGateBypass ? initialBootstrap?.setupReport : null,
+  );
   const runtimeToolchainReady = runtimeHealth?.ffmpeg_available === true
     && runtimeHealth?.whisper_cli_available === true
     && runtimeHealth?.whisper_stream_available === true;
@@ -2710,12 +2759,17 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     void (async () => {
       try {
         const shouldPrimeSettingsDiagnostics =
-          standaloneSettingsWindow && shouldPreloadSettingsDiagnostics(initialStandaloneSettingsPane);
-        const shouldPrimeModelCatalog = standaloneSettingsWindow && initialStandaloneSettingsPane === "local_models";
+          standaloneSettingsWindow
+            ? shouldPreloadSettingsDiagnostics(initialStandaloneSettingsPane)
+            : !warmStartEligible;
+        const shouldPrimeModelCatalog =
+          standaloneSettingsWindow
+            ? initialStandaloneSettingsPane === "local_models"
+            : !warmStartEligible;
         const initialSettingsPromise = fetchSettingsSnapshot();
         const initialRuntimeHealthPromise = shouldPrimeSettingsDiagnostics
           ? fetchRuntimeHealth()
-          : Promise.resolve(null);
+          : Promise.resolve(initialBootstrap?.setupReport?.runtime_health ?? null);
         const initialProvisioningPromise = shouldPrimeSettingsDiagnostics
           ? provisioningStatus()
           : Promise.resolve(null);
@@ -2745,6 +2799,21 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         if (initialModelCatalogResult.status === "fulfilled" && initialModelCatalogResult.value) {
           setModelCatalog(initialModelCatalogResult.value);
         }
+        if (warmStartEligible) {
+          setStartupGateBypass(true);
+          setStartupRequirementsLoaded(true);
+          setStartupRequirementsError(null);
+        } else if (
+          shouldPrimeSettingsDiagnostics
+          && shouldPrimeModelCatalog
+          && initialRuntimeHealthResult.status === "fulfilled"
+          && initialProvisioningResult.status === "fulfilled"
+          && initialModelCatalogResult.status === "fulfilled"
+        ) {
+          setStartupGateBypass(false);
+          setStartupRequirementsLoaded(true);
+          setStartupRequirementsError(null);
+        }
         if (normalized.general.app_language) {
           changeLanguage(normalized.general.app_language);
         }
@@ -2758,6 +2827,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                 listDeletedArtifacts,
                 provisioningStatus,
                 provisioningModels,
+                fetchRuntimeHealth,
               },
               { standaloneSettingsWindow },
             );
@@ -2799,7 +2869,15 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
         window.clearTimeout(deferredUpdatesTimer);
       }
     };
-  }, [setArtifacts, setError, setSettings, standaloneSettingsWindow]);
+  }, [
+    initialBootstrap?.setupReport,
+    initialStandaloneSettingsPane,
+    setArtifacts,
+    setError,
+    setSettings,
+    standaloneSettingsWindow,
+    warmStartEligible,
+  ]);
 
   useEffect(() => {
     if (!standaloneSettingsWindow) {
@@ -2993,30 +3071,50 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     }
 
     let cancelled = false;
-    void (async () => {
+    let deferredDiagnosticsTimer: number | null = null;
+    const runDiagnostics = () => void (async () => {
       try {
-        await loadStartupRequirements();
+        const snapshot = await loadStartupRequirements();
+        if (!cancelled) {
+          setStartupGateBypass(snapshot.runtimeHealth.setup_complete ? startupGateBypass : false);
+        }
       } catch (startupError) {
         if (!cancelled) {
-          setStartupRequirementsLoaded(false);
-          setStartupRequirementsError(
-            formatUiError(
-              "error.startupRequirementsFailed",
-              "Could not prepare local runtime requirements",
-              startupError,
-            ),
+          const formatted = formatUiError(
+            "error.startupRequirementsFailed",
+            "Could not prepare local runtime requirements",
+            startupError,
           );
+          if (warmStartEligible) {
+            setStartupGateBypass(false);
+            setError(formatted);
+          } else {
+            setStartupRequirementsLoaded(false);
+            setStartupRequirementsError(formatted);
+          }
         }
       }
     })();
 
+    if (warmStartEligible) {
+      deferredDiagnosticsTimer = window.setTimeout(runDiagnostics, 900);
+    } else {
+      runDiagnostics();
+    }
+
     return () => {
       cancelled = true;
+      if (deferredDiagnosticsTimer !== null) {
+        window.clearTimeout(deferredDiagnosticsTimer);
+      }
     };
-  }, [settings, standaloneSettingsWindow]);
+  }, [setError, settings, standaloneSettingsWindow, startupGateBypass, warmStartEligible]);
 
   useEffect(() => {
     if (standaloneSettingsWindow || !settings || !privacyPolicyAccepted) {
+      return;
+    }
+    if (warmStartEligible) {
       return;
     }
     if (!startupRequirementsLoaded || initialSetupRunning || initialSetupReady) {
@@ -3035,6 +3133,7 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     settings,
     standaloneSettingsWindow,
     startupRequirementsLoaded,
+    warmStartEligible,
   ]);
 
   useEffect(() => {
@@ -8797,6 +8896,11 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
                 <AudioPlayer
                   artifactId={detailAudioArtifactId}
                   inputPath={detailAudioInputPath}
+                  sourceLabel={
+                    activeArtifact?.source_label
+                    ?? effectiveDetailContext?.sourceArtifact?.source_label
+                    ?? null
+                  }
                   trimEnabled
                   onMetadataLoaded={(metadata) => {
                     setAudioDurationSeconds(metadata.durationSeconds);
@@ -10861,28 +10965,42 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
       : provisioning.statusMessage;
     const startupStatusDetail = initialSetupStepDetail ?? bootstrapMessage;
     const blockingError = startupRequirementsError ?? initialSetupError ?? (!settings ? error : null);
-    const requiresPrivacyAcceptance = !settings || !privacyPolicyAccepted;
     const loadingSettings = !settings && !blockingError;
+    const requiresPrivacyAcceptance = Boolean(settings) && !privacyPolicyAccepted;
     const loadingDiagnostics = settings && privacyPolicyAccepted && !startupRequirementsLoaded && !blockingError;
     const setupPending = settings && privacyPolicyAccepted && startupRequirementsLoaded && !initialSetupReady;
+    const startupKicker = loadingSettings || loadingDiagnostics
+      ? t("startup.loading.kicker", "Starting up")
+      : t("setup.firstLaunch.kicker", "First launch setup");
+    const startupTitle = loadingSettings
+      ? t("startup.loading.title", "Loading Sbobino")
+      : loadingDiagnostics
+        ? t("startup.loading.runtimeTitle", "Sbobino is checking your Mac")
+        : t("setup.firstLaunch.title", "Sbobino is preparing your Mac");
+    const startupIntro = loadingSettings
+      ? t("setup.firstLaunch.loadingSettingsDesc", "Preparing your local workspace and saved settings.")
+      : requiresPrivacyAcceptance
+        ? t(
+          "setup.firstLaunch.privacyIntro",
+          "Review and accept the privacy terms before using the app.",
+        )
+        : loadingDiagnostics
+          ? t(
+            "startup.loading.runtimeIntro",
+            "Checking local runtime and required components before opening the app.",
+          )
+          : t(
+            "setup.firstLaunch.runtimeIntro",
+            "Sbobino is finishing the local setup required to run completely on your Mac.",
+          );
 
     return (
       <main className="startup-shell">
         <section className="startup-card">
           <div className="startup-card-head">
-            <span className="startup-kicker">{t("setup.firstLaunch.kicker", "First launch setup")}</span>
-            <h1>{t("setup.firstLaunch.title", "Sbobino is preparing your Mac")}</h1>
-            <p>
-              {requiresPrivacyAcceptance
-                ? t(
-                  "setup.firstLaunch.privacyIntro",
-                  "Review and accept the privacy terms before using the app.",
-                )
-                : t(
-                  "setup.firstLaunch.runtimeIntro",
-                  "Sbobino is finishing the local setup required to run completely on your Mac.",
-                )}
-            </p>
+            <span className="startup-kicker">{startupKicker}</span>
+            <h1>{startupTitle}</h1>
+            <p>{startupIntro}</p>
           </div>
 
           {requiresPrivacyAcceptance && settings ? (
@@ -11032,7 +11150,12 @@ export function App({ standaloneSettingsWindow = false }: AppProps) {
     );
   }
 
-  if (!settings || !privacyPolicyAccepted || !startupRequirementsLoaded || !initialSetupReady) {
+  const shouldBlockMainUi =
+    !settings
+    || !privacyPolicyAccepted
+    || (!warmStartEligible && (!startupRequirementsLoaded || !initialSetupReady));
+
+  if (shouldBlockMainUi) {
     return renderStartupGate();
   }
 

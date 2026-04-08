@@ -33,6 +33,9 @@
     "active": true,
     "createUpdaterArtifacts": true,
     "targets": "all",
+    "resources": [
+      "resources/pyannote"
+    ],
     "externalBin": [
       "binaries/whisper-cli",
       "binaries/whisperkit-cli",

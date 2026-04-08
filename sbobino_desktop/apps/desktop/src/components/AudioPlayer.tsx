@@ -16,6 +16,7 @@ export type TrimRegion = {
 type AudioPlayerProps = {
   inputPath?: string | null;
   artifactId?: string | null;
+  sourceLabel?: string | null;
   trimEnabled?: boolean;
   initialTrimRegions?: TrimRegion[];
   onMetadataLoaded?: (metadata: { durationSeconds: number }) => void;
@@ -353,6 +354,7 @@ function drawWaveform(
 export function AudioPlayer({
   inputPath,
   artifactId,
+  sourceLabel,
   trimEnabled = true,
   initialTrimRegions,
   onMetadataLoaded,
@@ -456,6 +458,10 @@ export function AudioPlayer({
     if (!artifactId || artifactId.trim().length === 0) return null;
     return artifactId;
   }, [artifactId]);
+  const sourceLabelHint = useMemo(() => {
+    if (!sourceLabel || sourceLabel.trim().length === 0) return null;
+    return sourceLabel;
+  }, [sourceLabel]);
   const hasSource = Boolean(sourcePath || sourceArtifactId);
   const preferredLocalSrc = useMemo(() => {
     if (!sourcePath) return null;
@@ -773,9 +779,10 @@ export function AudioPlayer({
           ? await readArtifactAudio(currentArtifactId)
           : await readAudioFile(currentSourcePath!);
         if (sourceVersionRef.current !== sourceVersion) return false;
+        const mimeHintPath = currentSourcePath ?? sourceLabelHint;
         const blob = new Blob(
           [new Uint8Array(bytes)],
-          { type: currentSourcePath ? mediaMimeFromPath(currentSourcePath) : "application/octet-stream" },
+          { type: mimeHintPath ? mediaMimeFromPath(mimeHintPath) : "application/octet-stream" },
         );
         const objectUrl = URL.createObjectURL(blob);
         if (fallbackBlobUrlRef.current) URL.revokeObjectURL(fallbackBlobUrlRef.current);
@@ -805,7 +812,7 @@ export function AudioPlayer({
 
     fallbackLoadPromiseRef.current = loadPromise;
     return loadPromise;
-  }, [sourceArtifactId, sourcePath]);
+  }, [sourceArtifactId, sourceLabelHint, sourcePath]);
 
   useEffect(() => {
     if (!needsFallback || !hasSource) {

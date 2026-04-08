@@ -35,6 +35,7 @@ export type InitialSetupReport = {
   runtime_health: RuntimeHealth | null;
   steps: InitialSetupReportStep[];
   updated_at: string;
+  trusted_for_fast_start?: boolean;
 };
 
 const PYANNOTE_REPAIR_REASON_CODES = new Set([
@@ -102,4 +103,22 @@ export function isInitialSetupComplete(
   ).length === 0;
 
   return runtimeReady && pyannoteReady && modelsReady;
+}
+
+export function canWarmStartFromSetupReport(
+  privacyAccepted: boolean,
+  report: InitialSetupReport | null | undefined,
+): boolean {
+  if (!privacyAccepted || !report) {
+    return false;
+  }
+
+  if (report.trusted_for_fast_start === false) {
+    return false;
+  }
+
+  return report.setup_complete
+    && !report.final_error
+    && report.final_reason_code === "setup_complete"
+    && Boolean(report.runtime_health?.setup_complete);
 }

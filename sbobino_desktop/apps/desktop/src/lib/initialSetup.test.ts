@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ProvisioningModelCatalogEntry, RuntimeHealth } from "../types";
 import {
+  canWarmStartFromSetupReport,
   getInitialSetupMissingModels,
   isInitialSetupComplete,
   shouldRepairPyannoteRuntime,
@@ -128,5 +129,37 @@ describe("initialSetup helpers", () => {
 
     runtimeHealth.pyannote.ready = false;
     expect(isInitialSetupComplete(true, runtimeHealth, catalog)).toBe(false);
+  });
+
+  it("allows warm start only for trusted completed setup reports", () => {
+    const runtimeHealth = createRuntimeHealthFixture();
+
+    expect(
+      canWarmStartFromSetupReport(true, {
+        build_version: "0.1.5",
+        privacy_accepted: true,
+        setup_complete: true,
+        final_reason_code: "setup_complete",
+        final_error: null,
+        runtime_health: runtimeHealth,
+        steps: [],
+        updated_at: new Date().toISOString(),
+        trusted_for_fast_start: true,
+      }),
+    ).toBe(true);
+
+    expect(
+      canWarmStartFromSetupReport(true, {
+        build_version: "0.1.5",
+        privacy_accepted: true,
+        setup_complete: true,
+        final_reason_code: "setup_complete",
+        final_error: "stale",
+        runtime_health: runtimeHealth,
+        steps: [],
+        updated_at: new Date().toISOString(),
+        trusted_for_fast_start: true,
+      }),
+    ).toBe(false);
   });
 });

@@ -324,6 +324,10 @@ export async function fetchRuntimeHealth(): Promise<RuntimeHealth> {
   return invoke<RuntimeHealth>("get_transcription_runtime_health");
 }
 
+export async function readSetupReport(): Promise<InitialSetupReport | null> {
+  return invoke<InitialSetupReport | null>("read_setup_report");
+}
+
 export async function writeSetupReport(report: InitialSetupReport): Promise<void> {
   return invoke<void>("write_setup_report", { payload: report });
 }

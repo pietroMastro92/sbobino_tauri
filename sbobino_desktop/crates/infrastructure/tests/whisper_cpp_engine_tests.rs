@@ -187,6 +187,76 @@ exit 2
 }
 
 #[tokio::test]
+async fn transcribe_retries_in_cpu_mode_after_gpu_failure() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let script_path = temp.path().join("whisper-cli");
+    let models_dir = temp.path().join("models");
+    let input_wav = temp.path().join("audio.wav");
+
+    std::fs::create_dir_all(&models_dir).expect("failed to create models dir");
+    std::fs::write(models_dir.join("ggml-base.bin"), b"fake model")
+        .expect("failed to create model");
+    std::fs::write(&input_wav, b"RIFF....WAVE").expect("failed to create input wav");
+
+    write_executable_script(
+        &script_path,
+        r#"#!/bin/sh
+out=""
+cpu_mode=0
+while [ $# -gt 0 ]; do
+  if [ "$1" = "-of" ]; then
+    shift
+    out="$1"
+  elif [ "$1" = "-ng" ]; then
+    cpu_mode=1
+  fi
+  shift
+done
+
+if [ "$cpu_mode" -eq 0 ]; then
+  echo "ggml_metal_buffer_init: error: failed to allocate buffer, size = 2.94 MiB" 1>&2
+  exit 139
+fi
+
+if [ -n "$out" ]; then
+  printf "cpu fallback transcription\n" > "${out}.txt"
+fi
+echo "[00:00:00.000 --> 00:00:01.000] cpu fallback transcription"
+exit 0
+"#,
+    );
+
+    let engine = WhisperCppEngine::new(
+        script_path.to_string_lossy().to_string(),
+        models_dir.to_string_lossy().to_string(),
+    );
+
+    let emitted: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let emitted_clone = emitted.clone();
+
+    let transcript = engine
+        .transcribe(
+            &input_wav,
+            "ggml-base.bin",
+            "en",
+            &WhisperOptions::default(),
+            None,
+            Arc::new(move |line: String| {
+                emitted_clone.lock().expect("emit lock poisoned").push(line);
+            }),
+            Arc::new(|_seconds: f32| {}),
+        )
+        .await
+        .expect("transcription should succeed after cpu fallback");
+
+    assert!(transcript.text.contains("cpu fallback transcription"));
+    let emitted_lines = emitted.lock().expect("emit lock poisoned");
+    assert!(emitted_lines
+        .iter()
+        .any(|line| line.contains("retrying in CPU-safe mode")));
+}
+
+#[tokio::test]
 async fn transcribe_collapses_consecutive_repeated_lines_in_final_output() {
     let temp = tempdir().expect("failed to create temp dir");
     let script_path = temp.path().join("whisper-cli");

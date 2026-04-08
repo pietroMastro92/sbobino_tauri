@@ -25,6 +25,86 @@ cleanup() {
 }
 trap cleanup EXIT
 
+resolve_bundled_pyannote_root() {
+  local app_path=$1
+  local candidates=(
+    "$app_path/Contents/Resources/pyannote"
+    "$app_path/Contents/Resources/resources/pyannote"
+  )
+
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if [[ -d "$candidate/python" && -d "$candidate/model" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+assert_bundle_contains_no_local_user_data() {
+  local app_path=$1
+  local bundled_pyannote_root=${2:-}
+  local hits=()
+
+  local file_find_root=("$app_path/Contents")
+  local dir_find_root=("$app_path/Contents")
+  if [[ -n "$bundled_pyannote_root" ]]; then
+    file_find_root=(
+      "$app_path/Contents"
+      "(" -path "$bundled_pyannote_root" -o -path "$bundled_pyannote_root/*" ")" -prune -o
+    )
+    dir_find_root=(
+      "$app_path/Contents"
+      "(" -path "$bundled_pyannote_root" -o -path "$bundled_pyannote_root/*" ")" -prune -o
+    )
+  fi
+
+  while IFS= read -r match; do
+    [[ -n "$match" ]] && hits+=("$match")
+  done < <(
+    find "${file_find_root[@]}" \
+      \( \
+        -iname 'settings.json' -o \
+        -iname 'setup-report.json' -o \
+        -iname 'artifacts.db' -o \
+        -iname 'artifacts.db-*' -o \
+        -iname '*.sqlite' -o \
+        -iname '*.sqlite3' -o \
+        -iname '*.wav' -o \
+        -iname '*.mp3' -o \
+        -iname '*.m4a' -o \
+        -iname '*.aac' -o \
+        -iname '*.ogg' -o \
+        -iname '*.opus' -o \
+        -iname '*.flac' -o \
+        -iname '*.srt' -o \
+        -iname '*.vtt' -o \
+        -iname '*.docx' -o \
+        -iname '*.pdf' \
+      \) -print
+  )
+
+  while IFS= read -r match; do
+    [[ -n "$match" ]] && hits+=("$match")
+  done < <(
+    find "${dir_find_root[@]}" -type d \
+      \( \
+        -iname 'audio-vault' -o \
+        -iname 'artifacts' -o \
+        -iname 'backups' -o \
+        -iname 'deleted' \
+      \) -print
+  )
+
+  if (( ${#hits[@]} > 0 )); then
+    echo "Release bundle contains local user data or user-generated artifacts:" >&2
+    printf ' - %s\n' "${hits[@]}" >&2
+    exit 1
+  fi
+}
+
 mkdir -p "$ASSET_DIR"
 
 "$SCRIPTS_DIR/check_release_versions.sh" "$VERSION"
@@ -107,6 +187,13 @@ if [[ -n "$APP_PATH" ]]; then
       exit 1
     fi
   done
+
+  PYANNOTE_ROOT=$(resolve_bundled_pyannote_root "$APP_PATH") || {
+    echo "Bundled pyannote resources missing from '$APP_PATH/Contents/Resources'." >&2
+    exit 1
+  }
+
+  assert_bundle_contains_no_local_user_data "$APP_PATH" "$PYANNOTE_ROOT"
 fi
 
 echo "Release readiness checks passed for version $VERSION"

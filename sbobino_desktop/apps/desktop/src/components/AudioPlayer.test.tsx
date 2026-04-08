@@ -150,6 +150,26 @@ describe("AudioPlayer", () => {
 
   });
 
+  it("uses the artifact source label MIME hint when falling back from persisted mp4 media", async () => {
+    vi.mocked(readArtifactAudio).mockResolvedValue([1, 2, 3, 4]);
+    const createObjectUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:persisted-video-audio-track");
+
+    const { container } = render(
+      <AudioPlayer artifactId="artifact-123" sourceLabel="sample.mp4" />,
+    );
+    const audio = container.querySelector("audio") as HTMLAudioElement;
+    expect(audio).not.toBeNull();
+
+    await vi.waitFor(() => {
+      expect(readArtifactAudio).toHaveBeenCalledWith("artifact-123");
+    });
+
+    expect(createObjectUrl).toHaveBeenCalledTimes(1);
+    const blob = createObjectUrl.mock.calls[0]?.[0];
+    expect(blob).toBeInstanceOf(Blob);
+    expect((blob as Blob).type).toBe("video/mp4");
+  });
+
   it("does not restart local loading when the metadata callback identity changes", async () => {
     vi.mocked(readAudioFile).mockResolvedValue([1, 2, 3, 4]);
 

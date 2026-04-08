@@ -3,6 +3,7 @@ import type {
   AppSettings,
   ProvisioningModelCatalogEntry,
   ProvisioningStatus,
+  RuntimeHealth,
   TranscriptArtifact,
 } from "../types";
 import { loadInitialAppBootstrapData, type AppBootstrapLoaders } from "./appBootstrap";
@@ -120,6 +121,44 @@ function createProvisioningFixture(): ProvisioningStatus {
   };
 }
 
+function createRuntimeHealthFixture(): RuntimeHealth {
+  return {
+    host_os: "macos",
+    host_arch: "aarch64",
+    is_apple_silicon: true,
+    preferred_engine: "whisper_cpp",
+    configured_engine: "whisper_cpp",
+    ffmpeg_path: "",
+    ffmpeg_resolved: "/tmp/ffmpeg",
+    ffmpeg_available: true,
+    whisper_cli_path: "",
+    whisper_cli_resolved: "/tmp/whisper-cli",
+    whisper_cli_available: true,
+    whisper_stream_path: "",
+    whisper_stream_resolved: "/tmp/whisper-stream",
+    whisper_stream_available: true,
+    models_dir_configured: "/tmp/models",
+    models_dir_resolved: "/tmp/models",
+    model_filename: "ggml-base.bin",
+    model_present: true,
+    coreml_encoder_present: true,
+    missing_models: [],
+    missing_encoders: [],
+    pyannote: {
+      enabled: true,
+      ready: true,
+      runtime_installed: true,
+      model_installed: true,
+      arch: "aarch64-apple-darwin",
+      device: "cpu",
+      source: "release_asset",
+      reason_code: "ok",
+      message: "ready",
+    },
+    setup_complete: true,
+  };
+}
+
 describe("loadInitialAppBootstrapData", () => {
   it("keeps settings available in the standalone settings window when optional loads fail", async () => {
     const fetchSettingsSnapshot = vi.fn().mockResolvedValue(createSettingsFixture());
@@ -129,6 +168,7 @@ describe("loadInitialAppBootstrapData", () => {
     const listDeletedArtifacts = vi.fn().mockRejectedValue(new Error("deleted unavailable"));
     const provisioningStatus = vi.fn().mockRejectedValue(new Error("provisioning unavailable"));
     const provisioningModels = vi.fn().mockRejectedValue(new Error("models unavailable"));
+    const fetchRuntimeHealth = vi.fn().mockRejectedValue(new Error("runtime unavailable"));
 
     const result = await loadInitialAppBootstrapData(
       {
@@ -137,12 +177,14 @@ describe("loadInitialAppBootstrapData", () => {
         listDeletedArtifacts,
         provisioningStatus,
         provisioningModels,
+        fetchRuntimeHealth,
       },
       {
         standaloneSettingsWindow: true,
         includeDeletedArtifacts: true,
         includeProvisioning: true,
         includeModelCatalog: true,
+        includeRuntimeHealth: true,
       },
     );
 
@@ -151,6 +193,7 @@ describe("loadInitialAppBootstrapData", () => {
     expect(result.deletedArtifacts).toBeNull();
     expect(result.provisioning).toBeNull();
     expect(result.modelCatalog).toBeNull();
+    expect(result.runtimeHealth).toBeNull();
     expect(listRecentArtifacts).not.toHaveBeenCalled();
   });
 
@@ -159,12 +202,14 @@ describe("loadInitialAppBootstrapData", () => {
     const activeArtifacts: TranscriptArtifact[] = [];
     const deletedArtifacts: TranscriptArtifact[] = [];
     const modelCatalog: ProvisioningModelCatalogEntry[] = [];
+    const runtimeHealth = createRuntimeHealthFixture();
     const loaders: AppBootstrapLoaders = {
       fetchSettingsSnapshot: vi.fn().mockResolvedValue(settings),
       listRecentArtifacts: vi.fn().mockResolvedValue(activeArtifacts),
       listDeletedArtifacts: vi.fn().mockResolvedValue(deletedArtifacts),
       provisioningStatus: vi.fn().mockRejectedValue(new Error("provisioning unavailable")),
       provisioningModels: vi.fn().mockResolvedValue(modelCatalog),
+      fetchRuntimeHealth: vi.fn().mockResolvedValue(runtimeHealth),
     };
 
     const result = await loadInitialAppBootstrapData(loaders, {
@@ -173,6 +218,7 @@ describe("loadInitialAppBootstrapData", () => {
       includeDeletedArtifacts: true,
       includeProvisioning: true,
       includeModelCatalog: true,
+      includeRuntimeHealth: true,
     });
 
     expect(result.settings).toBe(settings);
@@ -180,6 +226,7 @@ describe("loadInitialAppBootstrapData", () => {
     expect(result.deletedArtifacts).toBe(deletedArtifacts);
     expect(result.provisioning).toBeNull();
     expect(result.modelCatalog).toBe(modelCatalog);
+    expect(result.runtimeHealth).toBe(runtimeHealth);
   });
 
   it("still fails when the settings snapshot itself cannot be loaded", async () => {
@@ -189,6 +236,7 @@ describe("loadInitialAppBootstrapData", () => {
       listDeletedArtifacts: vi.fn().mockResolvedValue([]),
       provisioningStatus: vi.fn().mockResolvedValue(createProvisioningFixture()),
       provisioningModels: vi.fn().mockResolvedValue([]),
+      fetchRuntimeHealth: vi.fn().mockResolvedValue(createRuntimeHealthFixture()),
     };
 
     await expect(loadInitialAppBootstrapData(loaders, {
@@ -205,6 +253,7 @@ describe("loadInitialAppBootstrapData", () => {
       listDeletedArtifacts: vi.fn().mockResolvedValue([]),
       provisioningStatus: vi.fn().mockResolvedValue(createProvisioningFixture()),
       provisioningModels: vi.fn().mockResolvedValue([]),
+      fetchRuntimeHealth: vi.fn().mockResolvedValue(createRuntimeHealthFixture()),
     };
 
     const result = await loadInitialAppBootstrapData(loaders, {
@@ -215,6 +264,7 @@ describe("loadInitialAppBootstrapData", () => {
     expect(result.deletedArtifacts).toBeNull();
     expect(result.provisioning).toBeNull();
     expect(result.modelCatalog).toBeNull();
+    expect(result.runtimeHealth).toBeNull();
     expect(loaders.listRecentArtifacts).toHaveBeenCalledTimes(1);
     expect(loaders.listDeletedArtifacts).not.toHaveBeenCalled();
     expect(loaders.provisioningStatus).not.toHaveBeenCalled();

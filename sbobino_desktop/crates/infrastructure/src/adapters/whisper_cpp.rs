@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -77,6 +79,19 @@ struct WhisperCliJsonToken {
     offsets: Option<WhisperCliJsonOffsets>,
     #[serde(default)]
     p: Option<f32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WhisperCliExecutionMode {
+    Default,
+    CpuFallback,
+}
+
+#[derive(Debug)]
+struct WhisperCliAttemptError {
+    message: String,
+    stderr_output: String,
+    status: Option<ExitStatus>,
 }
 
 impl WhisperCppEngine {
@@ -518,34 +533,32 @@ impl WhisperCppEngine {
         normalized
     }
 
-    async fn transcribe_with_cli(
-        &self,
-        input_wav: &Path,
-        model_path: &Path,
-        language_code: &str,
-        options: &WhisperOptions,
-        total_audio_seconds: Option<f32>,
-        emit_partial: Arc<dyn Fn(String) + Send + Sync>,
-        emit_progress_seconds: Arc<dyn Fn(f32) + Send + Sync>,
-    ) -> Result<TranscriptionOutput, ApplicationError> {
-        let output_base = std::env::temp_dir().join(format!(
-            "sbobino-whisper-{}-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|duration| duration.as_millis())
-                .unwrap_or(0),
-            OUTPUT_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
-        let output_txt_path = output_base.with_extension("txt");
-        let output_json_path = output_base.with_extension("json");
+    fn should_retry_with_cpu_fallback(error: &WhisperCliAttemptError) -> bool {
+        let haystack = format!(
+            "{}\n{}",
+            error.message.to_ascii_lowercase(),
+            error.stderr_output.to_ascii_lowercase()
+        );
 
-        let mut command = Command::new(&self.binary_path);
+        let metal_failure = haystack.contains("ggml_metal")
+            || haystack.contains("metal buffer")
+            || haystack.contains("failed to allocate buffer")
+            || haystack.contains("use gpu    = 1");
 
+        let crashed = error
+            .status
+            .map(|status| !status.success())
+            .unwrap_or(false)
+            && status_signal_is_crash(error.status);
+
+        metal_failure || crashed
+    }
+
+    fn configure_command_environment(command: &mut Command, binary_path: &str) {
         // Homebrew-installed whisper-cli links against @rpath/libggml.0.dylib but
         // ships with no embedded rpath. We resolve this by setting DYLD_LIBRARY_PATH
         // to the sibling libexec/lib directory where the dylibs actually live.
-        if let Some(binary_dir) = Path::new(&self.binary_path)
+        if let Some(binary_dir) = Path::new(binary_path)
             .canonicalize()
             .ok()
             .and_then(|p| p.parent().map(|d| d.to_path_buf()))
@@ -563,7 +576,6 @@ impl WhisperCppEngine {
             if sibling_lib.exists() {
                 dyld_paths.push(sibling_lib.to_string_lossy().to_string());
             }
-            // Also preserve any existing DYLD_LIBRARY_PATH
             if let Ok(existing) = std::env::var("DYLD_LIBRARY_PATH") {
                 dyld_paths.push(existing);
             }
@@ -571,7 +583,17 @@ impl WhisperCppEngine {
                 command.env("DYLD_LIBRARY_PATH", dyld_paths.join(":"));
             }
         }
+    }
 
+    fn append_cli_flags(
+        command: &mut Command,
+        input_wav: &Path,
+        model_path: &Path,
+        language_code: &str,
+        options: &WhisperOptions,
+        output_base: &Path,
+        mode: WhisperCliExecutionMode,
+    ) {
         command
             .kill_on_drop(true)
             .arg("-m")
@@ -633,28 +655,74 @@ impl WhisperCppEngine {
             command.arg("-bo").arg(options.best_of.to_string());
         }
 
+        if mode == WhisperCliExecutionMode::CpuFallback {
+            command.arg("-ng").arg("-nfa");
+        }
+
         command
             .arg("-otxt")
             .arg("-ojf")
             .arg("-pc")
             .arg("-pp")
             .arg("-of")
-            .arg(&output_base)
+            .arg(output_base)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+    }
 
-        let mut child = command.spawn().map_err(|e| {
-            ApplicationError::SpeechToText(format!(
+    async fn run_whisper_cli_attempt(
+        &self,
+        input_wav: &Path,
+        model_path: &Path,
+        language_code: &str,
+        options: &WhisperOptions,
+        total_audio_seconds: Option<f32>,
+        emit_partial: Arc<dyn Fn(String) + Send + Sync>,
+        emit_progress_seconds: Arc<dyn Fn(f32) + Send + Sync>,
+        mode: WhisperCliExecutionMode,
+    ) -> Result<TranscriptionOutput, WhisperCliAttemptError> {
+        let output_base = std::env::temp_dir().join(format!(
+            "sbobino-whisper-{}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_millis())
+                .unwrap_or(0),
+            OUTPUT_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let output_txt_path = output_base.with_extension("txt");
+        let output_json_path = output_base.with_extension("json");
+
+        let mut command = Command::new(&self.binary_path);
+        Self::configure_command_environment(&mut command, &self.binary_path);
+        Self::append_cli_flags(
+            &mut command,
+            input_wav,
+            model_path,
+            language_code,
+            options,
+            &output_base,
+            mode,
+        );
+
+        let mut child = command.spawn().map_err(|e| WhisperCliAttemptError {
+            message: format!(
                 "whisper-cli failed to start at '{}': {e}. Configure Whisper CLI path in Settings > Local Models.",
                 self.binary_path
-            ))
+            ),
+            stderr_output: String::new(),
+            status: None,
         })?;
 
-        let stdout = child.stdout.take().ok_or_else(|| {
-            ApplicationError::SpeechToText("missing whisper-cli stdout pipe".to_string())
+        let stdout = child.stdout.take().ok_or_else(|| WhisperCliAttemptError {
+            message: "missing whisper-cli stdout pipe".to_string(),
+            stderr_output: String::new(),
+            status: None,
         })?;
-        let stderr = child.stderr.take().ok_or_else(|| {
-            ApplicationError::SpeechToText("missing whisper-cli stderr pipe".to_string())
+        let stderr = child.stderr.take().ok_or_else(|| WhisperCliAttemptError {
+            message: "missing whisper-cli stderr pipe".to_string(),
+            stderr_output: String::new(),
+            status: None,
         })?;
 
         let collected = Arc::new(Mutex::new(TranscriptCollector::default()));
@@ -699,22 +767,46 @@ impl WhisperCppEngine {
             total_audio_seconds,
             last_activity_at_ms,
         )
-        .await?;
+        .await
+        .map_err(|error| WhisperCliAttemptError {
+            message: error.to_string(),
+            stderr_output: String::new(),
+            status: None,
+        })?;
 
-        let _stdout_lines = stdout_task.await.map_err(|e| {
-            ApplicationError::SpeechToText(format!("stdout reader task failed: {e}"))
-        })??;
+        let _stdout_lines = stdout_task
+            .await
+            .map_err(|e| WhisperCliAttemptError {
+                message: format!("stdout reader task failed: {e}"),
+                stderr_output: String::new(),
+                status: Some(status),
+            })?
+            .map_err(|error| WhisperCliAttemptError {
+                message: error.to_string(),
+                stderr_output: String::new(),
+                status: Some(status),
+            })?;
 
-        let stderr_lines = stderr_task.await.map_err(|e| {
-            ApplicationError::SpeechToText(format!("stderr reader task failed: {e}"))
-        })??;
+        let stderr_lines = stderr_task
+            .await
+            .map_err(|e| WhisperCliAttemptError {
+                message: format!("stderr reader task failed: {e}"),
+                stderr_output: String::new(),
+                status: Some(status),
+            })?
+            .map_err(|error| WhisperCliAttemptError {
+                message: error.to_string(),
+                stderr_output: String::new(),
+                status: Some(status),
+            })?;
         let stderr_output = stderr_lines.join("\n");
 
         if !status.success() {
-            return Err(ApplicationError::SpeechToText(format!(
-                "whisper-cli failed: {}",
-                stderr_output.trim()
-            )));
+            return Err(WhisperCliAttemptError {
+                message: format!("whisper-cli failed: {}", stderr_output.trim()),
+                stderr_output,
+                status: Some(status),
+            });
         }
 
         let streamed_segments = if let Ok(state) = collected.lock() {
@@ -753,9 +845,11 @@ impl WhisperCppEngine {
         let _ = fs::remove_file(&output_json_path).await;
 
         if transcript.is_empty() {
-            return Err(ApplicationError::SpeechToText(
-                "whisper-cli produced empty output".to_string(),
-            ));
+            return Err(WhisperCliAttemptError {
+                message: "whisper-cli produced empty output".to_string(),
+                stderr_output,
+                status: Some(status),
+            });
         }
 
         let segments = normalize_transcript_segments(
@@ -769,6 +863,64 @@ impl WhisperCppEngine {
             segments,
         })
     }
+
+    async fn transcribe_with_cli(
+        &self,
+        input_wav: &Path,
+        model_path: &Path,
+        language_code: &str,
+        options: &WhisperOptions,
+        total_audio_seconds: Option<f32>,
+        emit_partial: Arc<dyn Fn(String) + Send + Sync>,
+        emit_progress_seconds: Arc<dyn Fn(f32) + Send + Sync>,
+    ) -> Result<TranscriptionOutput, ApplicationError> {
+        match self
+            .run_whisper_cli_attempt(
+                input_wav,
+                model_path,
+                language_code,
+                options,
+                total_audio_seconds,
+                emit_partial.clone(),
+                emit_progress_seconds.clone(),
+                WhisperCliExecutionMode::Default,
+            )
+            .await
+        {
+            Ok(output) => Ok(output),
+            Err(error) if Self::should_retry_with_cpu_fallback(&error) => {
+                emit_partial(
+                    "Whisper GPU execution failed; retrying in CPU-safe mode.".to_string(),
+                );
+                self.run_whisper_cli_attempt(
+                    input_wav,
+                    model_path,
+                    language_code,
+                    options,
+                    total_audio_seconds,
+                    emit_partial,
+                    emit_progress_seconds,
+                    WhisperCliExecutionMode::CpuFallback,
+                )
+                .await
+                .map_err(|retry_error| ApplicationError::SpeechToText(retry_error.message))
+            }
+            Err(error) => Err(ApplicationError::SpeechToText(error.message)),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn status_signal_is_crash(status: Option<ExitStatus>) -> bool {
+    matches!(
+        status.and_then(|value| value.signal()),
+        Some(11) | Some(6) | Some(10)
+    )
+}
+
+#[cfg(not(unix))]
+fn status_signal_is_crash(_status: Option<ExitStatus>) -> bool {
+    false
 }
 
 #[cfg(test)]

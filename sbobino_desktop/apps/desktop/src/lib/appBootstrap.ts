@@ -2,6 +2,7 @@ import type {
   AppSettings,
   ProvisioningModelCatalogEntry,
   ProvisioningStatus,
+  RuntimeHealth,
   TranscriptArtifact,
 } from "../types";
 
@@ -11,6 +12,7 @@ export type AppBootstrapLoaders = {
   listDeletedArtifacts: (payload: { limit: number }) => Promise<TranscriptArtifact[]>;
   provisioningStatus: () => Promise<ProvisioningStatus>;
   provisioningModels: () => Promise<ProvisioningModelCatalogEntry[]>;
+  fetchRuntimeHealth: () => Promise<RuntimeHealth>;
 };
 
 export type InitialAppBootstrapOptions = {
@@ -19,6 +21,7 @@ export type InitialAppBootstrapOptions = {
   includeDeletedArtifacts?: boolean;
   includeProvisioning?: boolean;
   includeModelCatalog?: boolean;
+  includeRuntimeHealth?: boolean;
 };
 
 export type InitialAppBootstrapData = {
@@ -27,6 +30,7 @@ export type InitialAppBootstrapData = {
   deletedArtifacts: TranscriptArtifact[] | null;
   provisioning: ProvisioningStatus | null;
   modelCatalog: ProvisioningModelCatalogEntry[] | null;
+  runtimeHealth: RuntimeHealth | null;
 };
 
 export async function loadInitialAppBootstrapData(
@@ -39,6 +43,7 @@ export async function loadInitialAppBootstrapData(
     includeDeletedArtifacts = false,
     includeProvisioning = false,
     includeModelCatalog = false,
+    includeRuntimeHealth = false,
   } = options;
   const settings = await loaders.fetchSettingsSnapshot();
 
@@ -56,17 +61,22 @@ export async function loadInitialAppBootstrapData(
   const modelCatalogPromise: Promise<ProvisioningModelCatalogEntry[] | null> = includeModelCatalog
     ? loaders.provisioningModels()
     : Promise.resolve(null);
+  const runtimeHealthPromise: Promise<RuntimeHealth | null> = includeRuntimeHealth
+    ? loaders.fetchRuntimeHealth()
+    : Promise.resolve(null);
 
   const [
     activeArtifactsResult,
     deletedArtifactsResult,
     provisioningResult,
     modelCatalogResult,
+    runtimeHealthResult,
   ] = await Promise.allSettled([
     activeArtifactsPromise,
     deletedArtifactsPromise,
     provisioningPromise,
     modelCatalogPromise,
+    runtimeHealthPromise,
   ]);
 
   return {
@@ -82,6 +92,9 @@ export async function loadInitialAppBootstrapData(
       : null,
     modelCatalog: modelCatalogResult.status === "fulfilled"
       ? modelCatalogResult.value
+      : null,
+    runtimeHealth: runtimeHealthResult.status === "fulfilled"
+      ? runtimeHealthResult.value
       : null,
   };
 }

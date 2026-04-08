@@ -22,7 +22,7 @@ use crate::commands::backup::{export_app_backup, import_app_backup};
 use crate::commands::provisioning::{
     provisioning_cancel, provisioning_download_model, provisioning_install_pyannote,
     provisioning_install_runtime, provisioning_models, provisioning_start, provisioning_status,
-    write_setup_report,
+    read_setup_report, write_setup_report,
 };
 use crate::commands::realtime::{
     list_realtime_sessions, load_realtime_session, pause_realtime, resume_realtime, start_realtime,
@@ -170,6 +170,7 @@ pub fn run() {
             provisioning_install_pyannote,
             provisioning_install_runtime,
             provisioning_cancel,
+            read_setup_report,
             write_setup_report,
             ensure_transcription_runtime,
             get_transcription_runtime_health,
