@@ -137,6 +137,12 @@ struct BinaryResolution {
     resolved_path: String,
 }
 
+struct RunnableBinaryProbe {
+    args: &'static [&'static str],
+    timeout: Duration,
+    accept_running_after_timeout: bool,
+}
+
 #[derive(Clone)]
 pub struct AiEnhancerCandidate {
     pub key: String,
@@ -1653,8 +1659,11 @@ fn is_runnable_binary_file(candidate: &Path) -> bool {
         }
     }
 
-    let mut child = match std::process::Command::new(candidate)
-        .arg("--help")
+    let probe = runnable_binary_probe(candidate);
+    let mut command = std::process::Command::new(candidate);
+    command.args(probe.args);
+
+    let mut child = match command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1664,7 +1673,7 @@ fn is_runnable_binary_file(candidate: &Path) -> bool {
         Err(_) => return false,
     };
 
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + probe.timeout;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return status.success(),
@@ -1672,7 +1681,7 @@ fn is_runnable_binary_file(candidate: &Path) -> bool {
                 if Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return false;
+                    return probe.accept_running_after_timeout;
                 }
                 thread::sleep(Duration::from_millis(50));
             }
@@ -1682,6 +1691,27 @@ fn is_runnable_binary_file(candidate: &Path) -> bool {
                 return false;
             }
         }
+    }
+}
+
+fn runnable_binary_probe(candidate: &Path) -> RunnableBinaryProbe {
+    let file_name = candidate
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+
+    if file_name.eq_ignore_ascii_case("ffmpeg") {
+        return RunnableBinaryProbe {
+            args: &["-version"],
+            timeout: Duration::from_secs(3),
+            accept_running_after_timeout: true,
+        };
+    }
+
+    RunnableBinaryProbe {
+        args: &["--help"],
+        timeout: Duration::from_secs(2),
+        accept_running_after_timeout: false,
     }
 }
 impl RuntimeTranscriptionFactory {
@@ -3101,5 +3131,31 @@ Load command 14
         {
             assert!(pyannote_runtime_arch_matches_host("macos-x86_64"));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runnable_ffmpeg_probe_accepts_slow_cold_start() {
+        let temp = tempdir().expect("failed to create tempdir");
+        let ffmpeg = temp.path().join("ffmpeg");
+        write_executable_file(&ffmpeg, "#!/bin/sh\nsleep 3\nexit 0\n");
+
+        assert!(
+            super::is_runnable_binary_file(&ffmpeg),
+            "slow ffmpeg cold start should still be treated as runnable"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runnable_non_ffmpeg_probe_rejects_timeout() {
+        let temp = tempdir().expect("failed to create tempdir");
+        let whisper_cli = temp.path().join("whisper-cli");
+        write_executable_file(&whisper_cli, "#!/bin/sh\nsleep 3\nexit 0\n");
+
+        assert!(
+            !super::is_runnable_binary_file(&whisper_cli),
+            "non-ffmpeg probes should still fail on timeout"
+        );
     }
 }

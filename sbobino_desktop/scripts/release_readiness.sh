@@ -127,6 +127,66 @@ assert_bundle_contains_no_local_user_data() {
   fi
 }
 
+smoke_test_runtime_asset() {
+  local runtime_zip=$1
+  local runtime_stage
+  runtime_stage=$(mktemp -d)
+  trap 'rm -rf "$runtime_stage"' RETURN
+
+  unzip -q "$runtime_zip" -d "$runtime_stage"
+
+python3 - <<'PY' "$runtime_stage"
+import os
+import subprocess
+import sys
+
+root = sys.argv[1]
+bin_dir = os.path.join(root, "runtime", "bin")
+lib_dir = os.path.join(root, "runtime", "lib")
+env = os.environ.copy()
+env["DYLD_LIBRARY_PATH"] = lib_dir
+
+def run_probe(binary: str, args: list[str], timeout: int, allow_timeout: bool) -> None:
+    candidate = os.path.join(bin_dir, binary)
+    try:
+        result = subprocess.run(
+            [candidate, *args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+    except subprocess.TimeoutExpired as exc:
+        if allow_timeout:
+            return
+        raise SystemExit(
+            f"{binary} did not respond within {timeout}s while validating extracted runtime asset."
+        ) from exc
+    if result.returncode != 0:
+        preview = "\n".join(result.stdout.splitlines()[:20])
+        raise SystemExit(
+            f"{binary} exited with code {result.returncode} while validating extracted runtime asset.\n{preview}"
+        )
+
+for binary, args, timeout in (
+    ("ffmpeg", ["-version"], 10),
+    ("whisper-cli", ["--help"], 10),
+    ("whisper-stream", ["--help"], 10),
+):
+    candidate = os.path.join(bin_dir, binary)
+    if not os.path.isfile(candidate):
+        raise SystemExit(f"Runtime asset is missing expected binary: {candidate}")
+
+    if binary == "ffmpeg":
+        run_probe(binary, args, timeout, True)
+        run_probe(binary, args, 60, False)
+        continue
+
+    run_probe(binary, args, timeout, False)
+PY
+}
+
 mkdir -p "$ASSET_DIR"
 
 "$SCRIPTS_DIR/check_release_versions.sh" "$VERSION"
@@ -141,6 +201,7 @@ mkdir -p "$ASSET_DIR"
   model \
   "$PYANNOTE_MODEL_ZIP"
 "$SCRIPTS_DIR/generate_release_manifests.sh" "$VERSION" "$ASSET_DIR"
+smoke_test_runtime_asset "$RUNTIME_ZIP"
 
 export SBOBINO_LOCAL_RELEASE_ASSETS_DIR="$ASSET_DIR"
 
@@ -152,6 +213,8 @@ pushd "$ROOT_DIR" >/dev/null
 cargo test -p sbobino-infrastructure runtime_health_reports_version_mismatch_as_repair_required
 cargo test -p sbobino-infrastructure runtime_health_reports_install_incomplete_when_python_stdlib_is_missing
 cargo test -p sbobino-infrastructure runtime_health_self_heals_missing_manifest_and_status_from_bundled_override
+cargo test -p sbobino-infrastructure runnable_ffmpeg_probe_accepts_slow_cold_start
+cargo test -p sbobino-infrastructure runnable_non_ffmpeg_probe_rejects_timeout
 cargo test -p sbobino-desktop install_pyannote_archive_extracts_expected_root
 cargo test -p sbobino-desktop verify_file_sha256_rejects_wrong_checksum
 cargo test -p sbobino-desktop validate_setup_manifest_rejects_mismatched_release_tag
