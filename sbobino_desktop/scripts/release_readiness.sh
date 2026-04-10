@@ -243,6 +243,83 @@ if not os.path.isfile(output_wav) or os.path.getsize(output_wav) == 0:
 PY
 }
 
+smoke_test_pyannote_runtime_asset() {
+  local pyannote_runtime_zip=$1
+  local pyannote_stage
+  pyannote_stage=$(mktemp -d)
+  trap 'rm -rf "$pyannote_stage"' RETURN
+
+  /usr/bin/ditto -x -k "$pyannote_runtime_zip" "$pyannote_stage"
+
+python3 - <<'PY' "$pyannote_stage"
+import os
+import pathlib
+import subprocess
+import sys
+
+root = pathlib.Path(sys.argv[1]) / "python"
+python = root / "bin" / "python3"
+if not python.is_file():
+    raise SystemExit(f"Pyannote runtime asset is missing expected binary: {python}")
+
+stdlib_dirs = [
+    path
+    for path in (root / "lib").glob("python3.*")
+    if path.is_dir()
+    and (path / "encodings").is_dir()
+    and (path / "types.py").is_file()
+    and (path / "traceback.py").is_file()
+    and (path / "collections" / "__init__.py").is_file()
+    and (path / "collections" / "abc.py").is_file()
+]
+if not stdlib_dirs:
+    raise SystemExit("Pyannote runtime asset is missing an embedded Python standard library.")
+
+pyvenv_cfg = root / "pyvenv.cfg"
+if pyvenv_cfg.exists():
+    body = pyvenv_cfg.read_text(encoding="utf-8")
+    for forbidden in ("/opt/homebrew", "/usr/local", "/var/folders/"):
+        if forbidden in body:
+            raise SystemExit(
+                f"Pyannote runtime asset still contains machine-specific pyvenv.cfg paths ({forbidden})."
+            )
+
+env = {
+    "PATH": "/usr/bin:/bin",
+    "PYTHONHOME": str(root),
+    "PYTHONNOUSERSITE": "1",
+}
+for key in (
+    "PYTHONPATH",
+    "PYTHONEXECUTABLE",
+    "__PYVENV_LAUNCHER__",
+    "VIRTUAL_ENV",
+    "CONDA_PREFIX",
+    "CONDA_DEFAULT_ENV",
+):
+    env.pop(key, None)
+
+probe = subprocess.run(
+    [
+        str(python),
+        "-c",
+        "import collections.abc,ctypes,csv,encodings,traceback,types; import torch; from pyannote.audio import Pipeline; print('ok')",
+    ],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    text=True,
+    timeout=180,
+    env=env,
+)
+if probe.returncode != 0:
+    preview = "\n".join(probe.stdout.splitlines()[:40])
+    raise SystemExit(
+        "Pyannote runtime asset failed an import probe while validating the extracted asset.\n"
+        f"{preview}"
+    )
+PY
+}
+
 assert_runtime_asset_portability() {
   local runtime_zip=$1
   local runtime_stage
@@ -300,6 +377,7 @@ PY
 mkdir -p "$ASSET_DIR"
 
 "$SCRIPTS_DIR/check_release_versions.sh" "$VERSION"
+"$SCRIPTS_DIR/setup_bundled_pyannote.sh" --force
 
 "$SCRIPTS_DIR/package_macos_runtime_asset.sh" "$RUNTIME_ZIP"
 "$SCRIPTS_DIR/package_pyannote_asset.sh" \
@@ -313,6 +391,7 @@ mkdir -p "$ASSET_DIR"
 "$SCRIPTS_DIR/generate_release_manifests.sh" "$VERSION" "$ASSET_DIR"
 assert_runtime_asset_portability "$RUNTIME_ZIP"
 smoke_test_runtime_asset "$RUNTIME_ZIP"
+smoke_test_pyannote_runtime_asset "$PYANNOTE_RUNTIME_ZIP"
 
 export SBOBINO_LOCAL_RELEASE_ASSETS_DIR="$ASSET_DIR"
 

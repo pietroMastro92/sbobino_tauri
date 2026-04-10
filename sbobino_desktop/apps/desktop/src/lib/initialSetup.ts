@@ -5,8 +5,11 @@ import type {
   SpeechModel,
 } from "../types";
 
-export const INITIAL_SETUP_REQUIRED_MODELS: SpeechModel[] = ["base", "large_turbo"];
-export const INITIAL_SETUP_REQUIRES_PYANNOTE = true;
+export const INITIAL_SETUP_REQUIRED_MODELS: SpeechModel[] = [
+  "base",
+  "large_turbo",
+];
+export const INITIAL_SETUP_REQUIRES_PYANNOTE = false;
 
 export type InitialSetupStepId =
   | "privacy"
@@ -15,7 +18,11 @@ export type InitialSetupStepId =
   | "whisper-models"
   | "final-validation";
 
-export type InitialSetupStepStatus = "pending" | "running" | "completed" | "failed";
+export type InitialSetupStepStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed";
 
 export type InitialSetupReportStep = {
   id: InitialSetupStepId;
@@ -70,8 +77,13 @@ export function getInitialSetupMissingModels(
   modelCatalog: ProvisioningModelCatalogEntry[],
   requireCoreml: boolean,
 ): SpeechModel[] {
-  return INITIAL_SETUP_REQUIRED_MODELS.filter((model) =>
-    !isProvisionedModelReady(findProvisioningModelEntry(modelCatalog, model), requireCoreml));
+  return INITIAL_SETUP_REQUIRED_MODELS.filter(
+    (model) =>
+      !isProvisionedModelReady(
+        findProvisioningModelEntry(modelCatalog, model),
+        requireCoreml,
+      ),
+  );
 }
 
 export function shouldRepairPyannoteRuntime(
@@ -94,11 +106,11 @@ export function isInitialSetupComplete(
   }
 
   const runtimeReady = isRuntimeToolchainReady(runtimeHealth);
-  const pyannoteReady = !INITIAL_SETUP_REQUIRES_PYANNOTE || runtimeHealth.pyannote.ready;
-  const modelsReady = getInitialSetupMissingModels(
-    modelCatalog,
-    runtimeHealth.is_apple_silicon,
-  ).length === 0;
+  const pyannoteReady =
+    !INITIAL_SETUP_REQUIRES_PYANNOTE || runtimeHealth.pyannote.ready;
+  const modelsReady =
+    getInitialSetupMissingModels(modelCatalog, runtimeHealth.is_apple_silicon)
+      .length === 0;
 
   return runtimeReady && pyannoteReady && modelsReady;
 }
@@ -115,10 +127,12 @@ export function canWarmStartFromSetupReport(
     return false;
   }
 
-  return report.setup_complete
-    && !report.final_error
-    && report.final_reason_code === "setup_complete"
-    && Boolean(report.runtime_health?.setup_complete);
+  return (
+    report.setup_complete &&
+    !report.final_error &&
+    report.final_reason_code === "setup_complete" &&
+    Boolean(report.runtime_health?.setup_complete)
+  );
 }
 
 export function isRuntimeToolchainReady(
@@ -133,9 +147,11 @@ export function isRuntimeToolchainReady(
     return managedRuntime.ready;
   }
 
-  return runtimeHealth.ffmpeg_available
-    && runtimeHealth.whisper_cli_available
-    && runtimeHealth.whisper_stream_available;
+  return (
+    runtimeHealth.ffmpeg_available &&
+    runtimeHealth.whisper_cli_available &&
+    runtimeHealth.whisper_stream_available
+  );
 }
 
 export function getRuntimeToolchainFailureMessage(
@@ -159,31 +175,40 @@ export function getRuntimeToolchainFailureMessage(
   return null;
 }
 
-function getManagedRuntime(runtimeHealth: RuntimeHealth): RuntimeHealth["managed_runtime"] {
-  const fallbackReady = runtimeHealth.ffmpeg_available
-    && runtimeHealth.whisper_cli_available
-    && runtimeHealth.whisper_stream_available;
+function getManagedRuntime(
+  runtimeHealth: RuntimeHealth,
+): RuntimeHealth["managed_runtime"] {
+  const fallbackReady =
+    runtimeHealth.ffmpeg_available &&
+    runtimeHealth.whisper_cli_available &&
+    runtimeHealth.whisper_stream_available;
 
-  return runtimeHealth.managed_runtime ?? {
-    source: runtimeHealth.runtime_source || "unknown",
-    ready: fallbackReady,
-    ffmpeg: {
-      resolved_path: runtimeHealth.ffmpeg_resolved || runtimeHealth.ffmpeg_path,
-      available: runtimeHealth.ffmpeg_available,
-      failure_reason: "",
-      failure_message: "",
-    },
-    whisper_cli: {
-      resolved_path: runtimeHealth.whisper_cli_resolved || runtimeHealth.whisper_cli_path,
-      available: runtimeHealth.whisper_cli_available,
-      failure_reason: "",
-      failure_message: "",
-    },
-    whisper_stream: {
-      resolved_path: runtimeHealth.whisper_stream_resolved || runtimeHealth.whisper_stream_path,
-      available: runtimeHealth.whisper_stream_available,
-      failure_reason: "",
-      failure_message: "",
-    },
-  };
+  return (
+    runtimeHealth.managed_runtime ?? {
+      source: runtimeHealth.runtime_source || "unknown",
+      ready: fallbackReady,
+      ffmpeg: {
+        resolved_path:
+          runtimeHealth.ffmpeg_resolved || runtimeHealth.ffmpeg_path,
+        available: runtimeHealth.ffmpeg_available,
+        failure_reason: "",
+        failure_message: "",
+      },
+      whisper_cli: {
+        resolved_path:
+          runtimeHealth.whisper_cli_resolved || runtimeHealth.whisper_cli_path,
+        available: runtimeHealth.whisper_cli_available,
+        failure_reason: "",
+        failure_message: "",
+      },
+      whisper_stream: {
+        resolved_path:
+          runtimeHealth.whisper_stream_resolved ||
+          runtimeHealth.whisper_stream_path,
+        available: runtimeHealth.whisper_stream_available,
+        failure_reason: "",
+        failure_message: "",
+      },
+    }
+  );
 }

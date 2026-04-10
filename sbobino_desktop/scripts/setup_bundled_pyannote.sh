@@ -331,25 +331,14 @@ for config_dir in lib_root.glob("python*/config-*-darwin"):
             archive_link.unlink()
 PY
 
-echo "Rewriting pyvenv.cfg for local runtime resolution"
+echo "Removing pyvenv.cfg to keep the packaged runtime relocatable"
 STAGE_RUNTIME_DIR="$STAGE_RUNTIME_DIR" "$PYTHON_EXECUTABLE" - <<'PY'
 import os
 from pathlib import Path
 
-runtime_root = Path(os.environ["STAGE_RUNTIME_DIR"])
-cfg_path = runtime_root / "pyvenv.cfg"
-body = cfg_path.read_text(encoding="utf-8")
-lines = []
-replaced = False
-for line in body.splitlines():
-    if line.startswith("home = "):
-        lines.append(f"home = {runtime_root / 'bin'}")
-        replaced = True
-    else:
-        lines.append(line)
-if not replaced:
-    lines.append(f"home = {runtime_root / 'bin'}")
-cfg_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+cfg_path = Path(os.environ["STAGE_RUNTIME_DIR"]) / "pyvenv.cfg"
+if cfg_path.exists():
+    cfg_path.unlink()
 PY
 
 echo "Verifying bundled pyannote runtime"

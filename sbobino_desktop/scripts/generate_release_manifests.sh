@@ -29,9 +29,35 @@ sha256() {
   shasum -a 256 "$1" | awk '{print $1}'
 }
 
+file_size_bytes() {
+  python3 - "$1" <<'PY'
+import pathlib
+import sys
+
+print(pathlib.Path(sys.argv[1]).stat().st_size)
+PY
+}
+
+zip_expanded_size_bytes() {
+  python3 - "$1" <<'PY'
+import pathlib
+import sys
+import zipfile
+
+with zipfile.ZipFile(pathlib.Path(sys.argv[1])) as archive:
+    print(sum(entry.file_size for entry in archive.infolist()))
+PY
+}
+
 RUNTIME_SHA=$(sha256 "$RUNTIME_ZIP")
 PYANNOTE_RUNTIME_SHA=$(sha256 "$PYANNOTE_RUNTIME_ZIP")
 PYANNOTE_MODEL_SHA=$(sha256 "$PYANNOTE_MODEL_ZIP")
+RUNTIME_SIZE=$(file_size_bytes "$RUNTIME_ZIP")
+RUNTIME_EXPANDED_SIZE=$(zip_expanded_size_bytes "$RUNTIME_ZIP")
+PYANNOTE_RUNTIME_SIZE=$(file_size_bytes "$PYANNOTE_RUNTIME_ZIP")
+PYANNOTE_RUNTIME_EXPANDED_SIZE=$(zip_expanded_size_bytes "$PYANNOTE_RUNTIME_ZIP")
+PYANNOTE_MODEL_SIZE=$(file_size_bytes "$PYANNOTE_MODEL_ZIP")
+PYANNOTE_MODEL_EXPANDED_SIZE=$(zip_expanded_size_bytes "$PYANNOTE_MODEL_ZIP")
 
 cat >"$RUNTIME_MANIFEST" <<JSON
 {
@@ -40,7 +66,9 @@ cat >"$RUNTIME_MANIFEST" <<JSON
     {
       "kind": "speech_runtime_macos_aarch64",
       "name": "$(basename "$RUNTIME_ZIP")",
-      "sha256": "$RUNTIME_SHA"
+      "sha256": "$RUNTIME_SHA",
+      "size_bytes": $RUNTIME_SIZE,
+      "expanded_size_bytes": $RUNTIME_EXPANDED_SIZE
     }
   ]
 }
@@ -53,12 +81,16 @@ cat >"$PYANNOTE_MANIFEST" <<JSON
     {
       "kind": "pyannote_runtime_macos_aarch64",
       "name": "$(basename "$PYANNOTE_RUNTIME_ZIP")",
-      "sha256": "$PYANNOTE_RUNTIME_SHA"
+      "sha256": "$PYANNOTE_RUNTIME_SHA",
+      "size_bytes": $PYANNOTE_RUNTIME_SIZE,
+      "expanded_size_bytes": $PYANNOTE_RUNTIME_EXPANDED_SIZE
     },
     {
       "kind": "pyannote_model",
       "name": "$(basename "$PYANNOTE_MODEL_ZIP")",
-      "sha256": "$PYANNOTE_MODEL_SHA"
+      "sha256": "$PYANNOTE_MODEL_SHA",
+      "size_bytes": $PYANNOTE_MODEL_SIZE,
+      "expanded_size_bytes": $PYANNOTE_MODEL_EXPANDED_SIZE
     }
   ]
 }
@@ -73,23 +105,33 @@ cat >"$SETUP_MANIFEST" <<JSON
   "release_tag": "v$VERSION",
   "runtime_manifest": {
     "name": "$(basename "$RUNTIME_MANIFEST")",
-    "sha256": "$RUNTIME_MANIFEST_SHA"
+    "sha256": "$RUNTIME_MANIFEST_SHA",
+    "size_bytes": $(file_size_bytes "$RUNTIME_MANIFEST"),
+    "expanded_size_bytes": $(file_size_bytes "$RUNTIME_MANIFEST")
   },
   "runtime_asset": {
     "name": "$(basename "$RUNTIME_ZIP")",
-    "sha256": "$RUNTIME_SHA"
+    "sha256": "$RUNTIME_SHA",
+    "size_bytes": $RUNTIME_SIZE,
+    "expanded_size_bytes": $RUNTIME_EXPANDED_SIZE
   },
   "pyannote_manifest": {
     "name": "$(basename "$PYANNOTE_MANIFEST")",
-    "sha256": "$PYANNOTE_MANIFEST_SHA"
+    "sha256": "$PYANNOTE_MANIFEST_SHA",
+    "size_bytes": $(file_size_bytes "$PYANNOTE_MANIFEST"),
+    "expanded_size_bytes": $(file_size_bytes "$PYANNOTE_MANIFEST")
   },
   "pyannote_runtime_asset": {
     "name": "$(basename "$PYANNOTE_RUNTIME_ZIP")",
-    "sha256": "$PYANNOTE_RUNTIME_SHA"
+    "sha256": "$PYANNOTE_RUNTIME_SHA",
+    "size_bytes": $PYANNOTE_RUNTIME_SIZE,
+    "expanded_size_bytes": $PYANNOTE_RUNTIME_EXPANDED_SIZE
   },
   "pyannote_model_asset": {
     "name": "$(basename "$PYANNOTE_MODEL_ZIP")",
-    "sha256": "$PYANNOTE_MODEL_SHA"
+    "sha256": "$PYANNOTE_MODEL_SHA",
+    "size_bytes": $PYANNOTE_MODEL_SIZE,
+    "expanded_size_bytes": $PYANNOTE_MODEL_EXPANDED_SIZE
   }
 }
 JSON

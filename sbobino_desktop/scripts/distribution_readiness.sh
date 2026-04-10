@@ -11,6 +11,7 @@ REPO_SLUG=${2:-pietroMastro92/sbobino_tauri}
 TAG="v$VERSION"
 BASE_URL="https://github.com/$REPO_SLUG/releases/download/$TAG"
 TEMP_DIR=$(mktemp -d)
+CACHE_BUSTER=$(date +%s)
 
 cleanup() {
   rm -rf "$TEMP_DIR"
@@ -27,6 +28,7 @@ need_cmd() {
 need_cmd curl
 need_cmd python3
 need_cmd shasum
+need_cmd ditto
 
 ASSETS=(
   "Sbobino_${VERSION}_aarch64.dmg"
@@ -44,7 +46,7 @@ ASSETS=(
 download_asset() {
   local asset_name=$1
   local destination="$TEMP_DIR/$asset_name"
-  local url="$BASE_URL/$asset_name"
+  local url="$BASE_URL/$asset_name?nocache=$CACHE_BUSTER"
 
   mkdir -p "$(dirname "$destination")"
   curl \
@@ -74,6 +76,18 @@ asset_dir = pathlib.Path(asset_dir_raw)
 
 def sha256(name: str) -> str:
     return hashlib.sha256((asset_dir / name).read_bytes()).hexdigest()
+
+def file_size(name: str) -> int:
+    return (asset_dir / name).stat().st_size
+
+def expanded_size(name: str) -> int:
+    path = asset_dir / name
+    if path.suffix != ".zip":
+        return file_size(name)
+    import zipfile
+
+    with zipfile.ZipFile(path) as archive:
+        return sum(entry.file_size for entry in archive.infolist())
 
 def load_json(name: str):
     return json.loads((asset_dir / name).read_text())
@@ -121,6 +135,16 @@ def ensure_setup_descriptor(key: str, expected_name: str) -> dict:
         raise SystemExit(
             f"setup-manifest.json {key}.sha256 mismatch for {expected_name}: expected {checksum}, got {actual}"
         )
+    expected_size = descriptor.get("size_bytes")
+    if expected_size != file_size(expected_name):
+        raise SystemExit(
+            f"setup-manifest.json {key}.size_bytes mismatch for {expected_name}: expected {expected_size}, got {file_size(expected_name)}"
+        )
+    expected_expanded_size = descriptor.get("expanded_size_bytes")
+    if expected_expanded_size != expanded_size(expected_name):
+        raise SystemExit(
+            f"setup-manifest.json {key}.expanded_size_bytes mismatch for {expected_name}: expected {expected_expanded_size}, got {expanded_size(expected_name)}"
+        )
     return descriptor
 
 runtime_manifest_descriptor = ensure_setup_descriptor("runtime_manifest", "runtime-manifest.json")
@@ -152,6 +176,10 @@ if runtime_asset.get("name") != runtime_asset_descriptor["name"]:
     raise SystemExit("runtime-manifest.json runtime asset name does not match setup-manifest.json")
 if runtime_asset.get("sha256", "").strip().lower() != runtime_asset_descriptor["sha256"].strip().lower():
     raise SystemExit("runtime-manifest.json runtime asset checksum does not match setup-manifest.json")
+if runtime_asset.get("size_bytes") != runtime_asset_descriptor.get("size_bytes"):
+    raise SystemExit("runtime-manifest.json runtime asset size does not match setup-manifest.json")
+if runtime_asset.get("expanded_size_bytes") != runtime_asset_descriptor.get("expanded_size_bytes"):
+    raise SystemExit("runtime-manifest.json runtime expanded size does not match setup-manifest.json")
 
 pyannote_assets = {asset.get("kind"): asset for asset in pyannote.get("assets", [])}
 pyannote_runtime = pyannote_assets.get("pyannote_runtime_macos_aarch64")
@@ -164,12 +192,40 @@ if pyannote_runtime.get("name") != pyannote_runtime_descriptor["name"]:
     raise SystemExit("pyannote-manifest.json runtime asset name does not match setup-manifest.json")
 if pyannote_runtime.get("sha256", "").strip().lower() != pyannote_runtime_descriptor["sha256"].strip().lower():
     raise SystemExit("pyannote-manifest.json runtime checksum does not match setup-manifest.json")
+if pyannote_runtime.get("size_bytes") != pyannote_runtime_descriptor.get("size_bytes"):
+    raise SystemExit("pyannote-manifest.json runtime size does not match setup-manifest.json")
+if pyannote_runtime.get("expanded_size_bytes") != pyannote_runtime_descriptor.get("expanded_size_bytes"):
+    raise SystemExit("pyannote-manifest.json runtime expanded size does not match setup-manifest.json")
 if pyannote_model.get("name") != pyannote_model_descriptor["name"]:
     raise SystemExit("pyannote-manifest.json model asset name does not match setup-manifest.json")
 if pyannote_model.get("sha256", "").strip().lower() != pyannote_model_descriptor["sha256"].strip().lower():
     raise SystemExit("pyannote-manifest.json model checksum does not match setup-manifest.json")
+if pyannote_model.get("size_bytes") != pyannote_model_descriptor.get("size_bytes"):
+    raise SystemExit("pyannote-manifest.json model size does not match setup-manifest.json")
+if pyannote_model.get("expanded_size_bytes") != pyannote_model_descriptor.get("expanded_size_bytes"):
+    raise SystemExit("pyannote-manifest.json model expanded size does not match setup-manifest.json")
 
 print(f"Distribution readiness passed for {tag} from {base_url}")
+PY
+
+PYANNOTE_SMOKE_DIR="$TEMP_DIR/pyannote-smoke"
+mkdir -p "$PYANNOTE_SMOKE_DIR"
+/usr/bin/ditto -x -k "$TEMP_DIR/pyannote-runtime-macos-aarch64.zip" "$PYANNOTE_SMOKE_DIR"
+
+PATH="/usr/bin:/bin" \
+PYTHONHOME="$PYANNOTE_SMOKE_DIR/python" \
+PYTHONPATH="$PYANNOTE_SMOKE_DIR/python/lib/python3.11:$PYANNOTE_SMOKE_DIR/python/lib/python3.11/lib-dynload:$PYANNOTE_SMOKE_DIR/python/lib/python3.11/site-packages" \
+PYTHONNOUSERSITE="1" \
+"$PYANNOTE_SMOKE_DIR/python/bin/python3" - <<'PY'
+import collections.abc
+import ctypes
+import csv
+import encodings
+import traceback
+import types
+import torch
+from pyannote.audio import Pipeline
+print("Remote pyannote runtime smoke test passed")
 PY
 
 echo "Distribution readiness checks passed for $TAG"

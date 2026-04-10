@@ -10,6 +10,21 @@ use sbobino_application::{ApplicationError, SpeakerDiarizationEngine};
 use sbobino_domain::SpeakerTurn;
 
 pub const EMBEDDED_HELPER_FILENAME: &str = "pyannote_diarize.py";
+const PYTHON_ENV_VARS_TO_CLEAR: &[&str] = &[
+    "PYTHONPATH",
+    "PYTHONEXECUTABLE",
+    "PYTHONHOME",
+    "PYTHONNOUSERSITE",
+    "PYTHONUSERBASE",
+    "PYTHONSTARTUP",
+    "PYTHONPLATLIBDIR",
+    "PYTHONPYCACHEPREFIX",
+    "PYTHONBREAKPOINT",
+    "__PYVENV_LAUNCHER__",
+    "VIRTUAL_ENV",
+    "CONDA_PREFIX",
+    "CONDA_DEFAULT_ENV",
+];
 
 pub fn embedded_helper_script() -> &'static str {
     include_str!("../../../../scripts/pyannote_diarize.py")
@@ -19,6 +34,7 @@ pub fn embedded_helper_script() -> &'static str {
 pub struct PyannoteSpeakerDiarizationEngine {
     python_path: String,
     python_home: Option<PathBuf>,
+    python_path_env: Option<OsString>,
     script_path: String,
     model_path: String,
     device: String,
@@ -44,6 +60,7 @@ impl PyannoteSpeakerDiarizationEngine {
     pub fn new(
         python_path: String,
         python_home: Option<PathBuf>,
+        python_path_env: Option<OsString>,
         script_path: String,
         model_path: String,
         device: String,
@@ -52,6 +69,7 @@ impl PyannoteSpeakerDiarizationEngine {
         Self {
             python_path,
             python_home,
+            python_path_env,
             script_path,
             model_path,
             device,
@@ -123,8 +141,14 @@ impl SpeakerDiarizationEngine for PyannoteSpeakerDiarizationEngine {
         if let Some(path_env) = self.build_path_env() {
             command.env("PATH", path_env);
         }
+        for key in PYTHON_ENV_VARS_TO_CLEAR {
+            command.env_remove(key);
+        }
         if let Some(python_home) = &self.python_home {
             command.env("PYTHONHOME", python_home);
+        }
+        if let Some(python_path_env) = &self.python_path_env {
+            command.env("PYTHONPATH", python_path_env);
         }
         command.env("PYTHONNOUSERSITE", "1");
 
@@ -187,6 +211,7 @@ mod tests {
     fn build_path_env_prepends_custom_entries() {
         let engine = PyannoteSpeakerDiarizationEngine::new(
             "python3".to_string(),
+            None,
             None,
             "helper.py".to_string(),
             "model".to_string(),

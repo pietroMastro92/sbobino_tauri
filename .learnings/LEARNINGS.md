@@ -67,3 +67,27 @@ For future overlay and tooltip polish in sbobino, first verify arrow orientation
 - Tags: tooltip, overlay, animation, visual-regression
 
 ---
+
+## [LRN-20260409-001] best_practice
+
+**Logged**: 2026-04-09T17:44:58Z
+**Priority**: high
+**Status**: pending
+**Area**: infra
+
+### Summary
+For Sbobino release debugging, runtime verification on a clean target Mac must be treated as a separate problem from GitHub release publication.
+
+### Details
+Repeated release attempts mixed three different failure classes into one loop: GitHub prerelease publishing, first-launch provisioning, and runtime executable validation. The latest user screenshot shows a different class of issue than the earlier missing-asset failures: `ffmpeg` is present in the managed runtime path but exits with `SIGABRT`. That means the release pipeline may already be good enough to deliver the artifact, while the real blocker has shifted to managed runtime linkage or environment setup on the target Mac. The better workflow is to freeze the release shape once remote assets are coherent, then investigate the target-Mac runtime failure directly with binary diagnostics instead of continuing to churn release operations.
+
+### Suggested Action
+When first-launch setup fails after successful download and extraction, switch immediately to runtime crash investigation on the managed install: inspect `otool -L`, `codesign`, `DYLD_*` behavior, and stderr/crash output for the managed binaries before doing more release reshaping.
+
+### Metadata
+- Source: user_feedback
+- Related Files: sbobino_desktop/crates/infrastructure/src/lib.rs, sbobino_desktop/apps/desktop/src-tauri/src/commands/provisioning.rs, sbobino_desktop/scripts/release_readiness.sh
+- Tags: release, runtime, ffmpeg, sigabrt, macos, provisioning
+- See Also: ERR-20260409-001
+
+---

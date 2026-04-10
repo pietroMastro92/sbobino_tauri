@@ -168,6 +168,168 @@ pub struct ProvisioningStartResponse {
     pub started: bool,
 }
 
+const PYANNOTE_INSTALL_HEADROOM_BYTES: u64 = 128 * 1024 * 1024;
+
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = UNITS[0];
+    for next_unit in UNITS.iter().skip(1) {
+        if value < 1024.0 {
+            break;
+        }
+        value /= 1024.0;
+        unit = next_unit;
+    }
+    if unit == "B" {
+        format!("{bytes} {unit}")
+    } else {
+        format!("{value:.1} {unit}")
+    }
+}
+
+trait ReleaseAssetSizeExt {
+    fn size_bytes(&self) -> Option<u64>;
+    fn expanded_size_bytes(&self) -> Option<u64>;
+}
+
+impl ReleaseAssetSizeExt for ReleaseAssetDescriptor {
+    fn size_bytes(&self) -> Option<u64> {
+        self.size_bytes
+    }
+
+    fn expanded_size_bytes(&self) -> Option<u64> {
+        self.expanded_size_bytes
+    }
+}
+
+impl ReleaseAssetSizeExt for RuntimeReleaseAsset {
+    fn size_bytes(&self) -> Option<u64> {
+        self.size_bytes
+    }
+
+    fn expanded_size_bytes(&self) -> Option<u64> {
+        self.expanded_size_bytes
+    }
+}
+
+impl ReleaseAssetSizeExt for PyannoteReleaseAsset {
+    fn size_bytes(&self) -> Option<u64> {
+        self.size_bytes
+    }
+
+    fn expanded_size_bytes(&self) -> Option<u64> {
+        self.expanded_size_bytes
+    }
+}
+
+fn descriptor_bytes_or_zero(descriptor: &impl ReleaseAssetSizeExt) -> u64 {
+    descriptor.size_bytes().unwrap_or(0)
+}
+
+fn descriptor_expanded_bytes_or_zero(descriptor: &impl ReleaseAssetSizeExt) -> u64 {
+    descriptor.expanded_size_bytes().unwrap_or(0)
+}
+
+fn estimate_pyannote_required_free_bytes(selection: &PyannoteAssetSelection) -> u64 {
+    descriptor_bytes_or_zero(&selection.runtime_asset)
+        + descriptor_bytes_or_zero(&selection.model_asset)
+        + descriptor_expanded_bytes_or_zero(&selection.runtime_asset)
+        + descriptor_expanded_bytes_or_zero(&selection.model_asset)
+        + PYANNOTE_INSTALL_HEADROOM_BYTES
+}
+
+#[cfg(unix)]
+fn available_disk_space_bytes(path: &Path) -> Result<u64, String> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let c_path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| format!("invalid path for disk space check: '{}'", path.display()))?;
+    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    let result = unsafe { libc::statvfs(c_path.as_ptr(), stats.as_mut_ptr()) };
+    if result != 0 {
+        return Err(format!(
+            "failed to inspect available disk space at '{}': {}",
+            path.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+    let stats = unsafe { stats.assume_init() };
+    Ok((stats.f_bavail as u64).saturating_mul(stats.f_frsize as u64))
+}
+
+#[cfg(not(unix))]
+fn available_disk_space_bytes(_path: &Path) -> Result<u64, String> {
+    Ok(u64::MAX)
+}
+
+fn ensure_pyannote_install_has_free_space(
+    runtime_dir: &Path,
+    selection: &PyannoteAssetSelection,
+) -> Result<(), String> {
+    let required = estimate_pyannote_required_free_bytes(selection);
+    if required == PYANNOTE_INSTALL_HEADROOM_BYTES {
+        return Ok(());
+    }
+
+    let available = available_disk_space_bytes(runtime_dir)?;
+    if available >= required {
+        return Ok(());
+    }
+
+    Err(format!(
+        "Pyannote install needs about {} of free disk space but only {} is available near '{}'. Install it later from Settings > Local Models after freeing some space.",
+        format_bytes(required),
+        format_bytes(available),
+        runtime_dir.display()
+    ))
+}
+
+fn cleanup_pyannote_workdir(runtime_factory: &RuntimeTranscriptionFactory) -> Result<(), String> {
+    let runtime_dir = runtime_factory.managed_pyannote_runtime_dir();
+    let python_dir = runtime_factory.managed_pyannote_python_dir();
+    let model_dir = runtime_factory.managed_pyannote_model_dir();
+    let manifest_path = runtime_factory.managed_pyannote_manifest_path();
+
+    remove_path_if_exists(&python_dir)?;
+    remove_path_if_exists(&model_dir)?;
+    remove_path_if_exists(&manifest_path)?;
+
+    if runtime_dir.is_dir() {
+        for entry in std::fs::read_dir(&runtime_dir)
+            .map_err(|e| format!("failed to inspect pyannote runtime directory: {e}"))?
+        {
+            let entry =
+                entry.map_err(|e| format!("failed to inspect pyannote runtime entry: {e}"))?;
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with(".download-") || name.starts_with(".stage-") {
+                remove_path_if_exists(&path)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn persist_pyannote_install_failure(
+    runtime_factory: &RuntimeTranscriptionFactory,
+    had_ready_install: bool,
+    reason_code: &str,
+    message: &str,
+) {
+    if !had_ready_install {
+        if let Err(error) = cleanup_pyannote_workdir(runtime_factory) {
+            tracing::warn!("failed to clean up incomplete pyannote install: {error}");
+        }
+    }
+    if let Err(error) = runtime_factory.write_managed_pyannote_status(reason_code, message) {
+        tracing::warn!("failed to persist pyannote failure status: {error}");
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SetupReportStepPayload {
     pub id: String,
@@ -908,13 +1070,26 @@ fn spawn_pyannote_provisioning_download(
                     &error,
                     Some("pyannote_install_incomplete"),
                 );
-                if !had_ready_install {
-                    let _ = runtime_factory
-                        .write_managed_pyannote_status("pyannote_install_incomplete", &error);
-                }
+                persist_pyannote_install_failure(
+                    runtime_factory.as_ref(),
+                    had_ready_install,
+                    "pyannote_install_incomplete",
+                    &error,
+                );
                 return;
             }
         };
+
+        if let Err(error) = ensure_pyannote_install_has_free_space(&runtime_dir, &selection) {
+            emit_provisioning_status(&app, "error", &error, Some("pyannote_install_incomplete"));
+            persist_pyannote_install_failure(
+                runtime_factory.as_ref(),
+                had_ready_install,
+                "pyannote_install_incomplete",
+                &error,
+            );
+            return;
+        }
 
         let downloads = vec![
             (
@@ -940,12 +1115,12 @@ fn spawn_pyannote_provisioning_download(
                     "Pyannote installation cancelled.",
                     Some("cancelled"),
                 );
-                if !had_ready_install {
-                    let _ = runtime_factory.write_managed_pyannote_status(
-                        "pyannote_install_incomplete",
-                        "Pyannote installation was cancelled before completion.",
-                    );
-                }
+                persist_pyannote_install_failure(
+                    runtime_factory.as_ref(),
+                    had_ready_install,
+                    "pyannote_install_incomplete",
+                    "Pyannote installation was cancelled before completion.",
+                );
                 return;
             }
 
@@ -981,12 +1156,12 @@ fn spawn_pyannote_provisioning_download(
                     &format!("Failed to download {}: {error}", asset.name),
                     Some("pyannote_install_incomplete"),
                 );
-                if !had_ready_install {
-                    let _ = runtime_factory.write_managed_pyannote_status(
-                        "pyannote_install_incomplete",
-                        &format!("Failed to download {}: {error}", asset.name),
-                    );
-                }
+                persist_pyannote_install_failure(
+                    runtime_factory.as_ref(),
+                    had_ready_install,
+                    "pyannote_install_incomplete",
+                    &format!("Failed to download {}: {error}", asset.name),
+                );
                 return;
             }
 
@@ -1000,10 +1175,12 @@ fn spawn_pyannote_provisioning_download(
                         &error,
                         Some("pyannote_checksum_invalid"),
                     );
-                    if !had_ready_install {
-                        let _ = runtime_factory
-                            .write_managed_pyannote_status("pyannote_checksum_invalid", &error);
-                    }
+                    persist_pyannote_install_failure(
+                        runtime_factory.as_ref(),
+                        had_ready_install,
+                        "pyannote_checksum_invalid",
+                        &error,
+                    );
                     return;
                 }
             }
@@ -1035,10 +1212,12 @@ fn spawn_pyannote_provisioning_download(
                         &error,
                         Some("pyannote_install_incomplete"),
                     );
-                    if !had_ready_install {
-                        let _ = runtime_factory
-                            .write_managed_pyannote_status("pyannote_install_incomplete", &error);
-                    }
+                    persist_pyannote_install_failure(
+                        runtime_factory.as_ref(),
+                        had_ready_install,
+                        "pyannote_install_incomplete",
+                        &error,
+                    );
                     return;
                 }
                 Err(error) => {
@@ -1050,10 +1229,12 @@ fn spawn_pyannote_provisioning_download(
                         &message,
                         Some("pyannote_install_incomplete"),
                     );
-                    if !had_ready_install {
-                        let _ = runtime_factory
-                            .write_managed_pyannote_status("pyannote_install_incomplete", &message);
-                    }
+                    persist_pyannote_install_failure(
+                        runtime_factory.as_ref(),
+                        had_ready_install,
+                        "pyannote_install_incomplete",
+                        &message,
+                    );
                     return;
                 }
             }
@@ -1086,30 +1267,75 @@ fn spawn_pyannote_provisioning_download(
 
         if let Err(error) = runtime_factory.write_managed_pyannote_manifest(&manifest) {
             emit_provisioning_status(&app, "error", &error, Some("pyannote_install_incomplete"));
-            if !had_ready_install {
-                let _ = runtime_factory
-                    .write_managed_pyannote_status("pyannote_install_incomplete", &error);
-            }
+            persist_pyannote_install_failure(
+                runtime_factory.as_ref(),
+                had_ready_install,
+                "pyannote_install_incomplete",
+                &error,
+            );
             return;
         }
 
-        if let Err(error) = runtime_factory
-            .write_managed_pyannote_status("ok", "Pyannote diarization runtime is ready.")
-        {
-            emit_provisioning_status(&app, "error", &error, Some("pyannote_install_incomplete"));
-            if !had_ready_install {
-                let _ = runtime_factory
-                    .write_managed_pyannote_status("pyannote_install_incomplete", &error);
+        match runtime_factory.runtime_health() {
+            Ok(health) if health.pyannote.ready => {
+                if let Err(error) = runtime_factory
+                    .write_managed_pyannote_status("ok", "Pyannote diarization runtime is ready.")
+                {
+                    emit_provisioning_status(
+                        &app,
+                        "error",
+                        &error,
+                        Some("pyannote_install_incomplete"),
+                    );
+                    persist_pyannote_install_failure(
+                        runtime_factory.as_ref(),
+                        had_ready_install,
+                        "pyannote_install_incomplete",
+                        &error,
+                    );
+                    return;
+                }
+                emit_provisioning_status(
+                    &app,
+                    "completed",
+                    "Pyannote diarization runtime installed successfully.",
+                    None,
+                );
             }
-            return;
+            Ok(health) => {
+                let reason_code = if health.pyannote.reason_code.trim().is_empty() {
+                    "pyannote_install_incomplete"
+                } else {
+                    health.pyannote.reason_code.as_str()
+                };
+                let message = if health.pyannote.message.trim().is_empty() {
+                    "Pyannote diarization runtime could not be validated after installation."
+                } else {
+                    health.pyannote.message.as_str()
+                };
+                emit_provisioning_status(&app, "error", message, Some(reason_code));
+                persist_pyannote_install_failure(
+                    runtime_factory.as_ref(),
+                    had_ready_install,
+                    reason_code,
+                    message,
+                );
+            }
+            Err(error) => {
+                emit_provisioning_status(
+                    &app,
+                    "error",
+                    &error,
+                    Some("pyannote_install_incomplete"),
+                );
+                persist_pyannote_install_failure(
+                    runtime_factory.as_ref(),
+                    had_ready_install,
+                    "pyannote_install_incomplete",
+                    &error,
+                );
+            }
         }
-
-        emit_provisioning_status(
-            &app,
-            "completed",
-            "Pyannote diarization runtime installed successfully.",
-            None,
-        );
     });
 }
 
@@ -1806,6 +2032,44 @@ async fn download_to_path(
 }
 
 fn extract_zip_archive(archive_path: &Path, destination: &Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        return extract_zip_archive_with_ditto(archive_path, destination);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        return extract_zip_archive_with_zip_crate(archive_path, destination);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn extract_zip_archive_with_ditto(archive_path: &Path, destination: &Path) -> Result<(), String> {
+    let status = std::process::Command::new("/usr/bin/ditto")
+        .arg("-x")
+        .arg("-k")
+        .arg(archive_path)
+        .arg(destination)
+        .status()
+        .map_err(|e| format!("failed to launch ditto for zip extraction: {e}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "ditto failed to extract archive '{}' into '{}' (status: {}).",
+            archive_path.display(),
+            destination.display(),
+            status
+        ))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn extract_zip_archive_with_zip_crate(
+    archive_path: &Path,
+    destination: &Path,
+) -> Result<(), String> {
     let file =
         std::fs::File::open(archive_path).map_err(|e| format!("failed to open archive: {e}"))?;
     let mut archive =
@@ -1853,10 +2117,13 @@ fn extract_zip_archive(archive_path: &Path, destination: &Path) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::{
-        install_pyannote_archive, install_runtime_archive, sha256_file_hex,
-        validate_manifest_asset_descriptor, validate_setup_manifest, verify_file_sha256,
+        estimate_pyannote_required_free_bytes, install_pyannote_archive, install_runtime_archive,
+        sha256_file_hex, validate_manifest_asset_descriptor, validate_setup_manifest,
+        verify_file_sha256, PyannoteAssetSelection,
     };
-    use crate::release_assets::{ReleaseAssetDescriptor, SetupReleaseManifest};
+    use crate::release_assets::{
+        PyannoteReleaseAsset, ReleaseAssetDescriptor, SetupReleaseManifest,
+    };
     use std::io::Write;
     use tempfile::tempdir;
 
@@ -1864,6 +2131,8 @@ mod tests {
         ReleaseAssetDescriptor {
             name: name.to_string(),
             sha256: sha256.to_string(),
+            size_bytes: None,
+            expanded_size_bytes: None,
         }
     }
 
@@ -1957,7 +2226,7 @@ mod tests {
     #[test]
     fn validate_setup_manifest_rejects_mismatched_release_tag() {
         let manifest = SetupReleaseManifest {
-            app_version: "0.1.11".to_string(),
+            app_version: "0.1.12".to_string(),
             release_tag: "v0.1.8".to_string(),
             runtime_manifest: descriptor("runtime-manifest.json", "deadbeef"),
             runtime_asset: descriptor("speech-runtime-macos-aarch64.zip", "deadbeef"),
@@ -1966,7 +2235,7 @@ mod tests {
             pyannote_model_asset: descriptor("pyannote-model-community-1.zip", "deadbeef"),
         };
 
-        let error = validate_setup_manifest("0.1.11", &manifest)
+        let error = validate_setup_manifest("0.1.12", &manifest)
             .expect_err("release tag mismatch should fail");
         assert!(error.contains("release tag"));
     }
@@ -1982,5 +2251,31 @@ mod tests {
         )
         .expect_err("checksum mismatch should fail");
         assert!(error.contains("checksum mismatch"));
+    }
+
+    #[test]
+    fn estimate_pyannote_required_free_bytes_counts_archives_and_expanded_payloads() {
+        let selection = PyannoteAssetSelection {
+            runtime_asset: PyannoteReleaseAsset {
+                kind: "pyannote_runtime_macos_aarch64".to_string(),
+                name: "pyannote-runtime.zip".to_string(),
+                sha256: "deadbeef".to_string(),
+                size_bytes: Some(300),
+                expanded_size_bytes: Some(1000),
+            },
+            model_asset: PyannoteReleaseAsset {
+                kind: "pyannote_model".to_string(),
+                name: "pyannote-model.zip".to_string(),
+                sha256: "cafebabe".to_string(),
+                size_bytes: Some(30),
+                expanded_size_bytes: Some(120),
+            },
+            release_version: "0.1.12".to_string(),
+        };
+
+        assert_eq!(
+            estimate_pyannote_required_free_bytes(&selection),
+            300 + 1000 + 30 + 120 + super::PYANNOTE_INSTALL_HEADROOM_BYTES
+        );
     }
 }

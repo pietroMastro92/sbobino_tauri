@@ -4006,7 +4006,7 @@ dependencies = [
 
 [[package]]
 name = "sbobino-application"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -4024,7 +4024,7 @@ dependencies = [
 
 [[package]]
 name = "sbobino-desktop"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -4032,6 +4032,7 @@ dependencies = [
  "docx-rs",
  "futures-util",
  "hound",
+ "libc",
  "printpdf",
  "reqwest 0.12.28",
  "sbobino-application",
@@ -4057,7 +4058,7 @@ dependencies = [
 
 [[package]]
 name = "sbobino-domain"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "chrono",
  "num_cpus",
@@ -4068,7 +4069,7 @@ dependencies = [
 
 [[package]]
 name = "sbobino-infrastructure"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "async-trait",
  "chrono",

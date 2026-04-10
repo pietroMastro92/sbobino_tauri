@@ -13,6 +13,10 @@ pub const PYANNOTE_MODEL_ASSET: &str = "pyannote-model-community-1.zip";
 pub struct ReleaseAssetDescriptor {
     pub name: String,
     pub sha256: String,
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
+    #[serde(default)]
+    pub expanded_size_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -37,6 +41,10 @@ pub struct RuntimeReleaseAsset {
     pub kind: String,
     pub name: String,
     pub sha256: String,
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
+    #[serde(default)]
+    pub expanded_size_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -50,6 +58,10 @@ pub struct PyannoteReleaseAsset {
     pub kind: String,
     pub name: String,
     pub sha256: String,
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
+    #[serde(default)]
+    pub expanded_size_bytes: Option<u64>,
 }
 
 pub fn production_release_repository() -> &'static str {

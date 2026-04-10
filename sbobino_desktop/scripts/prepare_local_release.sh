@@ -210,11 +210,17 @@ pushd "$DESKTOP_DIR" >/dev/null
 npm ci
 popd >/dev/null
 
-"$ROOT_DIR/scripts/setup_bundled_pyannote.sh" --force
+if [[ "$RELEASE_PROFILE" == "standalone-dev" ]]; then
+  "$ROOT_DIR/scripts/setup_bundled_pyannote.sh" --force
+fi
 
 pushd "$DESKTOP_DIR" >/dev/null
 SBOBINO_RELEASE_PROFILE="$RELEASE_PROFILE" npm run tauri:build -- --target aarch64-apple-darwin --bundles app
 popd >/dev/null
+
+if [[ "$RELEASE_PROFILE" == "public" ]]; then
+  "$ROOT_DIR/scripts/setup_bundled_pyannote.sh" --force
+fi
 
 if [[ ! -d "$APP_PATH" ]]; then
   echo "Expected built app at '$APP_PATH', but it was not created." >&2

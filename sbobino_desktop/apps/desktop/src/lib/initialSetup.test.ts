@@ -141,10 +141,12 @@ describe("initialSetup helpers", () => {
       coreml_installed: false,
     };
 
-    expect(getInitialSetupMissingModels(catalog, true)).toEqual(["large_turbo"]);
+    expect(getInitialSetupMissingModels(catalog, true)).toEqual([
+      "large_turbo",
+    ]);
   });
 
-  it("keeps the app blocked until privacy, runtime, pyannote, and models are all ready", () => {
+  it("requires privacy, runtime, and models, but allows deferred pyannote setup", () => {
     const runtimeHealth = createRuntimeHealthFixture();
     const catalog = createModelCatalogFixture();
 
@@ -152,7 +154,7 @@ describe("initialSetup helpers", () => {
     expect(isInitialSetupComplete(false, runtimeHealth, catalog)).toBe(false);
 
     runtimeHealth.pyannote.ready = false;
-    expect(isInitialSetupComplete(true, runtimeHealth, catalog)).toBe(false);
+    expect(isInitialSetupComplete(true, runtimeHealth, catalog)).toBe(true);
   });
 
   it("allows warm start only for trusted completed setup reports", () => {
@@ -160,7 +162,7 @@ describe("initialSetup helpers", () => {
 
     expect(
       canWarmStartFromSetupReport(true, {
-        build_version: "0.1.11",
+        build_version: "0.1.12",
         privacy_accepted: true,
         setup_complete: true,
         final_reason_code: "setup_complete",
@@ -174,7 +176,7 @@ describe("initialSetup helpers", () => {
 
     expect(
       canWarmStartFromSetupReport(true, {
-        build_version: "0.1.11",
+        build_version: "0.1.12",
         privacy_accepted: true,
         setup_complete: true,
         final_reason_code: "setup_complete",

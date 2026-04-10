@@ -8,9 +8,16 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { confirm as confirmDialog, open, save } from "@tauri-apps/plugin-dialog";
+import {
+  confirm as confirmDialog,
+  open,
+  save,
+} from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { check as checkAppUpdate, type Update as TauriUpdate } from "@tauri-apps/plugin-updater";
+import {
+  check as checkAppUpdate,
+  type Update as TauriUpdate,
+} from "@tauri-apps/plugin-updater";
 import {
   ArrowLeft,
   AudioLines,
@@ -126,7 +133,6 @@ import {
   isInitialSetupComplete,
   isRuntimeToolchainReady,
   isProvisionedModelReady,
-  shouldRepairPyannoteRuntime,
 } from "./lib/initialSetup";
 import {
   getArtifactDiarizationUiState,
@@ -269,7 +275,8 @@ type SettingsPane =
   | "advanced";
 const HAS_OPTIMIZED_TRANSCRIPT_METADATA_KEY = "has_optimized_transcript";
 const EMOTION_ANALYSIS_METADATA_KEY = "emotion_analysis_v1";
-const EMOTION_ANALYSIS_GENERATED_AT_METADATA_KEY = "emotion_analysis_generated_at";
+const EMOTION_ANALYSIS_GENERATED_AT_METADATA_KEY =
+  "emotion_analysis_generated_at";
 const SETTINGS_PANES: SettingsPane[] = [
   "general",
   "transcription",
@@ -280,13 +287,19 @@ const SETTINGS_PANES: SettingsPane[] = [
   "advanced",
 ];
 
-function hasAcceptedCurrentPrivacyPolicy(settings: AppSettings | null | undefined): boolean {
-  return settings?.general.privacy_policy_version_accepted === PRIVACY_POLICY_VERSION;
+function hasAcceptedCurrentPrivacyPolicy(
+  settings: AppSettings | null | undefined,
+): boolean {
+  return (
+    settings?.general.privacy_policy_version_accepted === PRIVACY_POLICY_VERSION
+  );
 }
 
 function parseStandaloneSettingsPaneFromLocation(): SettingsPane {
   const pane = new URLSearchParams(window.location.search).get("pane");
-  return SETTINGS_PANES.includes(pane as SettingsPane) ? (pane as SettingsPane) : "general";
+  return SETTINGS_PANES.includes(pane as SettingsPane)
+    ? (pane as SettingsPane)
+    : "general";
 }
 
 function shouldPreloadSettingsDiagnostics(pane: SettingsPane): boolean {
@@ -368,15 +381,21 @@ function updateInitialSetupReportStep(
         status,
         detail: detail ?? step.detail,
         started_at:
-          status === "running" && !step.started_at ? timestamp : step.started_at,
+          status === "running" && !step.started_at
+            ? timestamp
+            : step.started_at,
         finished_at:
-          status === "completed" || status === "failed" ? timestamp : step.finished_at,
+          status === "completed" || status === "failed"
+            ? timestamp
+            : step.finished_at,
       };
     }),
   };
 }
 
-function hasPersistedOptimizedTranscript(artifact: TranscriptArtifact | null | undefined): boolean {
+function hasPersistedOptimizedTranscript(
+  artifact: TranscriptArtifact | null | undefined,
+): boolean {
   if (!artifact) {
     return false;
   }
@@ -386,9 +405,10 @@ function hasPersistedOptimizedTranscript(artifact: TranscriptArtifact | null | u
     return false;
   }
 
-  const optimizedFlag = artifact.metadata?.[HAS_OPTIMIZED_TRANSCRIPT_METADATA_KEY]
-    ?.trim()
-    .toLowerCase();
+  const optimizedFlag =
+    artifact.metadata?.[
+      HAS_OPTIMIZED_TRANSCRIPT_METADATA_KEY
+    ]?.trim().toLowerCase();
   if (optimizedFlag === "true") {
     return true;
   }
@@ -497,9 +517,11 @@ function guessAppleSiliconFromUA(): boolean {
   const platform = (navigator.platform ?? "").toLowerCase();
   const isMac = ua.includes("macintosh") || platform.includes("mac");
 
-  const userAgentData = (navigator as Navigator & {
-    userAgentData?: { architecture?: string; platform?: string };
-  }).userAgentData;
+  const userAgentData = (
+    navigator as Navigator & {
+      userAgentData?: { architecture?: string; platform?: string };
+    }
+  ).userAgentData;
   const uaArch = userAgentData?.architecture?.toLowerCase() ?? "";
   const uaPlatform = userAgentData?.platform?.toLowerCase() ?? "";
 
@@ -515,11 +537,15 @@ function guessAppleSiliconFromUA(): boolean {
   return true;
 }
 
-const allTranscriptionEngineOptions: Array<{ value: TranscriptionEngine; label: string }> = [
-  { value: "whisper_cpp", label: "Whisper C++" },
-];
+const allTranscriptionEngineOptions: Array<{
+  value: TranscriptionEngine;
+  label: string;
+}> = [{ value: "whisper_cpp", label: "Whisper C++" }];
 
-const chunkingOptions: Array<{ value: WhisperOptions["chunking_strategy"]; label: string }> = [
+const chunkingOptions: Array<{
+  value: WhisperOptions["chunking_strategy"];
+  label: string;
+}> = [
   { value: "vad", label: "Voice Activity Detection" },
   { value: "none", label: "No chunking" },
 ];
@@ -555,7 +581,17 @@ type ServiceCatalogItem = {
   kind: RemoteServiceKind;
   label: string;
   icon: LucideIcon;
-  tone: "google" | "openai" | "anthropic" | "azure" | "lmstudio" | "ollama" | "openrouter" | "xai" | "huggingface" | "custom";
+  tone:
+    | "google"
+    | "openai"
+    | "anthropic"
+    | "azure"
+    | "lmstudio"
+    | "ollama"
+    | "openrouter"
+    | "xai"
+    | "huggingface"
+    | "custom";
   defaultModel: string | null;
   defaultBaseUrl: string | null;
 };
@@ -644,14 +680,22 @@ const serviceCatalog: ServiceCatalogItem[] = [
 ];
 
 function getDefaultPromptTestInput(): string {
-  return t("settings.prompts.defaultTestInput", "This is an example of some transcribed text.");
+  return t(
+    "settings.prompts.defaultTestInput",
+    "This is an example of some transcribed text.",
+  );
 }
-function getDefaultWhisperOptions(useAppleSiliconDefaults = guessAppleSiliconFromUA()): WhisperOptions {
+function getDefaultWhisperOptions(
+  useAppleSiliconDefaults = guessAppleSiliconFromUA(),
+): WhisperOptions {
   // On Intel Macs: use more CPU threads, greedy beam search, and CPU-only compute units
   // (no Neural Engine or CoreML acceleration available)
   const threads = useAppleSiliconDefaults
     ? 4
-    : Math.max(4, Math.min(8, Math.floor((navigator.hardwareConcurrency ?? 8) / 2)));
+    : Math.max(
+        4,
+        Math.min(8, Math.floor((navigator.hardwareConcurrency ?? 8) / 2)),
+      );
 
   return {
     translate_to_english: false,
@@ -678,8 +722,12 @@ function getDefaultWhisperOptions(useAppleSiliconDefaults = guessAppleSiliconFro
     prompt: null,
     concurrent_worker_count: 4,
     chunking_strategy: "vad",
-    audio_encoder_compute_units: useAppleSiliconDefaults ? "cpu_and_neural_engine" : "cpu_only",
-    text_decoder_compute_units: useAppleSiliconDefaults ? "cpu_and_neural_engine" : "cpu_only",
+    audio_encoder_compute_units: useAppleSiliconDefaults
+      ? "cpu_and_neural_engine"
+      : "cpu_only",
+    text_decoder_compute_units: useAppleSiliconDefaults
+      ? "cpu_and_neural_engine"
+      : "cpu_only",
   };
 }
 
@@ -769,7 +817,11 @@ function formatDate(value: string): string {
   return date.toLocaleString();
 }
 
-async function withTimeout<T>(promise: Promise<T>, ms: number, timeoutMessage: string): Promise<T> {
+async function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  timeoutMessage: string,
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | null = null;
   try {
     return await Promise.race([
@@ -792,9 +844,15 @@ function dayGroupLabel(value: string): string {
   }
   const now = new Date();
   const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const startDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const startDate = new Date(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+  );
   const dayMs = 24 * 60 * 60 * 1000;
-  const diffDays = Math.round((startToday.getTime() - startDate.getTime()) / dayMs);
+  const diffDays = Math.round(
+    (startToday.getTime() - startDate.getTime()) / dayMs,
+  );
   if (diffDays === 0) return t("day.today");
   if (diffDays === 1) return t("day.yesterday");
   return date.toLocaleDateString();
@@ -834,8 +892,13 @@ function formatTrimRangeLabel(region: TrimRegion): string {
   return `${formatTimelineTimestamp(region.startTime)}-${formatTimelineTimestamp(region.endTime)}`;
 }
 
-function buildTrimArtifactTitle(sourceLabel: string, regions: TrimRegion[]): string {
-  const sortedRegions = [...regions].sort((left, right) => left.startTime - right.startTime);
+function buildTrimArtifactTitle(
+  sourceLabel: string,
+  regions: TrimRegion[],
+): string {
+  const sortedRegions = [...regions].sort(
+    (left, right) => left.startTime - right.startTime,
+  );
   const ranges = sortedRegions.map(formatTrimRangeLabel).join(", ");
   return ranges ? `${sourceLabel} - Trim ${ranges}` : `${sourceLabel} - Trim`;
 }
@@ -862,11 +925,13 @@ function buildActiveDetailContext(params: {
     restoreArtifactOnFailure = false,
   } = params;
   const title =
-    requestedTitle?.trim()
-    || trimmedAudioDraft?.title
-    || sourceArtifact?.title
-    || sourceArtifact?.source_label
-    || (inputPath ? fileLabel(inputPath) : t("detail.transcribing", "Transcribing"));
+    requestedTitle?.trim() ||
+    trimmedAudioDraft?.title ||
+    sourceArtifact?.title ||
+    sourceArtifact?.source_label ||
+    (inputPath
+      ? fileLabel(inputPath)
+      : t("detail.transcribing", "Transcribing"));
 
   return {
     title,
@@ -878,7 +943,9 @@ function buildActiveDetailContext(params: {
   };
 }
 
-function parseTimelineV2Segments(timelineV2Json: string | null | undefined): DetailSegment[] {
+function parseTimelineV2Segments(
+  timelineV2Json: string | null | undefined,
+): DetailSegment[] {
   const raw = timelineV2Json?.trim();
   if (!raw) {
     return [];
@@ -901,8 +968,12 @@ function parseTimelineV2Segments(timelineV2Json: string | null | undefined): Det
         return [];
       }
 
-      const startSeconds = parseFiniteSeconds((segment as { start_seconds?: unknown }).start_seconds);
-      const endSeconds = parseFiniteSeconds((segment as { end_seconds?: unknown }).end_seconds);
+      const startSeconds = parseFiniteSeconds(
+        (segment as { start_seconds?: unknown }).start_seconds,
+      );
+      const endSeconds = parseFiniteSeconds(
+        (segment as { end_seconds?: unknown }).end_seconds,
+      );
       let firstWordStart: number | null = null;
       let lastWordEnd: number | null = null;
       const words = (segment as { words?: unknown }).words;
@@ -911,11 +982,15 @@ function parseTimelineV2Segments(timelineV2Json: string | null | undefined): Det
           if (!word || typeof word !== "object") {
             continue;
           }
-          const wordStart = parseFiniteSeconds((word as { start_seconds?: unknown }).start_seconds);
+          const wordStart = parseFiniteSeconds(
+            (word as { start_seconds?: unknown }).start_seconds,
+          );
           if (firstWordStart === null && wordStart !== null) {
             firstWordStart = wordStart;
           }
-          const wordEnd = parseFiniteSeconds((word as { end_seconds?: unknown }).end_seconds);
+          const wordEnd = parseFiniteSeconds(
+            (word as { end_seconds?: unknown }).end_seconds,
+          );
           if (wordEnd !== null) {
             lastWordEnd = wordEnd;
           }
@@ -930,21 +1005,25 @@ function parseTimelineV2Segments(timelineV2Json: string | null | undefined): Det
       }
 
       const speakerLabel =
-        parseNonEmptyText((segment as { speaker_label?: unknown }).speaker_label)
-        ?? parseNonEmptyText((segment as { speaker_id?: unknown }).speaker_id);
+        parseNonEmptyText(
+          (segment as { speaker_label?: unknown }).speaker_label,
+        ) ??
+        parseNonEmptyText((segment as { speaker_id?: unknown }).speaker_id);
       const speakerId =
-        parseNonEmptyText((segment as { speaker_id?: unknown }).speaker_id)
-        ?? (speakerLabel ? normalizeSpeakerColorKey(speakerLabel) : null);
+        parseNonEmptyText((segment as { speaker_id?: unknown }).speaker_id) ??
+        (speakerLabel ? normalizeSpeakerColorKey(speakerLabel) : null);
 
-      return [{
-        sourceIndex,
-        time: formatTimelineTimestamp(anchorSeconds),
-        line: text,
-        speakerId,
-        speakerLabel,
-        startSeconds: resolvedStartSeconds,
-        endSeconds: resolvedEndSeconds,
-      }];
+      return [
+        {
+          sourceIndex,
+          time: formatTimelineTimestamp(anchorSeconds),
+          line: text,
+          speakerId,
+          speakerLabel,
+          startSeconds: resolvedStartSeconds,
+          endSeconds: resolvedEndSeconds,
+        },
+      ];
     });
   } catch {
     return [];
@@ -969,8 +1048,14 @@ function parseTimelineV2Document(
           ? parsed.version
           : 2,
       segments: parsed.segments
-        .map((segment) => (segment && typeof segment === "object" ? { ...(segment as Record<string, unknown>) } : null))
-        .filter((segment): segment is Record<string, unknown> => Boolean(segment)),
+        .map((segment) =>
+          segment && typeof segment === "object"
+            ? { ...(segment as Record<string, unknown>) }
+            : null,
+        )
+        .filter((segment): segment is Record<string, unknown> =>
+          Boolean(segment),
+        ),
     };
   } catch {
     return null;
@@ -985,15 +1070,24 @@ function validateTrimmedAudioDraftForTranscription(
   }
 
   if (!draft.path.trim()) {
-    return t("detail.trimMissingPath", "Trimmed audio is missing. Apply the trim again before retranscribing.");
+    return t(
+      "detail.trimMissingPath",
+      "Trimmed audio is missing. Apply the trim again before retranscribing.",
+    );
   }
 
   if (!Number.isFinite(draft.fileSizeBytes) || draft.fileSizeBytes <= 0) {
-    return t("detail.trimEmpty", "Trimmed audio is empty. Apply the trim again before retranscribing.");
+    return t(
+      "detail.trimEmpty",
+      "Trimmed audio is empty. Apply the trim again before retranscribing.",
+    );
   }
 
   if (!Number.isFinite(draft.durationSeconds) || draft.durationSeconds <= 0) {
-    return t("detail.trimInvalidDuration", "Trimmed audio duration is invalid. Apply the trim again before retranscribing.");
+    return t(
+      "detail.trimInvalidDuration",
+      "Trimmed audio duration is invalid. Apply the trim again before retranscribing.",
+    );
   }
 
   if (draft.durationSeconds < MIN_RETRANSCRIBE_TRIM_DURATION_SECONDS) {
@@ -1042,7 +1136,9 @@ function colorWithAlpha(hexColor: string, alpha: number): string {
   return `rgba(${red}, ${green}, ${blue}, ${safeAlpha})`;
 }
 
-function buildSpeakerAccentStyle(color: string | null | undefined): CSSProperties | undefined {
+function buildSpeakerAccentStyle(
+  color: string | null | undefined,
+): CSSProperties | undefined {
   if (!color) {
     return undefined;
   }
@@ -1054,7 +1150,9 @@ function buildSpeakerAccentStyle(color: string | null | undefined): CSSPropertie
   };
 }
 
-function readSegmentSpeakerLabel(segment: Record<string, unknown>): string | null {
+function readSegmentSpeakerLabel(
+  segment: Record<string, unknown>,
+): string | null {
   const label = parseNonEmptyText(segment.speaker_label);
   if (label) {
     return label;
@@ -1062,7 +1160,9 @@ function readSegmentSpeakerLabel(segment: Record<string, unknown>): string | nul
   return parseNonEmptyText(segment.speaker_id);
 }
 
-function readSegmentStartSeconds(segment: Record<string, unknown>): number | null {
+function readSegmentStartSeconds(
+  segment: Record<string, unknown>,
+): number | null {
   const start = parseFiniteSeconds(segment.start_seconds);
   if (start !== null) {
     return start;
@@ -1075,7 +1175,9 @@ function readSegmentStartSeconds(segment: Record<string, unknown>): number | nul
     if (!word || typeof word !== "object") {
       continue;
     }
-    const wordStart = parseFiniteSeconds((word as { start_seconds?: unknown }).start_seconds);
+    const wordStart = parseFiniteSeconds(
+      (word as { start_seconds?: unknown }).start_seconds,
+    );
     if (wordStart !== null) {
       return wordStart;
     }
@@ -1083,7 +1185,9 @@ function readSegmentStartSeconds(segment: Record<string, unknown>): number | nul
   return null;
 }
 
-function readSegmentEndSeconds(segment: Record<string, unknown>): number | null {
+function readSegmentEndSeconds(
+  segment: Record<string, unknown>,
+): number | null {
   const end = parseFiniteSeconds(segment.end_seconds);
   if (end !== null) {
     return end;
@@ -1097,7 +1201,9 @@ function readSegmentEndSeconds(segment: Record<string, unknown>): number | null 
     if (!word || typeof word !== "object") {
       continue;
     }
-    const wordEnd = parseFiniteSeconds((word as { end_seconds?: unknown }).end_seconds);
+    const wordEnd = parseFiniteSeconds(
+      (word as { end_seconds?: unknown }).end_seconds,
+    );
     if (wordEnd !== null) {
       return wordEnd;
     }
@@ -1105,12 +1211,17 @@ function readSegmentEndSeconds(segment: Record<string, unknown>): number | null 
   return null;
 }
 
-function pushOrReplaceQueueItem(items: JobProgress[], incoming: JobProgress): JobProgress[] {
+function pushOrReplaceQueueItem(
+  items: JobProgress[],
+  incoming: JobProgress,
+): JobProgress[] {
   const existing = items.find((entry) => entry.job_id === incoming.job_id);
   if (!existing) {
     return [incoming, ...items];
   }
-  return items.map((entry) => (entry.job_id === incoming.job_id ? incoming : entry));
+  return items.map((entry) =>
+    entry.job_id === incoming.job_id ? incoming : entry,
+  );
 }
 
 function formatShortDuration(seconds: number): string {
@@ -1119,7 +1230,9 @@ function formatShortDuration(seconds: number): string {
   return `${mm}:${ss}`;
 }
 
-function parseArtifactDurationSeconds(artifact: TranscriptArtifact | null | undefined): number {
+function parseArtifactDurationSeconds(
+  artifact: TranscriptArtifact | null | undefined,
+): number {
   if (!artifact) {
     return 0;
   }
@@ -1143,7 +1256,11 @@ type InlineInfoHintProps = {
   side?: "top" | "left";
 };
 
-function InlineInfoHint({ label, description, side = "top" }: InlineInfoHintProps): JSX.Element {
+function InlineInfoHint({
+  label,
+  description,
+  side = "top",
+}: InlineInfoHintProps): JSX.Element {
   return (
     <button
       type="button"
@@ -1160,7 +1277,9 @@ function InlineInfoHint({ label, description, side = "top" }: InlineInfoHintProp
   );
 }
 
-function percentageFromJobProgress(progress: JobProgress | null | undefined): number {
+function percentageFromJobProgress(
+  progress: JobProgress | null | undefined,
+): number {
   if (!progress) return 0;
   const currentSeconds = progress.current_seconds ?? null;
   const totalSeconds = progress.total_seconds ?? null;
@@ -1177,7 +1296,9 @@ function activeJobPercentage(
 ): number {
   if (!activeJobId) return 0;
   const queuePercentage =
-    activeQueueJob?.job_id === activeJobId ? percentageFromJobProgress(activeQueueJob) : 0;
+    activeQueueJob?.job_id === activeJobId
+      ? percentageFromJobProgress(activeQueueJob)
+      : 0;
   const livePercentage =
     progress?.job_id === activeJobId ? percentageFromJobProgress(progress) : 0;
   return clampPercentage(Math.max(queuePercentage, livePercentage));
@@ -1230,7 +1351,10 @@ function mergeTranscriptionPreview(previous: string, incoming: string): string {
   return `${current}\n${next}`;
 }
 
-function setCancelPillDangerProximity(button: HTMLButtonElement, clientX: number): void {
+function setCancelPillDangerProximity(
+  button: HTMLButtonElement,
+  clientX: number,
+): void {
   const bounds = button.getBoundingClientRect();
   if (bounds.width <= 0) {
     button.style.setProperty("--danger-proximity", "0");
@@ -1279,7 +1403,10 @@ function formatJobMessage(stage: string): string {
     case "queued":
       return t("queue.queuedJob", "Queued transcription job.");
     case "preparing_audio":
-      return t("queue.message.preparingAudio", "Preparing audio for transcription...");
+      return t(
+        "queue.message.preparingAudio",
+        "Preparing audio for transcription...",
+      );
     case "transcribing":
       return t("queue.message.transcribing", "Transcribing audio...");
     case "diarizing":
@@ -1307,7 +1434,9 @@ function formatProviderLabel(kind: RemoteServiceKind): string {
     return t("settings.ai.customService", "Custom");
   }
   if (entry) return entry.label;
-  return kind.replace(/_/g, " ").replace(/\b\w/g, (match) => match.toUpperCase());
+  return kind
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
 function formatRemoteServiceLabel(
@@ -1352,14 +1481,15 @@ function formatAppError(error: unknown): string {
     if (typeof value !== "object") return null;
 
     const record = value as Record<string, unknown>;
-    const direct = typeof record.message === "string" ? record.message.trim() : "";
+    const direct =
+      typeof record.message === "string" ? record.message.trim() : "";
     if (direct.length > 0) return direct;
 
     return (
-      pickMessage(record.error, depth + 1)
-      ?? pickMessage(record.cause, depth + 1)
-      ?? pickMessage(record.details, depth + 1)
-      ?? pickMessage(record.data, depth + 1)
+      pickMessage(record.error, depth + 1) ??
+      pickMessage(record.cause, depth + 1) ??
+      pickMessage(record.details, depth + 1) ??
+      pickMessage(record.data, depth + 1)
     );
   };
 
@@ -1380,10 +1510,12 @@ function formatAppErrorCode(error: unknown): string | null {
     if (typeof record.code === "string" && record.code.trim().length > 0) {
       return record.code.trim();
     }
-    return pickCode(record.error, depth + 1)
-      ?? pickCode(record.cause, depth + 1)
-      ?? pickCode(record.details, depth + 1)
-      ?? pickCode(record.data, depth + 1);
+    return (
+      pickCode(record.error, depth + 1) ??
+      pickCode(record.cause, depth + 1) ??
+      pickCode(record.details, depth + 1) ??
+      pickCode(record.data, depth + 1)
+    );
   };
 
   return pickCode(error);
@@ -1405,7 +1537,9 @@ function formatPyannoteHealthMessage(
     return null;
   }
   if (health.ready) {
-    return t("settings.pyannote.readyOn", "Pyannote ready on {arch}.", { arch: health.arch });
+    return t("settings.pyannote.readyOn", "Pyannote ready on {arch}.", {
+      arch: health.arch,
+    });
   }
 
   if (health.reason_code === "pyannote_runtime_missing") {
@@ -1416,17 +1550,8 @@ function formatPyannoteHealthMessage(
     return t("settings.pyannote.desc");
   }
 
-  if (
-    health.reason_code === "pyannote_version_mismatch"
-    || health.reason_code === "pyannote_arch_mismatch"
-    || health.reason_code === "pyannote_repair_required"
-    || health.reason_code === "pyannote_install_incomplete"
-    || health.reason_code === "pyannote_checksum_invalid"
-  ) {
-    return t(
-      "settings.pyannote.repairRequired",
-      "Pyannote assets need repair. Repair the diarization runtime from Local Models.",
-    );
+  if (health.message) {
+    return health.message || t("settings.pyannote.desc");
   }
 
   return t("settings.pyannote.desc");
@@ -1443,7 +1568,9 @@ function formatRealtimeStatusMessage(state: string): string {
   }
 }
 
-function formatRuntimeNotReadyMessage(runtimeHealth?: RuntimeHealth | null): string {
+function formatRuntimeNotReadyMessage(
+  runtimeHealth?: RuntimeHealth | null,
+): string {
   const managedFailure = getRuntimeToolchainFailureMessage(runtimeHealth);
   if (managedFailure) {
     return managedFailure;
@@ -1454,7 +1581,9 @@ function formatRuntimeNotReadyMessage(runtimeHealth?: RuntimeHealth | null): str
   );
 }
 
-function formatTranscriptionPreflightMessage(preflight: TranscriptionStartPreflight): string {
+function formatTranscriptionPreflightMessage(
+  preflight: TranscriptionStartPreflight,
+): string {
   if (preflight.reason_code === "whispercpp_missing") {
     return t(
       "error.whisperCliNotRunnable",
@@ -1476,14 +1605,28 @@ function formatTranscriptionPreflightMessage(preflight: TranscriptionStartPrefli
   }
 
   if (preflight.reason_code.startsWith("pyannote_")) {
-    return formatPyannoteHealthMessage(preflight.pyannote)
-      ?? t("error.cannotStartOnMachine", "Transcription cannot start on this machine.");
+    return (
+      formatPyannoteHealthMessage(preflight.pyannote) ??
+      t(
+        "error.cannotStartOnMachine",
+        "Transcription cannot start on this machine.",
+      )
+    );
   }
 
-  return t("error.cannotStartOnMachine", "Transcription cannot start on this machine.");
+  return t(
+    "error.cannotStartOnMachine",
+    "Transcription cannot start on this machine.",
+  );
 }
 
-function ProgressRing({ percentage, size = 18 }: { percentage: number; size?: number }): JSX.Element {
+function ProgressRing({
+  percentage,
+  size = 18,
+}: {
+  percentage: number;
+  size?: number;
+}): JSX.Element {
   const clamped = makeProgressVisible(percentage);
   const ringStyle = {
     width: `${size}px`,
@@ -1573,7 +1716,10 @@ function readStoredNumber(key: string, fallback: number): number {
 }
 
 function createRemoteServiceId(kind: RemoteServiceKind): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
     return `${kind}_${crypto.randomUUID()}`;
   }
   return `${kind}_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`;
@@ -1593,8 +1739,10 @@ function normalizeSettings(settings: AppSettings): AppSettings {
     ...settings,
     general: {
       ...settings.general,
-      privacy_policy_version_accepted: settings.general?.privacy_policy_version_accepted ?? null,
-      privacy_policy_accepted_at: settings.general?.privacy_policy_accepted_at ?? null,
+      privacy_policy_version_accepted:
+        settings.general?.privacy_policy_version_accepted ?? null,
+      privacy_policy_accepted_at:
+        settings.general?.privacy_policy_accepted_at ?? null,
       appearance_mode: settings.general?.appearance_mode ?? "system",
     },
     transcription: {
@@ -1613,8 +1761,8 @@ function normalizeSettings(settings: AppSettings): AppSettings {
         gemini: {
           ...settings.ai.providers.gemini,
           has_api_key:
-            settings.ai.providers.gemini.has_api_key
-            || Boolean(settings.ai.providers.gemini.api_key?.trim()),
+            settings.ai.providers.gemini.has_api_key ||
+            Boolean(settings.ai.providers.gemini.api_key?.trim()),
         },
       },
       remote_services: (settings.ai.remote_services ?? []).map((service) => ({
@@ -1628,14 +1776,17 @@ function normalizeSettings(settings: AppSettings): AppSettings {
       bindings: {
         ...settings.prompts.bindings,
       },
-      templates: settings.prompts.templates.map((template) => ({ ...template })),
+      templates: settings.prompts.templates.map((template) => ({
+        ...template,
+      })),
     },
   };
 
   normalized.model = normalized.transcription.model;
   normalized.language = normalized.transcription.language;
   normalized.transcription_engine = normalized.transcription.engine;
-  normalized.ai_post_processing = normalized.transcription.enable_ai_post_processing;
+  normalized.ai_post_processing =
+    normalized.transcription.enable_ai_post_processing;
   normalized.whisper_cli_path = normalized.transcription.whisper_cli_path;
   normalized.whisperkit_cli_path = normalized.transcription.whisperkit_cli_path;
   normalized.ffmpeg_path = normalized.transcription.ffmpeg_path;
@@ -1646,7 +1797,8 @@ function normalizeSettings(settings: AppSettings): AppSettings {
 
   normalized.gemini_model = normalized.ai.providers.gemini.model;
   normalized.gemini_api_key = normalized.ai.providers.gemini.api_key;
-  normalized.gemini_api_key_present = normalized.ai.providers.gemini.has_api_key;
+  normalized.gemini_api_key_present =
+    normalized.ai.providers.gemini.has_api_key;
 
   return normalized;
 }
@@ -1654,10 +1806,10 @@ function normalizeSettings(settings: AppSettings): AppSettings {
 function sanitizeSpeakerDiarizationSettings(
   settings: SpeakerDiarizationSettings,
 ): SpeakerDiarizationSettings {
-  const device = settings.device === "auto"
-    || settings.device === "mps"
-    ? settings.device
-    : "cpu";
+  const device =
+    settings.device === "auto" || settings.device === "mps"
+      ? settings.device
+      : "cpu";
 
   return {
     enabled: Boolean(settings.enabled),
@@ -1677,11 +1829,21 @@ function sanitizeWhisperOptions(options: WhisperOptions): WhisperOptions {
     tinydiarize: Boolean(options.tinydiarize),
     diarize: Boolean(options.diarize),
     temperature: clamp(options.temperature, 0, 1),
-    temperature_increment_on_fallback: clamp(options.temperature_increment_on_fallback, 0, 2),
-    temperature_fallback_count: Math.round(clamp(options.temperature_fallback_count, 0, 20)),
+    temperature_increment_on_fallback: clamp(
+      options.temperature_increment_on_fallback,
+      0,
+      2,
+    ),
+    temperature_fallback_count: Math.round(
+      clamp(options.temperature_fallback_count, 0, 20),
+    ),
     entropy_threshold: clamp(options.entropy_threshold, 0, 10),
     logprob_threshold: clamp(options.logprob_threshold, -10, 0),
-    first_token_logprob_threshold: clamp(options.first_token_logprob_threshold, -10, 0),
+    first_token_logprob_threshold: clamp(
+      options.first_token_logprob_threshold,
+      -10,
+      0,
+    ),
     no_speech_threshold: clamp(options.no_speech_threshold, 0, 1),
     word_threshold: clamp(options.word_threshold, 0, 1),
     best_of: Math.round(clamp(options.best_of, 1, 20)),
@@ -1693,7 +1855,9 @@ function sanitizeWhisperOptions(options: WhisperOptions): WhisperOptions {
     without_timestamps: options.without_timestamps,
     word_timestamps: options.word_timestamps,
     prompt: options.prompt?.trim() ? options.prompt : null,
-    concurrent_worker_count: Math.round(clamp(options.concurrent_worker_count, 1, 16)),
+    concurrent_worker_count: Math.round(
+      clamp(options.concurrent_worker_count, 1, 16),
+    ),
     chunking_strategy: options.chunking_strategy === "none" ? "none" : "vad",
     audio_encoder_compute_units: options.audio_encoder_compute_units,
     text_decoder_compute_units: options.text_decoder_compute_units,
@@ -1719,7 +1883,11 @@ function DetailCenterModeControl({
   return (
     <div className="segmented-control detail-mode-slider">
       <button
-        className={detailMode === "transcript" || detailMode === "segments" ? "seg active" : "seg"}
+        className={
+          detailMode === "transcript" || detailMode === "segments"
+            ? "seg active"
+            : "seg"
+        }
         onClick={() => onSelect("transcript")}
         title={t("detail.transcript", "Transcription")}
       >
@@ -1816,12 +1984,19 @@ function DetailToolbar({
 }: DetailToolbarProps): JSX.Element {
   const { t } = useTranslation();
   const rightSidebarTitle = rightSidebarForcedCollapsed
-    ? t("detail.expandWindowForDetails", "Widen the window to show the details panel")
+    ? t(
+        "detail.expandWindowForDetails",
+        "Widen the window to show the details panel",
+      )
     : rightSidebarOpen
       ? t("detail.hideDetailsPanel", "Hide details panel")
       : t("detail.showDetailsPanel", "Show details panel");
-  const roundedTranscriptionProgress = Math.round(makeProgressVisible(transcriptionProgress));
-  const transcriptionProgressText = formatProgressPercentageLabel(transcriptionProgress);
+  const roundedTranscriptionProgress = Math.round(
+    makeProgressVisible(transcriptionProgress),
+  );
+  const transcriptionProgressText = formatProgressPercentageLabel(
+    transcriptionProgress,
+  );
   const cancelTranscriptionTitle = `${t("detail.cancelTranscription", "Cancel transcription")} (${roundedTranscriptionProgress}%)`;
   return (
     <header
@@ -1832,7 +2007,11 @@ function DetailToolbar({
         <button
           className={`icon-button sidebar-toggle-btn sidebar-toggle-left ${leftSidebarOpen ? "is-open" : ""}`}
           onClick={onToggleSidebar}
-          title={leftSidebarOpen ? t("topbar.hideSidebar", "Hide sidebar") : t("topbar.showSidebar", "Show sidebar")}
+          title={
+            leftSidebarOpen
+              ? t("topbar.hideSidebar", "Hide sidebar")
+              : t("topbar.showSidebar", "Show sidebar")
+          }
         >
           <PanelLeftClose className="icon-close" size={16} />
           <PanelLeftOpen className="icon-open" size={16} />
@@ -1840,11 +2019,17 @@ function DetailToolbar({
       </div>
 
       <div className="detail-toolbar-primary" data-tauri-drag-region>
-        <button className="icon-button" onClick={onBack} title={t("detail.backToHistory")}>
+        <button
+          className="icon-button"
+          onClick={onBack}
+          title={t("detail.backToHistory")}
+        >
           <ArrowLeft size={16} />
         </button>
         <div className="detail-title-group" data-tauri-drag-region>
-          <strong className="detail-title" data-tauri-drag-region>{title}</strong>
+          <strong className="detail-title" data-tauri-drag-region>
+            {title}
+          </strong>
           {hasArtifact && onRenameTitle ? (
             <button
               className="icon-button detail-title-rename-button"
@@ -1874,11 +2059,22 @@ function DetailToolbar({
             <>
               <button
                 className="realtime-toolbar-button realtime-toolbar-button--secondary"
-                onClick={realtimeControls.state === "paused" ? realtimeControls.onResume : realtimeControls.onPause}
-                disabled={realtimeControls.state === "idle" || realtimeControls.isStopping}
+                onClick={
+                  realtimeControls.state === "paused"
+                    ? realtimeControls.onResume
+                    : realtimeControls.onPause
+                }
+                disabled={
+                  realtimeControls.state === "idle" ||
+                  realtimeControls.isStopping
+                }
               >
                 <span className="button-content">
-                  {realtimeControls.state === "paused" ? <Play size={14} /> : <Pause size={14} />}
+                  {realtimeControls.state === "paused" ? (
+                    <Play size={14} />
+                  ) : (
+                    <Pause size={14} />
+                  )}
                   <span className="detail-action-label">
                     {realtimeControls.state === "paused"
                       ? t("realtime.resume", "Resume")
@@ -1889,51 +2085,79 @@ function DetailToolbar({
               <button
                 className="realtime-toolbar-button realtime-toolbar-button--primary"
                 onClick={realtimeControls.onStop}
-                disabled={realtimeControls.state === "idle" || realtimeControls.isStopping}
+                disabled={
+                  realtimeControls.state === "idle" ||
+                  realtimeControls.isStopping
+                }
               >
                 <span className="button-content">
                   <Square size={13} />
-                  <span className="detail-action-label">{t("realtime.stopAndSave", "Stop & Save")}</span>
+                  <span className="detail-action-label">
+                    {t("realtime.stopAndSave", "Stop & Save")}
+                  </span>
                 </span>
               </button>
             </>
           ) : null}
-          {detailMode === "transcript" && !showRetranscribe && onImproveText && (
-            <button
-              className="optimize-hover-button"
-              onClick={() => void onImproveText()}
-              disabled={optimizeDisabled || isImprovingText || !hasArtifact}
-              title={optimizeDisabled ? optimizeDisabledTitle : t("detail.improveText", "Improve Text")}
-            >
-              <div className="button-content">
-                <Sparkles size={14} />
-                <span className="detail-action-label">{t("detail.optimize", "Optimize")}</span>
-              </div>
-            </button>
-          )}
-          {detailMode === "transcript" && showRetranscribe && onRetranscribeTrimmedAudio && (
-            <button
-              className={`retranscribe-hover-button ${isStartingTrimmedAudioRetranscription ? "is-busy" : ""}`}
-              onClick={() => void onRetranscribeTrimmedAudio()}
-              title={
-                isStartingTrimmedAudioRetranscription
-                  ? t("detail.startingTrimmedRetranscription", "Starting trimmed transcription...")
-                  : t("detail.retranscribeTrimmed", "Retranscribe Trimmed Audio")
-              }
-              disabled={isStartingTrimmedAudioRetranscription}
-            >
-              <div className="button-content">
-                {isStartingTrimmedAudioRetranscription ? <Clock3 size={14} /> : <Scissors size={14} />}
-                <span className="detail-action-label">
-                  {isStartingTrimmedAudioRetranscription
-                    ? t("home.starting", "Starting...")
-                    : t("detail.retranscribe", "Retranscribe")}
-                </span>
-              </div>
-            </button>
-          )}
+          {detailMode === "transcript" &&
+            !showRetranscribe &&
+            onImproveText && (
+              <button
+                className="optimize-hover-button"
+                onClick={() => void onImproveText()}
+                disabled={optimizeDisabled || isImprovingText || !hasArtifact}
+                title={
+                  optimizeDisabled
+                    ? optimizeDisabledTitle
+                    : t("detail.improveText", "Improve Text")
+                }
+              >
+                <div className="button-content">
+                  <Sparkles size={14} />
+                  <span className="detail-action-label">
+                    {t("detail.optimize", "Optimize")}
+                  </span>
+                </div>
+              </button>
+            )}
+          {detailMode === "transcript" &&
+            showRetranscribe &&
+            onRetranscribeTrimmedAudio && (
+              <button
+                className={`retranscribe-hover-button ${isStartingTrimmedAudioRetranscription ? "is-busy" : ""}`}
+                onClick={() => void onRetranscribeTrimmedAudio()}
+                title={
+                  isStartingTrimmedAudioRetranscription
+                    ? t(
+                        "detail.startingTrimmedRetranscription",
+                        "Starting trimmed transcription...",
+                      )
+                    : t(
+                        "detail.retranscribeTrimmed",
+                        "Retranscribe Trimmed Audio",
+                      )
+                }
+                disabled={isStartingTrimmedAudioRetranscription}
+              >
+                <div className="button-content">
+                  {isStartingTrimmedAudioRetranscription ? (
+                    <Clock3 size={14} />
+                  ) : (
+                    <Scissors size={14} />
+                  )}
+                  <span className="detail-action-label">
+                    {isStartingTrimmedAudioRetranscription
+                      ? t("home.starting", "Starting...")
+                      : t("detail.retranscribe", "Retranscribe")}
+                  </span>
+                </div>
+              </button>
+            )}
           {hasArtifact ? (
-            <button className="secondary-button export-toolbar-button" onClick={onOpenExport}>
+            <button
+              className="secondary-button export-toolbar-button"
+              onClick={onOpenExport}
+            >
               {t("detail.export", "Export")}
               <ChevronDown size={14} />
             </button>
@@ -1943,9 +2167,11 @@ function DetailToolbar({
               className="transcribing-cancel-pill"
               onClick={onCancel}
               onMouseMove={(event: ReactMouseEvent<HTMLButtonElement>) =>
-                setCancelPillDangerProximity(event.currentTarget, event.clientX)}
+                setCancelPillDangerProximity(event.currentTarget, event.clientX)
+              }
               onMouseLeave={(event: ReactMouseEvent<HTMLButtonElement>) =>
-                resetCancelPillDangerProximity(event.currentTarget)}
+                resetCancelPillDangerProximity(event.currentTarget)
+              }
               title={cancelTranscriptionTitle}
               aria-label={cancelTranscriptionTitle}
             >
@@ -1966,7 +2192,9 @@ function DetailToolbar({
       <div className="detail-toolbar-edge detail-toolbar-edge-right">
         <button
           className={`icon-button sidebar-toggle-btn sidebar-toggle-right ${rightSidebarOpen ? "is-open" : ""}`}
-          onClick={() => (rightSidebarOpen ? onHideDetailsPanel() : onShowDetailsPanel())}
+          onClick={() =>
+            rightSidebarOpen ? onHideDetailsPanel() : onShowDetailsPanel()
+          }
           title={rightSidebarTitle}
           disabled={rightSidebarForcedCollapsed}
         >
@@ -2027,7 +2255,9 @@ function TranscriptSegmentsTileSwitch({
   return (
     <div className="inspector-mode-grid">
       <button
-        className={detailMode === "transcript" ? "mode-tile active" : "mode-tile"}
+        className={
+          detailMode === "transcript" ? "mode-tile active" : "mode-tile"
+        }
         onClick={() => onSelectMode("transcript")}
         title={t("detail.transcript", "Transcript")}
       >
@@ -2061,7 +2291,9 @@ type AppProps = {
   };
 };
 
-export type GroupedArtifact = TranscriptArtifact & { children?: GroupedArtifact[] };
+export type GroupedArtifact = TranscriptArtifact & {
+  children?: GroupedArtifact[];
+};
 
 function createProvisioningUiState(
   status: ProvisioningStatus | null | undefined,
@@ -2097,7 +2329,10 @@ function createProvisioningUiState(
   };
 }
 
-export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppProps) {
+export function App({
+  standaloneSettingsWindow = false,
+  initialBootstrap,
+}: AppProps) {
   const { t, language } = useTranslation();
   const initialStandaloneSettingsPane = standaloneSettingsWindow
     ? parseStandaloneSettingsPaneFromLocation()
@@ -2121,7 +2356,8 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     removeArtifacts,
   } = useAppStore();
 
-  const preferredAppearanceMode = settings?.general?.appearance_mode ?? "system";
+  const preferredAppearanceMode =
+    settings?.general?.appearance_mode ?? "system";
 
   // Apply user-selected appearance mode (system/light/dark) consistently for all windows.
   useEffect(() => {
@@ -2129,7 +2365,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     const applyTheme = () => {
       const nextTheme =
         preferredAppearanceMode === "system"
-          ? (mediaQuery.matches ? "dark" : "light")
+          ? mediaQuery.matches
+            ? "dark"
+            : "light"
           : preferredAppearanceMode;
       document.documentElement.dataset.theme = nextTheme;
 
@@ -2137,7 +2375,8 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       // This avoids light titlebar bleed when the app is forced to dark mode (and vice-versa).
       void (async () => {
         const hasTauriRuntime = Boolean(
-          (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__,
+          (window as unknown as { __TAURI_INTERNALS__?: unknown })
+            .__TAURI_INTERNALS__,
         );
         if (!hasTauriRuntime) return;
         try {
@@ -2163,7 +2402,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
   }, [preferredAppearanceMode]);
 
   const [section, setSection] = useState<Section>("home");
-  const [settingsPane, setSettingsPane] = useState<SettingsPane>(initialStandaloneSettingsPane);
+  const [settingsPane, setSettingsPane] = useState<SettingsPane>(
+    initialStandaloneSettingsPane,
+  );
   const [settingsQuery, setSettingsQuery] = useState("");
   const [showModelManager, setShowModelManager] = useState(false);
   const [detailMode, setDetailMode] = useState<DetailMode>("transcript");
@@ -2180,14 +2421,22 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
   const [rightSidebarWidth, setRightSidebarWidth] = useState<number>(() =>
     readStoredNumber(RIGHT_SIDEBAR_WIDTH_STORAGE_KEY, 280),
   );
-  const [activeSidebarResize, setActiveSidebarResize] = useState<"left" | "right" | null>(null);
-  const [windowWidth, setWindowWidth] = useState<number>(() => window.innerWidth);
+  const [activeSidebarResize, setActiveSidebarResize] = useState<
+    "left" | "right" | null
+  >(null);
+  const [windowWidth, setWindowWidth] = useState<number>(
+    () => window.innerWidth,
+  );
   const [search, setSearch] = useState("");
   const [deletedSearch, setDeletedSearch] = useState("");
   const [historyKind, setHistoryKind] = useState<"all" | ArtifactKind>("all");
-  const [deletedArtifacts, setDeletedArtifacts] = useState<TranscriptArtifact[]>([]);
+  const [deletedArtifacts, setDeletedArtifacts] = useState<
+    TranscriptArtifact[]
+  >([]);
   const [selectedArtifactIds, setSelectedArtifactIds] = useState<string[]>([]);
-  const [expandedArtifactIds, setExpandedArtifactIds] = useState<Set<string>>(new Set());
+  const [expandedArtifactIds, setExpandedArtifactIds] = useState<Set<string>>(
+    new Set(),
+  );
 
   useEffect(() => {
     const updateWindowWidth = () => setWindowWidth(window.innerWidth);
@@ -2195,18 +2444,21 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     return () => window.removeEventListener("resize", updateWindowWidth);
   }, []);
 
-  const toggleArtifactExpansion = useCallback((id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setExpandedArtifactIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  }, []);
+  const toggleArtifactExpansion = useCallback(
+    (id: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      setExpandedArtifactIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) {
+          next.delete(id);
+        } else {
+          next.add(id);
+        }
+        return next;
+      });
+    },
+    [],
+  );
 
   const [isStarting, setIsStarting] = useState(false);
   const [isSavingArtifact, setIsSavingArtifact] = useState(false);
@@ -2217,27 +2469,41 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
   const activeArtifact = useMemo(
     () => openArtifacts.find((a) => a.id === activeArtifactId) || null,
-    [openArtifacts, activeArtifactId]
+    [openArtifacts, activeArtifactId],
   );
-  const rightSidebarForcedCollapsed = section === "detail" && windowWidth <= 900;
-  const effectiveRightSidebarOpen = rightSidebarOpen && !rightSidebarForcedCollapsed;
+  const rightSidebarForcedCollapsed =
+    section === "detail" && windowWidth <= 900;
+  const effectiveRightSidebarOpen =
+    rightSidebarOpen && !rightSidebarForcedCollapsed;
 
-  const clampLeftSidebarWidth = useCallback((width: number, containerWidth: number) => {
-    const maxWidth = Math.min(
-      LEFT_SIDEBAR_MAX_WIDTH,
-      Math.max(LEFT_SIDEBAR_MIN_WIDTH, Math.round(containerWidth * 0.32)),
-    );
-    return Math.min(maxWidth, Math.max(LEFT_SIDEBAR_MIN_WIDTH, Math.round(width)));
-  }, []);
+  const clampLeftSidebarWidth = useCallback(
+    (width: number, containerWidth: number) => {
+      const maxWidth = Math.min(
+        LEFT_SIDEBAR_MAX_WIDTH,
+        Math.max(LEFT_SIDEBAR_MIN_WIDTH, Math.round(containerWidth * 0.32)),
+      );
+      return Math.min(
+        maxWidth,
+        Math.max(LEFT_SIDEBAR_MIN_WIDTH, Math.round(width)),
+      );
+    },
+    [],
+  );
 
-  const clampRightSidebarWidth = useCallback((width: number, containerWidth: number) => {
-    const maxWidth = Math.min(
-      RIGHT_SIDEBAR_MAX_WIDTH,
-      Math.max(RIGHT_SIDEBAR_MIN_WIDTH, Math.round(containerWidth * 0.42)),
-    );
-    return Math.min(maxWidth, Math.max(RIGHT_SIDEBAR_MIN_WIDTH, Math.round(width)));
-  }, []);
-  
+  const clampRightSidebarWidth = useCallback(
+    (width: number, containerWidth: number) => {
+      const maxWidth = Math.min(
+        RIGHT_SIDEBAR_MAX_WIDTH,
+        Math.max(RIGHT_SIDEBAR_MIN_WIDTH, Math.round(containerWidth * 0.42)),
+      );
+      return Math.min(
+        maxWidth,
+        Math.max(RIGHT_SIDEBAR_MIN_WIDTH, Math.round(width)),
+      );
+    },
+    [],
+  );
+
   const setActiveArtifact = (artifact: TranscriptArtifact | null) => {
     if (!artifact) {
       // Clear all
@@ -2259,32 +2525,42 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
   const draftTitleActiveInstance = activeArtifact?.title || "";
   const [draftTitle, setDraftTitle] = useState("");
   const [draftTranscript, setDraftTranscript] = useState("");
-  const [optimizedTranscriptAvailable, setOptimizedTranscriptAvailable] = useState(false);
-  const [transcriptViewMode, setTranscriptViewMode] = useState<TranscriptViewMode>("optimized");
+  const [optimizedTranscriptAvailable, setOptimizedTranscriptAvailable] =
+    useState(false);
+  const [transcriptViewMode, setTranscriptViewMode] =
+    useState<TranscriptViewMode>("optimized");
   const [showConfidenceColors, setShowConfidenceColors] = useState(false);
   const [draftSummary, setDraftSummary] = useState("");
   const [draftFaqs, setDraftFaqs] = useState("");
-  const [draftEmotionAnalysis, setDraftEmotionAnalysis] = useState<EmotionAnalysisResult | null>(null);
+  const [draftEmotionAnalysis, setDraftEmotionAnalysis] =
+    useState<EmotionAnalysisResult | null>(null);
   const [emotionTimelineExpanded, setEmotionTimelineExpanded] = useState(false);
   const [showExportSheet, setShowExportSheet] = useState(false);
-  const [renameTarget, setRenameTarget] = useState<TranscriptArtifact | null>(null);
+  const [renameTarget, setRenameTarget] = useState<TranscriptArtifact | null>(
+    null,
+  );
   const [renameDraft, setRenameDraft] = useState("");
   const [isRenamingArtifact, setIsRenamingArtifact] = useState(false);
 
   const [chatInput, setChatInput] = useState("");
   const [chatHistory, setChatHistory] = useState<ChatMessageViewModel[]>([]);
-  const [copiedChatMessageId, setCopiedChatMessageId] = useState<string | null>(null);
+  const [copiedChatMessageId, setCopiedChatMessageId] = useState<string | null>(
+    null,
+  );
   const [isAskingChat, setIsAskingChat] = useState(false);
   const [isImprovingText, setIsImprovingText] = useState(false);
   const [activeJobPreviewText, setActiveJobPreviewText] = useState("");
   const [activeJobTitle, setActiveJobTitle] = useState("");
   const [focusedJobId, setFocusedJobId] = useState<string | null>(null);
-  const [selectedSegmentSourceIndex, setSelectedSegmentSourceIndex] = useState<number | null>(null);
+  const [selectedSegmentSourceIndex, setSelectedSegmentSourceIndex] = useState<
+    number | null
+  >(null);
   const [speakerDraft, setSpeakerDraft] = useState("");
   const [mergeSpeakerSourceId, setMergeSpeakerSourceId] = useState("");
   const [mergeSpeakerTargetId, setMergeSpeakerTargetId] = useState("");
   const [isAssigningSpeaker, setIsAssigningSpeaker] = useState(false);
-  const [propagateSpeakerAssignment, setPropagateSpeakerAssignment] = useState(false);
+  const [propagateSpeakerAssignment, setPropagateSpeakerAssignment] =
+    useState(false);
   const [segmentContextMenu, setSegmentContextMenu] = useState<{
     x: number;
     y: number;
@@ -2292,23 +2568,41 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
   } | null>(null);
 
   const [queueItems, setQueueItems] = useState<JobProgress[]>([]);
-  const [queuedTranscriptionStarts, setQueuedTranscriptionStarts] = useState<QueuedTranscriptionStart[]>([]);
-  const [modelCatalog, setModelCatalog] = useState<ProvisioningModelCatalogEntry[]>(
-    () => initialBootstrap?.modelCatalog ?? [],
-  );
+  const [queuedTranscriptionStarts, setQueuedTranscriptionStarts] = useState<
+    QueuedTranscriptionStart[]
+  >([]);
+  const [modelCatalog, setModelCatalog] = useState<
+    ProvisioningModelCatalogEntry[]
+  >(() => initialBootstrap?.modelCatalog ?? []);
   const [runtimeHealth, setRuntimeHealth] = useState<RuntimeHealth | null>(
-    () => initialBootstrap?.runtimeHealth ?? initialBootstrap?.setupReport?.runtime_health ?? null,
+    () =>
+      initialBootstrap?.runtimeHealth ??
+      initialBootstrap?.setupReport?.runtime_health ??
+      null,
   );
-  const platformIsAppleSilicon = runtimeHealth?.is_apple_silicon ?? guessAppleSiliconFromUA();
-  const transcriptionEngineOptions = useMemo(() => allTranscriptionEngineOptions, []);
-  const settingsPaneDefinitions = useMemo(() => getSettingsPaneDefinitions(), [language]);
+  const platformIsAppleSilicon =
+    runtimeHealth?.is_apple_silicon ?? guessAppleSiliconFromUA();
+  const transcriptionEngineOptions = useMemo(
+    () => allTranscriptionEngineOptions,
+    [],
+  );
+  const settingsPaneDefinitions = useMemo(
+    () => getSettingsPaneDefinitions(),
+    [language],
+  );
 
-  const [realtimeState, setRealtimeState] = useState<"idle" | "running" | "paused">("idle");
-  const [realtimeMessage, setRealtimeMessage] = useState(t("realtime.idle", "Realtime idle"));
+  const [realtimeState, setRealtimeState] = useState<
+    "idle" | "running" | "paused"
+  >("idle");
+  const [realtimeMessage, setRealtimeMessage] = useState(
+    t("realtime.idle", "Realtime idle"),
+  );
   const [realtimeFinalLines, setRealtimeFinalLines] = useState<string[]>([]);
   const [realtimePreview, setRealtimePreview] = useState("");
   const [realtimeSessionOpen, setRealtimeSessionOpen] = useState(false);
-  const [realtimeStartedAtMs, setRealtimeStartedAtMs] = useState<number | null>(null);
+  const [realtimeStartedAtMs, setRealtimeStartedAtMs] = useState<number | null>(
+    null,
+  );
   const [realtimeElapsedSeconds, setRealtimeElapsedSeconds] = useState(0);
   const [isStoppingRealtime, setIsStoppingRealtime] = useState(false);
 
@@ -2322,37 +2616,65 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     statusMessage: string;
   }>(() => createProvisioningUiState(initialBootstrap?.provisioning));
   const [startupRequirementsLoaded, setStartupRequirementsLoaded] = useState(
-    standaloneSettingsWindow || initialBootstrap?.startupRequirementsLoaded || false,
+    standaloneSettingsWindow ||
+      initialBootstrap?.startupRequirementsLoaded ||
+      false,
   );
-  const [startupRequirementsError, setStartupRequirementsError] = useState<string | null>(null);
+  const [startupRequirementsError, setStartupRequirementsError] = useState<
+    string | null
+  >(null);
   const [startupGateBypass, setStartupGateBypass] = useState(
-    () => !standaloneSettingsWindow && Boolean(initialBootstrap?.setupReport?.trusted_for_fast_start),
+    () =>
+      !standaloneSettingsWindow &&
+      Boolean(initialBootstrap?.setupReport?.trusted_for_fast_start),
   );
   const [initialSetupRunning, setInitialSetupRunning] = useState(false);
-  const [initialSetupError, setInitialSetupError] = useState<string | null>(null);
-  const [initialSetupStepLabel, setInitialSetupStepLabel] = useState<string | null>(null);
-  const [initialSetupStepDetail, setInitialSetupStepDetail] = useState<string | null>(null);
+  const [initialSetupError, setInitialSetupError] = useState<string | null>(
+    null,
+  );
+  const [initialSetupStepLabel, setInitialSetupStepLabel] = useState<
+    string | null
+  >(null);
+  const [initialSetupStepDetail, setInitialSetupStepDetail] = useState<
+    string | null
+  >(null);
   const [acceptingPrivacyPolicy, setAcceptingPrivacyPolicy] = useState(false);
 
-  const [updateInfo, setUpdateInfo] = useState<UpdateCheckResponse | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<UpdateCheckResponse | null>(
+    null,
+  );
   const [nativeUpdate, setNativeUpdate] = useState<TauriUpdate | null>(null);
-  const [updateSource, setUpdateSource] = useState<"native" | "github" | null>(null);
+  const [updateSource, setUpdateSource] = useState<"native" | "github" | null>(
+    null,
+  );
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [installingUpdate, setInstallingUpdate] = useState(false);
-  const [updateDownloadPercent, setUpdateDownloadPercent] = useState<number | null>(null);
-  const [updateStatusMessage, setUpdateStatusMessage] = useState<string | null>(null);
-  const [aiCapabilityStatus, setAiCapabilityStatus] = useState<AiCapabilityStatus | null>(null);
+  const [updateDownloadPercent, setUpdateDownloadPercent] = useState<
+    number | null
+  >(null);
+  const [updateStatusMessage, setUpdateStatusMessage] = useState<string | null>(
+    null,
+  );
+  const [aiCapabilityStatus, setAiCapabilityStatus] =
+    useState<AiCapabilityStatus | null>(null);
   const [aiServicesAcknowledged, setAiServicesAcknowledged] = useState(false);
-  const [aiServiceConfigOpen, setAiServiceConfigOpen] = useState<string | null>(null);
-  const [geminiModelChoices, setGeminiModelChoices] = useState<string[]>(fallbackGeminiModelOptions);
+  const [aiServiceConfigOpen, setAiServiceConfigOpen] = useState<string | null>(
+    null,
+  );
+  const [geminiModelChoices, setGeminiModelChoices] = useState<string[]>(
+    fallbackGeminiModelOptions,
+  );
   const [loadingGeminiModels, setLoadingGeminiModels] = useState(false);
   const [geminiModelFetchNonce, setGeminiModelFetchNonce] = useState(0);
   const [geminiApiKeyDraft, setGeminiApiKeyDraft] = useState("");
-  const [remoteServiceApiKeyDrafts, setRemoteServiceApiKeyDrafts] = useState<Record<string, string>>({});
+  const [remoteServiceApiKeyDrafts, setRemoteServiceApiKeyDrafts] = useState<
+    Record<string, string>
+  >({});
 
   const [activePromptId, setActivePromptId] = useState("");
   const [promptDraft, setPromptDraft] = useState<PromptTemplate | null>(null);
-  const [promptBindingTask, setPromptBindingTask] = useState<PromptTask>("optimize");
+  const [promptBindingTask, setPromptBindingTask] =
+    useState<PromptTask>("optimize");
   const [promptTest, setPromptTest] = useState<PromptTestState>({
     input: getDefaultPromptTestInput(),
     output: "",
@@ -2360,40 +2682,71 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
   });
   const [fontSize, setFontSize] = useState(18);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
-  const [groupSegmentsWithoutSpeakers, setGroupSegmentsWithoutSpeakers] = useState(true);
+  const [groupSegmentsWithoutSpeakers, setGroupSegmentsWithoutSpeakers] =
+    useState(true);
   const copiedChatResetTimerRef = useRef<number | null>(null);
   const chatMessageSerialRef = useRef(0);
   const promptTestDefaultInputRef = useRef(getDefaultPromptTestInput());
-  const [summaryIncludeTimestamps, setSummaryIncludeTimestamps] = useState(defaultSummaryControls.includeTimestamps);
-  const [summaryIncludeSpeakers, setSummaryIncludeSpeakers] = useState(defaultSummaryControls.includeSpeakers);
+  const [summaryIncludeTimestamps, setSummaryIncludeTimestamps] = useState(
+    defaultSummaryControls.includeTimestamps,
+  );
+  const [summaryIncludeSpeakers, setSummaryIncludeSpeakers] = useState(
+    defaultSummaryControls.includeSpeakers,
+  );
   const [summaryAutostart, setSummaryAutostart] = useState(false);
-  const [summarySections, setSummarySections] = useState(defaultSummaryControls.sections);
-  const [summaryBulletPoints, setSummaryBulletPoints] = useState(defaultSummaryControls.bulletPoints);
-  const [summaryActionItems, setSummaryActionItems] = useState(defaultSummaryControls.actionItems);
-  const [summaryKeyPointsOnly, setSummaryKeyPointsOnly] = useState(defaultSummaryControls.keyPointsOnly);
-  const [summaryLanguage, setSummaryLanguage] = useState<LanguageCode>(defaultSummaryControls.language);
+  const [summarySections, setSummarySections] = useState(
+    defaultSummaryControls.sections,
+  );
+  const [summaryBulletPoints, setSummaryBulletPoints] = useState(
+    defaultSummaryControls.bulletPoints,
+  );
+  const [summaryActionItems, setSummaryActionItems] = useState(
+    defaultSummaryControls.actionItems,
+  );
+  const [summaryKeyPointsOnly, setSummaryKeyPointsOnly] = useState(
+    defaultSummaryControls.keyPointsOnly,
+  );
+  const [summaryLanguage, setSummaryLanguage] = useState<LanguageCode>(
+    defaultSummaryControls.language,
+  );
   const [summaryCustomPrompt, setSummaryCustomPrompt] = useState("");
-  const [emotionIncludeTimestamps, setEmotionIncludeTimestamps] = useState(defaultEmotionControls.includeTimestamps);
-  const [emotionIncludeSpeakers, setEmotionIncludeSpeakers] = useState(defaultEmotionControls.includeSpeakers);
-  const [emotionSpeakerDynamics, setEmotionSpeakerDynamics] = useState(defaultEmotionControls.speakerDynamics);
-  const [emotionLanguage, setEmotionLanguage] = useState<LanguageCode>(defaultEmotionControls.language);
+  const [emotionIncludeTimestamps, setEmotionIncludeTimestamps] = useState(
+    defaultEmotionControls.includeTimestamps,
+  );
+  const [emotionIncludeSpeakers, setEmotionIncludeSpeakers] = useState(
+    defaultEmotionControls.includeSpeakers,
+  );
+  const [emotionSpeakerDynamics, setEmotionSpeakerDynamics] = useState(
+    defaultEmotionControls.speakerDynamics,
+  );
+  const [emotionLanguage, setEmotionLanguage] = useState<LanguageCode>(
+    defaultEmotionControls.language,
+  );
   const [chatIncludeTimestamps, setChatIncludeTimestamps] = useState(true);
   const [chatIncludeSpeakers, setChatIncludeSpeakers] = useState(false);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
-  const [isGeneratingEmotionAnalysis, setIsGeneratingEmotionAnalysis] = useState(false);
+  const [isGeneratingEmotionAnalysis, setIsGeneratingEmotionAnalysis] =
+    useState(false);
   const [audioDurationSeconds, setAudioDurationSeconds] = useState(0);
-  const [preparedImportTrimDraft, setPreparedImportTrimDraft] = useState<PreparedImportTrimDraft | null>(null);
+  const [preparedImportTrimDraft, setPreparedImportTrimDraft] =
+    useState<PreparedImportTrimDraft | null>(null);
   const [trimRegions, setTrimRegions] = useState<TrimRegion[]>([]);
-  const [trimmedAudioDraft, setTrimmedAudioDraft] = useState<TrimmedAudioDraft | null>(null);
-  const [trimRetranscriptionError, setTrimRetranscriptionError] = useState<string | null>(null);
-  const [activeDetailContext, setActiveDetailContext] = useState<ActiveDetailContext | null>(null);
+  const [trimmedAudioDraft, setTrimmedAudioDraft] =
+    useState<TrimmedAudioDraft | null>(null);
+  const [trimRetranscriptionError, setTrimRetranscriptionError] = useState<
+    string | null
+  >(null);
+  const [activeDetailContext, setActiveDetailContext] =
+    useState<ActiveDetailContext | null>(null);
 
   const activeJobIdRef = useRef<string | null>(activeJobId);
   const segmentElementMapRef = useRef<Map<number, HTMLElement>>(new Map());
   const windowFrameRef = useRef<HTMLElement | null>(null);
   const detailLayoutRef = useRef<HTMLDivElement | null>(null);
   const autoInitialSetupAttemptedRef = useRef(false);
-  const provisioningProgressKindRef = useRef<ProvisioningProgressEvent["asset_kind"] | null>(null);
+  const provisioningProgressKindRef = useRef<
+    ProvisioningProgressEvent["asset_kind"] | null
+  >(null);
   const initialSetupReportRef = useRef<InitialSetupReport>(
     initialBootstrap?.setupReport ?? createInitialSetupReport(),
   );
@@ -2405,118 +2758,151 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     startupGateBypass ? initialBootstrap?.setupReport : null,
   );
   const runtimeToolchainReady = isRuntimeToolchainReady(runtimeHealth);
-  const initialSetupReady = isInitialSetupComplete(privacyPolicyAccepted, runtimeHealth, modelCatalog);
+  const initialSetupReady = isInitialSetupComplete(
+    privacyPolicyAccepted,
+    runtimeHealth,
+    modelCatalog,
+  );
 
-  const describeEmotionValence = useCallback((score: number): string => {
-    if (score >= 0.35) {
-      return t("emotion.valencePositive", "positive");
-    }
-    if (score <= -0.35) {
-      return t("emotion.valenceNegative", "negative");
-    }
-    return t("emotion.valenceNeutral", "neutral");
-  }, [t]);
+  const describeEmotionValence = useCallback(
+    (score: number): string => {
+      if (score >= 0.35) {
+        return t("emotion.valencePositive", "positive");
+      }
+      if (score <= -0.35) {
+        return t("emotion.valenceNegative", "negative");
+      }
+      return t("emotion.valenceNeutral", "neutral");
+    },
+    [t],
+  );
 
-  const emotionToneClass = useCallback((score: number): "positive" | "negative" | "neutral" => {
-    if (score >= 0.35) {
-      return "positive";
-    }
-    if (score <= -0.35) {
-      return "negative";
-    }
-    return "neutral";
-  }, []);
+  const emotionToneClass = useCallback(
+    (score: number): "positive" | "negative" | "neutral" => {
+      if (score >= 0.35) {
+        return "positive";
+      }
+      if (score <= -0.35) {
+        return "negative";
+      }
+      return "neutral";
+    },
+    [],
+  );
 
-  const describeEmotionIntensity = useCallback((score: number): string => {
-    if (score >= 1.5) {
-      return t("emotion.intensityHigh", "high");
-    }
-    if (score >= 0.9) {
-      return t("emotion.intensityMedium", "medium");
-    }
-    if (score > 0.05) {
-      return t("emotion.intensityLow", "low");
-    }
-    return t("emotion.intensityFlat", "flat");
-  }, [t]);
+  const describeEmotionIntensity = useCallback(
+    (score: number): string => {
+      if (score >= 1.5) {
+        return t("emotion.intensityHigh", "high");
+      }
+      if (score >= 0.9) {
+        return t("emotion.intensityMedium", "medium");
+      }
+      if (score > 0.05) {
+        return t("emotion.intensityLow", "low");
+      }
+      return t("emotion.intensityFlat", "flat");
+    },
+    [t],
+  );
 
   useEffect(() => {
     setEmotionTimelineExpanded(false);
   }, [activeArtifactId, draftEmotionAnalysis]);
 
-  const renderEmotionTimelineCard = useCallback((entry: EmotionAnalysisResult["timeline"][number]) => (
-    <article
-      key={`emotion-timeline-${entry.segment_index}`}
-      className={`emotion-card emotion-card--${emotionToneClass(entry.valence_score)}`}
-    >
-      <div className="emotion-card-meta">
-        <strong>{entry.time_label ?? `${t("emotion.segment", "Segment")} ${entry.segment_index + 1}`}</strong>
-        {entry.speaker_label ? <span className="kind-chip">{entry.speaker_label}</span> : null}
-      </div>
-      <p>{entry.evidence_text}</p>
-      <div className="emotion-chip-row">
-        {entry.dominant_emotions.map((emotion) => (
-          <span key={`${entry.segment_index}-${emotion}`} className="kind-chip">{emotion}</span>
-        ))}
-      </div>
-      <div className="emotion-metric-grid">
-        <div className="emotion-metric">
-          <span className="emotion-metric-label">
-            {t("emotion.valenceLabel", "Tone")}
-            <InlineInfoHint
-              label={t("emotion.valenceLabel", "Tone")}
-              description={t(
-                "emotion.valenceHelp",
-                "Tone shows the emotional direction of the segment: negative means more concern or friction, neutral means emotionally flat or balanced, positive means more confidence, relief, or enthusiasm.",
-              )}
-            />
-          </span>
-          <strong>{describeEmotionValence(entry.valence_score)}</strong>
-          <small>{entry.valence_score.toFixed(1)}</small>
+  const renderEmotionTimelineCard = useCallback(
+    (entry: EmotionAnalysisResult["timeline"][number]) => (
+      <article
+        key={`emotion-timeline-${entry.segment_index}`}
+        className={`emotion-card emotion-card--${emotionToneClass(entry.valence_score)}`}
+      >
+        <div className="emotion-card-meta">
+          <strong>
+            {entry.time_label ??
+              `${t("emotion.segment", "Segment")} ${entry.segment_index + 1}`}
+          </strong>
+          {entry.speaker_label ? (
+            <span className="kind-chip">{entry.speaker_label}</span>
+          ) : null}
         </div>
-        <div className="emotion-metric">
-          <span className="emotion-metric-label">
-            {t("emotion.intensity", "Intensity")}
-            <InlineInfoHint
-              label={t("emotion.intensity", "Intensity")}
-              description={t(
-                "emotion.intensityHelp",
-                "Intensity shows how emotionally charged the segment is. Low means flat or procedural, high means the language carries stronger stress, urgency, relief, or excitement.",
-              )}
-            />
-          </span>
-          <strong>{describeEmotionIntensity(entry.intensity_score)}</strong>
-          <small>{entry.intensity_score.toFixed(1)}</small>
+        <p>{entry.evidence_text}</p>
+        <div className="emotion-chip-row">
+          {entry.dominant_emotions.map((emotion) => (
+            <span
+              key={`${entry.segment_index}-${emotion}`}
+              className="kind-chip"
+            >
+              {emotion}
+            </span>
+          ))}
         </div>
-      </div>
-      {entry.shift_label ? <small>{entry.shift_label}</small> : null}
-      <div className="emotion-card-actions">
-        <button
-          className="secondary-button"
-          onClick={() =>
-            onJumpToEmotionSegment({
-              segmentIndex: entry.segment_index,
-              evidenceText: entry.evidence_text,
-              timeLabel: entry.time_label,
-              startSeconds: entry.start_seconds,
-            })
-          }
-        >
-          {t("emotion.jump", "Jump to segment")}
-        </button>
-        <button
-          className="secondary-button"
-          onClick={() =>
-            onAskEmotionQuestion(
-              `Reflect on the emotional shift around segment ${entry.segment_index + 1}. What appears to trigger ${entry.dominant_emotions.join(", ") || "the tone change"}?`,
-            )
-          }
-        >
-          {t("emotion.ask", "Ask in chat")}
-        </button>
-      </div>
-    </article>
-  ), [describeEmotionIntensity, describeEmotionValence, emotionToneClass, onAskEmotionQuestion, onJumpToEmotionSegment, t]);
+        <div className="emotion-metric-grid">
+          <div className="emotion-metric">
+            <span className="emotion-metric-label">
+              {t("emotion.valenceLabel", "Tone")}
+              <InlineInfoHint
+                label={t("emotion.valenceLabel", "Tone")}
+                description={t(
+                  "emotion.valenceHelp",
+                  "Tone shows the emotional direction of the segment: negative means more concern or friction, neutral means emotionally flat or balanced, positive means more confidence, relief, or enthusiasm.",
+                )}
+              />
+            </span>
+            <strong>{describeEmotionValence(entry.valence_score)}</strong>
+            <small>{entry.valence_score.toFixed(1)}</small>
+          </div>
+          <div className="emotion-metric">
+            <span className="emotion-metric-label">
+              {t("emotion.intensity", "Intensity")}
+              <InlineInfoHint
+                label={t("emotion.intensity", "Intensity")}
+                description={t(
+                  "emotion.intensityHelp",
+                  "Intensity shows how emotionally charged the segment is. Low means flat or procedural, high means the language carries stronger stress, urgency, relief, or excitement.",
+                )}
+              />
+            </span>
+            <strong>{describeEmotionIntensity(entry.intensity_score)}</strong>
+            <small>{entry.intensity_score.toFixed(1)}</small>
+          </div>
+        </div>
+        {entry.shift_label ? <small>{entry.shift_label}</small> : null}
+        <div className="emotion-card-actions">
+          <button
+            className="secondary-button"
+            onClick={() =>
+              onJumpToEmotionSegment({
+                segmentIndex: entry.segment_index,
+                evidenceText: entry.evidence_text,
+                timeLabel: entry.time_label,
+                startSeconds: entry.start_seconds,
+              })
+            }
+          >
+            {t("emotion.jump", "Jump to segment")}
+          </button>
+          <button
+            className="secondary-button"
+            onClick={() =>
+              onAskEmotionQuestion(
+                `Reflect on the emotional shift around segment ${entry.segment_index + 1}. What appears to trigger ${entry.dominant_emotions.join(", ") || "the tone change"}?`,
+              )
+            }
+          >
+            {t("emotion.ask", "Ask in chat")}
+          </button>
+        </div>
+      </article>
+    ),
+    [
+      describeEmotionIntensity,
+      describeEmotionValence,
+      emotionToneClass,
+      onAskEmotionQuestion,
+      onJumpToEmotionSegment,
+      t,
+    ],
+  );
   const focusedJobIdRef = useRef<string | null>(focusedJobId);
   const activeJobDeltaSequenceRef = useRef<number>(-1);
   const activeJobPreviewTextareaRef = useRef<HTMLDivElement>(null);
@@ -2525,7 +2911,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
   const leftSidebarRef = useRef<HTMLElement | null>(null);
   const peopleSpeakerInputRef = useRef<HTMLInputElement | null>(null);
   const failedJobMessagesRef = useRef<Map<string, string>>(new Map());
-  const pendingTranscriptionContextRef = useRef<Map<string, PendingTranscriptionContext>>(new Map());
+  const pendingTranscriptionContextRef = useRef<
+    Map<string, PendingTranscriptionContext>
+  >(new Map());
   const queuedTranscriptionSequenceRef = useRef(0);
   const startupWatchdogRef = useRef<number | null>(null);
   const settingsSaveSequenceRef = useRef(0);
@@ -2550,7 +2938,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       return;
     }
 
-    if (settings.ai.providers.gemini.has_api_key && !settings.ai.providers.gemini.api_key) {
+    if (
+      settings.ai.providers.gemini.has_api_key &&
+      !settings.ai.providers.gemini.api_key
+    ) {
       setGeminiApiKeyDraft("");
     }
 
@@ -2570,8 +2961,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         }
       }
 
-      if (!changed && Object.keys(previous).length === Object.keys(next).length) {
-        const sameKeys = Object.keys(next).every((key) => previous[key] === next[key]);
+      if (
+        !changed &&
+        Object.keys(previous).length === Object.keys(next).length
+      ) {
+        const sameKeys = Object.keys(next).every(
+          (key) => previous[key] === next[key],
+        );
         if (sameKeys) {
           return previous;
         }
@@ -2590,7 +2986,8 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     }
 
     const hasTauriRuntime = Boolean(
-      (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__,
+      (window as unknown as { __TAURI_INTERNALS__?: unknown })
+        .__TAURI_INTERNALS__,
     );
     if (!hasTauriRuntime) {
       return;
@@ -2599,14 +2996,16 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     let disposed = false;
     let startDragging: (() => Promise<void>) | null = null;
 
-    void import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
-      if (!disposed) {
-        const currentWindow = getCurrentWindow();
-        startDragging = () => currentWindow.startDragging();
-      }
-    }).catch(() => {
-      startDragging = null;
-    });
+    void import("@tauri-apps/api/window")
+      .then(({ getCurrentWindow }) => {
+        if (!disposed) {
+          const currentWindow = getCurrentWindow();
+          startDragging = () => currentWindow.startDragging();
+        }
+      })
+      .catch(() => {
+        startDragging = null;
+      });
 
     const handleMouseDown = (event: MouseEvent) => {
       if (event.button !== 0 || event.defaultPrevented) {
@@ -2621,11 +3020,15 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       void startDragging?.();
     };
 
-    surfaces.forEach((surface) => surface.addEventListener("mousedown", handleMouseDown));
+    surfaces.forEach((surface) =>
+      surface.addEventListener("mousedown", handleMouseDown),
+    );
 
     return () => {
       disposed = true;
-      surfaces.forEach((surface) => surface.removeEventListener("mousedown", handleMouseDown));
+      surfaces.forEach((surface) =>
+        surface.removeEventListener("mousedown", handleMouseDown),
+      );
     };
   }, []);
 
@@ -2661,29 +3064,49 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
   }, [activeArtifactId]);
 
   useEffect(() => {
-    window.localStorage.setItem("sbobino.layout.leftSidebarOpen", String(leftSidebarOpen));
+    window.localStorage.setItem(
+      "sbobino.layout.leftSidebarOpen",
+      String(leftSidebarOpen),
+    );
   }, [leftSidebarOpen]);
 
   useEffect(() => {
-    window.localStorage.setItem("sbobino.layout.rightSidebarOpen", String(rightSidebarOpen));
+    window.localStorage.setItem(
+      "sbobino.layout.rightSidebarOpen",
+      String(rightSidebarOpen),
+    );
   }, [rightSidebarOpen]);
 
   useEffect(() => {
-    const containerWidth = windowFrameRef.current?.getBoundingClientRect().width ?? window.innerWidth;
-    setLeftSidebarWidth((current) => clampLeftSidebarWidth(current, containerWidth));
+    const containerWidth =
+      windowFrameRef.current?.getBoundingClientRect().width ??
+      window.innerWidth;
+    setLeftSidebarWidth((current) =>
+      clampLeftSidebarWidth(current, containerWidth),
+    );
   }, [clampLeftSidebarWidth, windowWidth]);
 
   useEffect(() => {
-    const containerWidth = detailLayoutRef.current?.getBoundingClientRect().width ?? window.innerWidth;
-    setRightSidebarWidth((current) => clampRightSidebarWidth(current, containerWidth));
+    const containerWidth =
+      detailLayoutRef.current?.getBoundingClientRect().width ??
+      window.innerWidth;
+    setRightSidebarWidth((current) =>
+      clampRightSidebarWidth(current, containerWidth),
+    );
   }, [clampRightSidebarWidth, windowWidth]);
 
   useEffect(() => {
-    window.localStorage.setItem(LEFT_SIDEBAR_WIDTH_STORAGE_KEY, String(leftSidebarWidth));
+    window.localStorage.setItem(
+      LEFT_SIDEBAR_WIDTH_STORAGE_KEY,
+      String(leftSidebarWidth),
+    );
   }, [leftSidebarWidth]);
 
   useEffect(() => {
-    window.localStorage.setItem(RIGHT_SIDEBAR_WIDTH_STORAGE_KEY, String(rightSidebarWidth));
+    window.localStorage.setItem(
+      RIGHT_SIDEBAR_WIDTH_STORAGE_KEY,
+      String(rightSidebarWidth),
+    );
   }, [rightSidebarWidth]);
 
   useEffect(() => {
@@ -2700,7 +3123,12 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         if (!frameRect) {
           return;
         }
-        setLeftSidebarWidth(clampLeftSidebarWidth(event.clientX - frameRect.left, frameRect.width));
+        setLeftSidebarWidth(
+          clampLeftSidebarWidth(
+            event.clientX - frameRect.left,
+            frameRect.width,
+          ),
+        );
         return;
       }
 
@@ -2708,7 +3136,12 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       if (!detailRect) {
         return;
       }
-      setRightSidebarWidth(clampRightSidebarWidth(detailRect.right - event.clientX, detailRect.width));
+      setRightSidebarWidth(
+        clampRightSidebarWidth(
+          detailRect.right - event.clientX,
+          detailRect.width,
+        ),
+      );
     };
 
     const stopResize = () => {
@@ -2749,10 +3182,18 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
     void (async () => {
       try {
-        const deletedArtifactsSnapshot = await listDeletedArtifacts({ limit: 200 });
+        const deletedArtifactsSnapshot = await listDeletedArtifacts({
+          limit: 200,
+        });
         setDeletedArtifacts(deletedArtifactsSnapshot);
       } catch (deletedError) {
-        setError(formatUiError("error.loadDeleted", "Could not load Recently Deleted", deletedError));
+        setError(
+          formatUiError(
+            "error.loadDeleted",
+            "Could not load Recently Deleted",
+            deletedError,
+          ),
+        );
       }
     })();
   }, [section, setError]);
@@ -2763,18 +3204,18 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
     void (async () => {
       try {
-        const shouldPrimeSettingsDiagnostics =
-          standaloneSettingsWindow
-            ? shouldPreloadSettingsDiagnostics(initialStandaloneSettingsPane)
-            : !warmStartEligible;
-        const shouldPrimeModelCatalog =
-          standaloneSettingsWindow
-            ? initialStandaloneSettingsPane === "local_models"
-            : !warmStartEligible;
+        const shouldPrimeSettingsDiagnostics = standaloneSettingsWindow
+          ? shouldPreloadSettingsDiagnostics(initialStandaloneSettingsPane)
+          : !warmStartEligible;
+        const shouldPrimeModelCatalog = standaloneSettingsWindow
+          ? initialStandaloneSettingsPane === "local_models"
+          : !warmStartEligible;
         const initialSettingsPromise = fetchSettingsSnapshot();
         const initialRuntimeHealthPromise = shouldPrimeSettingsDiagnostics
           ? fetchRuntimeHealth()
-          : Promise.resolve(initialBootstrap?.setupReport?.runtime_health ?? null);
+          : Promise.resolve(
+              initialBootstrap?.setupReport?.runtime_health ?? null,
+            );
         const initialProvisioningPromise = shouldPrimeSettingsDiagnostics
           ? provisioningStatus()
           : Promise.resolve(null);
@@ -2785,23 +3226,35 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         const initialSettings = await initialSettingsPromise;
         if (disposed) return;
 
-        const [initialRuntimeHealthResult, initialProvisioningResult, initialModelCatalogResult] =
-          await Promise.allSettled([
-            initialRuntimeHealthPromise,
-            initialProvisioningPromise,
-            initialModelCatalogPromise,
-          ]);
+        const [
+          initialRuntimeHealthResult,
+          initialProvisioningResult,
+          initialModelCatalogResult,
+        ] = await Promise.allSettled([
+          initialRuntimeHealthPromise,
+          initialProvisioningPromise,
+          initialModelCatalogPromise,
+        ]);
         if (disposed) return;
 
         const normalized = normalizeSettings(initialSettings);
         setSettings(normalized);
-        if (initialRuntimeHealthResult.status === "fulfilled" && initialRuntimeHealthResult.value) {
+        if (
+          initialRuntimeHealthResult.status === "fulfilled" &&
+          initialRuntimeHealthResult.value
+        ) {
           setRuntimeHealth(initialRuntimeHealthResult.value);
         }
-        if (initialProvisioningResult.status === "fulfilled" && initialProvisioningResult.value) {
+        if (
+          initialProvisioningResult.status === "fulfilled" &&
+          initialProvisioningResult.value
+        ) {
           setProvisioningState(initialProvisioningResult.value);
         }
-        if (initialModelCatalogResult.status === "fulfilled" && initialModelCatalogResult.value) {
+        if (
+          initialModelCatalogResult.status === "fulfilled" &&
+          initialModelCatalogResult.value
+        ) {
           setModelCatalog(initialModelCatalogResult.value);
         }
         if (warmStartEligible) {
@@ -2809,11 +3262,11 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           setStartupRequirementsLoaded(true);
           setStartupRequirementsError(null);
         } else if (
-          shouldPrimeSettingsDiagnostics
-          && shouldPrimeModelCatalog
-          && initialRuntimeHealthResult.status === "fulfilled"
-          && initialProvisioningResult.status === "fulfilled"
-          && initialModelCatalogResult.status === "fulfilled"
+          shouldPrimeSettingsDiagnostics &&
+          shouldPrimeModelCatalog &&
+          initialRuntimeHealthResult.status === "fulfilled" &&
+          initialProvisioningResult.status === "fulfilled" &&
+          initialModelCatalogResult.status === "fulfilled"
         ) {
           setStartupGateBypass(false);
           setStartupRequirementsLoaded(true);
@@ -2858,13 +3311,22 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           }
         })();
 
-        if (!standaloneSettingsWindow && normalized.general.auto_update_enabled) {
+        if (
+          !standaloneSettingsWindow &&
+          normalized.general.auto_update_enabled
+        ) {
           deferredUpdatesTimer = window.setTimeout(() => {
             void refreshUpdates(true, () => disposed);
           }, 1200);
         }
       } catch (bootstrapError) {
-        setError(formatUiError("error.bootstrapFailed", "Bootstrap failed", bootstrapError));
+        setError(
+          formatUiError(
+            "error.bootstrapFailed",
+            "Bootstrap failed",
+            bootstrapError,
+          ),
+        );
       }
     })();
 
@@ -2900,11 +3362,11 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       return;
     }
     const hasActiveRemote =
-      settings.ai.active_remote_service_id !== null
-      && settings.ai.remote_services.some(
+      settings.ai.active_remote_service_id !== null &&
+      settings.ai.remote_services.some(
         (service) =>
-          service.id === settings.ai.active_remote_service_id
-          && service.enabled,
+          service.id === settings.ai.active_remote_service_id &&
+          service.enabled,
       );
     if (hasActiveRemote) {
       return;
@@ -2912,7 +3374,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     const hasGoogleService = (settings.ai.remote_services ?? []).some(
       (service) => service.kind === "google",
     );
-    if (platformIsAppleSilicon && settings.ai.providers.foundation_apple.enabled) {
+    if (
+      platformIsAppleSilicon &&
+      settings.ai.providers.foundation_apple.enabled
+    ) {
       void patchAiSettings((current) => ({
         ...current,
         active_provider: "foundation_apple",
@@ -2921,7 +3386,8 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     }
     if (hasGoogleService && settings.ai.providers.gemini.has_api_key) {
       const googleServiceId =
-        settings.ai.remote_services.find((service) => service.kind === "google")?.id ?? null;
+        settings.ai.remote_services.find((service) => service.kind === "google")
+          ?.id ?? null;
       void patchAiSettings((current) => ({
         ...current,
         active_provider: "gemini",
@@ -2958,7 +3424,8 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
   useEffect(() => {
     const googleServiceId =
-      settings?.ai.remote_services?.find((service) => service.kind === "google")?.id ?? null;
+      settings?.ai.remote_services?.find((service) => service.kind === "google")
+        ?.id ?? null;
     if (!googleServiceId || aiServiceConfigOpen !== googleServiceId) {
       return;
     }
@@ -2980,7 +3447,11 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         if (!cancelled && models.length > 0) {
           const current = settings?.ai.providers.gemini.model;
           const merged = Array.from(
-            new Set([...(current ? [current] : []), ...models, ...fallbackGeminiModelOptions]),
+            new Set([
+              ...(current ? [current] : []),
+              ...models,
+              ...fallbackGeminiModelOptions,
+            ]),
           );
           setGeminiModelChoices(merged);
         }
@@ -3077,28 +3548,31 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
     let cancelled = false;
     let deferredDiagnosticsTimer: number | null = null;
-    const runDiagnostics = () => void (async () => {
-      try {
-        const snapshot = await loadStartupRequirements();
-        if (!cancelled) {
-          setStartupGateBypass((current) => (snapshot.runtimeHealth.setup_complete ? current : false));
-        }
-      } catch (startupError) {
-        if (!cancelled) {
-          const formatted = formatUiError(
-            "error.startupRequirementsFailed",
-            "Could not prepare local runtime requirements",
-            startupError,
-          );
-          if (warmStartEligible) {
-            setError(formatted);
-          } else {
-            setStartupRequirementsLoaded(false);
-            setStartupRequirementsError(formatted);
+    const runDiagnostics = () =>
+      void (async () => {
+        try {
+          const snapshot = await loadStartupRequirements();
+          if (!cancelled) {
+            setStartupGateBypass((current) =>
+              snapshot.runtimeHealth.setup_complete ? current : false,
+            );
+          }
+        } catch (startupError) {
+          if (!cancelled) {
+            const formatted = formatUiError(
+              "error.startupRequirementsFailed",
+              "Could not prepare local runtime requirements",
+              startupError,
+            );
+            if (warmStartEligible) {
+              setError(formatted);
+            } else {
+              setStartupRequirementsLoaded(false);
+              setStartupRequirementsError(formatted);
+            }
           }
         }
-      }
-    })();
+      })();
 
     if (warmStartEligible) {
       deferredDiagnosticsTimer = window.setTimeout(runDiagnostics, 900);
@@ -3121,7 +3595,11 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     if (warmStartEligible) {
       return;
     }
-    if (!startupRequirementsLoaded || initialSetupRunning || initialSetupReady) {
+    if (
+      !startupRequirementsLoaded ||
+      initialSetupRunning ||
+      initialSetupReady
+    ) {
       return;
     }
     if (autoInitialSetupAttemptedRef.current) {
@@ -3145,7 +3623,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     setPromptTest((current) => {
       const previousDefaultInput = promptTestDefaultInputRef.current;
       promptTestDefaultInputRef.current = localizedDefaultInput;
-      if (current.input.trim().length > 0 && current.input !== previousDefaultInput) {
+      if (
+        current.input.trim().length > 0 &&
+        current.input !== previousDefaultInput
+      ) {
         return current;
       }
       return {
@@ -3159,16 +3640,33 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     setPreparedImportTrimDraft(null);
   }, []);
 
-  const primeSelectedFileForHome = useCallback((filePath: string) => {
-    resetPreparedImportAudio();
-    setSelectedFile(filePath);
-    setSection("home");
-    setError(null);
-  }, [resetPreparedImportAudio, setError, setSelectedFile]);
+  const primeSelectedFileForHome = useCallback(
+    (filePath: string) => {
+      resetPreparedImportAudio();
+      setSelectedFile(filePath);
+      setSection("home");
+      setError(null);
+    },
+    [resetPreparedImportAudio, setError, setSelectedFile],
+  );
 
   // Tauri native drag-and-drop: load dropped audio files into Home for review
   useEffect(() => {
-    const audioExtensions = ["wav", "mp3", "m4a", "flac", "ogg", "aac", "opus", "webm", "mp4", "mov", "mkv", "wma", "aiff"];
+    const audioExtensions = [
+      "wav",
+      "mp3",
+      "m4a",
+      "flac",
+      "ogg",
+      "aac",
+      "opus",
+      "webm",
+      "mp4",
+      "mov",
+      "mkv",
+      "wma",
+      "aiff",
+    ];
     let unlisten: (() => void) | undefined;
 
     void (async () => {
@@ -3220,14 +3718,18 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           ...event,
           message: resolvedMessage,
         };
-        setQueueItems((previous) => pushOrReplaceQueueItem(previous, queueEvent));
+        setQueueItems((previous) =>
+          pushOrReplaceQueueItem(previous, queueEvent),
+        );
         if (event.job_id === activeJobIdRef.current) {
           clearStartupWatchdog();
           setProgress(queueEvent);
           if (event.stage === "cancelled" || event.stage === "failed") {
             const wasFocused = focusedJobIdRef.current === event.job_id;
             clearStartupWatchdog();
-            const failedContext = pendingTranscriptionContextRef.current.get(event.job_id);
+            const failedContext = pendingTranscriptionContextRef.current.get(
+              event.job_id,
+            );
             pendingTranscriptionContextRef.current.delete(event.job_id);
             clearActiveJob();
             activeJobIdRef.current = null;
@@ -3239,36 +3741,55 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
               setActiveDetailContext(null);
             }
             if (event.stage === "failed" && wasFocused) {
-              presentTranscriptionFailure(resolvedMessage, failedContext?.detailContext);
+              presentTranscriptionFailure(
+                resolvedMessage,
+                failedContext?.detailContext,
+              );
             } else if (event.stage === "failed") {
               setError(resolvedMessage);
-            } else if (wasFocused && !restoreDetailAfterFailedTranscription(failedContext?.detailContext)) {
+            } else if (
+              wasFocused &&
+              !restoreDetailAfterFailedTranscription(
+                failedContext?.detailContext,
+              )
+            ) {
               setSection("home");
             }
           }
         }
       });
-      if (unmounted) { uProgress(); } else { unsubProgress = uProgress; }
+      if (unmounted) {
+        uProgress();
+      } else {
+        unsubProgress = uProgress;
+      }
 
       const uCompleted = await subscribeJobCompleted((artifact) => {
         failedJobMessagesRef.current.delete(artifact.job_id);
-        const pendingContext = pendingTranscriptionContextRef.current.get(artifact.job_id);
+        const pendingContext = pendingTranscriptionContextRef.current.get(
+          artifact.job_id,
+        );
         pendingTranscriptionContextRef.current.delete(artifact.job_id);
         const wasRunning = artifact.job_id === activeJobIdRef.current;
         const wasFocused = artifact.job_id === focusedJobIdRef.current;
         const hydratedArtifact = pendingContext
           ? {
               ...artifact,
-              title: pendingContext.title?.trim() ? pendingContext.title : artifact.title,
+              title: pendingContext.title?.trim()
+                ? pendingContext.title
+                : artifact.title,
               source_label: pendingContext.inputPath
                 ? fileLabel(pendingContext.inputPath)
                 : artifact.source_label,
-              parent_artifact_id: pendingContext.parentId ?? artifact.parent_artifact_id,
+              parent_artifact_id:
+                pendingContext.parentId ?? artifact.parent_artifact_id,
             }
           : artifact;
 
         prependArtifact(hydratedArtifact);
-        setQueueItems((previous) => previous.filter((entry) => entry.job_id !== artifact.job_id));
+        setQueueItems((previous) =>
+          previous.filter((entry) => entry.job_id !== artifact.job_id),
+        );
 
         if (wasRunning) {
           clearStartupWatchdog();
@@ -3287,15 +3808,24 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           setError(null);
         }
       });
-      if (unmounted) { uCompleted(); } else { unsubCompleted = uCompleted; }
+      if (unmounted) {
+        uCompleted();
+      } else {
+        unsubCompleted = uCompleted;
+      }
 
       const uFailed = await subscribeJobFailed((payload) => {
         const resolvedFailureMessage = normalizeJobFailureMessage(
           payload.message,
           formatJobMessage("failed"),
         );
-        failedJobMessagesRef.current.set(payload.job_id, resolvedFailureMessage);
-        const failedContext = pendingTranscriptionContextRef.current.get(payload.job_id);
+        failedJobMessagesRef.current.set(
+          payload.job_id,
+          resolvedFailureMessage,
+        );
+        const failedContext = pendingTranscriptionContextRef.current.get(
+          payload.job_id,
+        );
         pendingTranscriptionContextRef.current.delete(payload.job_id);
         const wasRunning = payload.job_id === activeJobIdRef.current;
         const wasFocused = payload.job_id === focusedJobIdRef.current;
@@ -3325,12 +3855,19 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           setActiveJobPreviewText("");
           activeJobDeltaSequenceRef.current = -1;
           setActiveDetailContext(null);
-          presentTranscriptionFailure(resolvedFailureMessage, failedContext?.detailContext);
+          presentTranscriptionFailure(
+            resolvedFailureMessage,
+            failedContext?.detailContext,
+          );
         } else if (wasRunning) {
           setError(resolvedFailureMessage);
         }
       });
-      if (unmounted) { uFailed(); } else { unsubFailed = uFailed; }
+      if (unmounted) {
+        uFailed();
+      } else {
+        unsubFailed = uFailed;
+      }
 
       const uTranscriptionDelta = await subscribeTranscriptionDelta((delta) => {
         if (delta.job_id !== focusedJobIdRef.current) {
@@ -3353,31 +3890,41 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           return mergeTranscriptionPreview(previous, next);
         });
       });
-      if (unmounted) { uTranscriptionDelta(); } else { unsubTranscriptionDelta = uTranscriptionDelta; }
+      if (unmounted) {
+        uTranscriptionDelta();
+      } else {
+        unsubTranscriptionDelta = uTranscriptionDelta;
+      }
 
-      const uRealtimeDelta = await subscribeRealtimeDelta((delta: RealtimeDelta) => {
-        if (delta.kind === "append_final") {
-          setRealtimeFinalLines((previous) => [...previous, delta.text]);
-          setRealtimePreview("");
-        }
+      const uRealtimeDelta = await subscribeRealtimeDelta(
+        (delta: RealtimeDelta) => {
+          if (delta.kind === "append_final") {
+            setRealtimeFinalLines((previous) => [...previous, delta.text]);
+            setRealtimePreview("");
+          }
 
-        if (delta.kind === "replace_final") {
-          setRealtimeFinalLines((previous) => {
-            if (previous.length === 0) {
-              return [delta.text];
-            }
-            const next = [...previous];
-            next[next.length - 1] = delta.text;
-            return next;
-          });
-          setRealtimePreview("");
-        }
+          if (delta.kind === "replace_final") {
+            setRealtimeFinalLines((previous) => {
+              if (previous.length === 0) {
+                return [delta.text];
+              }
+              const next = [...previous];
+              next[next.length - 1] = delta.text;
+              return next;
+            });
+            setRealtimePreview("");
+          }
 
-        if (delta.kind === "update_preview") {
-          setRealtimePreview(delta.text);
-        }
-      });
-      if (unmounted) { uRealtimeDelta(); } else { unsubRealtimeDelta = uRealtimeDelta; }
+          if (delta.kind === "update_preview") {
+            setRealtimePreview(delta.text);
+          }
+        },
+      );
+      if (unmounted) {
+        uRealtimeDelta();
+      } else {
+        unsubRealtimeDelta = uRealtimeDelta;
+      }
 
       const uRealtimeStatus = await subscribeRealtimeStatus((event) => {
         setRealtimeMessage(formatRealtimeStatusMessage(event.state));
@@ -3389,41 +3936,59 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           setRealtimeState("idle");
         }
       });
-      if (unmounted) { uRealtimeStatus(); } else { unsubRealtimeStatus = uRealtimeStatus; }
+      if (unmounted) {
+        uRealtimeStatus();
+      } else {
+        unsubRealtimeStatus = uRealtimeStatus;
+      }
 
       const uRealtimeSaved = await subscribeRealtimeSaved((artifact) => {
         prependArtifact(artifact);
       });
-      if (unmounted) { uRealtimeSaved(); } else { unsubRealtimeSaved = uRealtimeSaved; }
+      if (unmounted) {
+        uRealtimeSaved();
+      } else {
+        unsubRealtimeSaved = uRealtimeSaved;
+      }
 
-      const uProvisioningProgress = await subscribeProvisioningProgress((event) => {
-        provisioningProgressKindRef.current = event.asset_kind;
-        setProvisioning((previous) => ({
-          ...previous,
-          running: true,
-          progress: event,
-          statusMessage: `${formatProvisioningAssetLabel(event)} (${event.current}/${event.total})`,
-        }));
-      });
-      if (unmounted) { uProvisioningProgress(); } else { unsubProvisioningProgress = uProvisioningProgress; }
+      const uProvisioningProgress = await subscribeProvisioningProgress(
+        (event) => {
+          provisioningProgressKindRef.current = event.asset_kind;
+          setProvisioning((previous) => ({
+            ...previous,
+            running: true,
+            progress: event,
+            statusMessage: `${formatProvisioningAssetLabel(event)} (${event.current}/${event.total})`,
+          }));
+        },
+      );
+      if (unmounted) {
+        uProvisioningProgress();
+      } else {
+        unsubProvisioningProgress = uProvisioningProgress;
+      }
 
       const uProvisioningStatus = await subscribeProvisioningStatus((event) => {
         const localizedStatusMessage =
           event.state === "completed"
             ? provisioningProgressKindRef.current === "speech_runtime"
-              ? t("provisioning.runtimeReady", "Local transcription runtime is ready")
+              ? t(
+                  "provisioning.runtimeReady",
+                  "Local transcription runtime is ready",
+                )
               : t("settings.localModels.readyMessage", "Local models are ready")
             : event.state === "cancelled"
               ? t("provisioning.cancelled", "Provisioning cancelled")
-              : event.reason_code === "pyannote_runtime_missing"
-                || event.reason_code === "pyannote_model_missing"
-                || event.reason_code === "pyannote_install_incomplete"
-                || event.reason_code === "pyannote_repair_required"
-                || event.reason_code === "pyannote_version_mismatch"
-                || event.reason_code === "pyannote_arch_mismatch"
-                || event.reason_code === "pyannote_checksum_invalid"
-                ? t("settings.pyannote.desc")
-                : t("error.provisioningFailed", "Provisioning failed");
+              : event.reason_code === "pyannote_install_incomplete" ||
+                  event.reason_code === "pyannote_checksum_invalid"
+                ? event.message || t("settings.pyannote.desc")
+                : event.reason_code === "pyannote_runtime_missing" ||
+                    event.reason_code === "pyannote_model_missing" ||
+                    event.reason_code === "pyannote_repair_required" ||
+                    event.reason_code === "pyannote_version_mismatch" ||
+                    event.reason_code === "pyannote_arch_mismatch"
+                  ? t("settings.pyannote.desc")
+                  : t("error.provisioningFailed", "Provisioning failed");
         setProvisioning((previous) => ({
           ...previous,
           running: false,
@@ -3441,8 +4006,11 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           void refreshRuntimeHealth();
         }
       });
-      if (unmounted) { uProvisioningStatus(); } else { unsubProvisioningStatus = uProvisioningStatus; }
-
+      if (unmounted) {
+        uProvisioningStatus();
+      } else {
+        unsubProvisioningStatus = uProvisioningStatus;
+      }
     })();
 
     return () => {
@@ -3458,7 +4026,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       unsubProvisioningStatus?.();
       clearStartupWatchdog();
     };
-  }, [clearActiveJob, clearStartupWatchdog, prependArtifact, setError, setProgress]);
+  }, [
+    clearActiveJob,
+    clearStartupWatchdog,
+    prependArtifact,
+    setError,
+    setProgress,
+  ]);
 
   useEffect(() => {
     if (!settings) return;
@@ -3470,7 +4044,8 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       return;
     }
 
-    const selected = templates.find((item) => item.id === activePromptId) ?? templates[0];
+    const selected =
+      templates.find((item) => item.id === activePromptId) ?? templates[0];
     if (selected.id !== activePromptId) {
       setActivePromptId(selected.id);
     }
@@ -3525,25 +4100,29 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     });
   }, [deletedArtifacts, deletedSearch]);
 
-  const buildArtifactTree = useCallback((items: TranscriptArtifact[]): GroupedArtifact[] => {
-    const map = new Map<string, GroupedArtifact>();
-    items.forEach(item => {
-      map.set(item.id, { ...item, children: [] });
-    });
+  const buildArtifactTree = useCallback(
+    (items: TranscriptArtifact[]): GroupedArtifact[] => {
+      const map = new Map<string, GroupedArtifact>();
+      items.forEach((item) => {
+        map.set(item.id, { ...item, children: [] });
+      });
 
-    const roots: GroupedArtifact[] = [];
-    items.forEach(item => {
-      const node = map.get(item.id)!;
-      const parentArtifactId = item.parent_artifact_id ?? item.metadata?.parent_id ?? null;
-      if (parentArtifactId && map.has(parentArtifactId)) {
-        map.get(parentArtifactId)!.children!.push(node);
-      } else {
-        roots.push(node);
-      }
-    });
+      const roots: GroupedArtifact[] = [];
+      items.forEach((item) => {
+        const node = map.get(item.id)!;
+        const parentArtifactId =
+          item.parent_artifact_id ?? item.metadata?.parent_id ?? null;
+        if (parentArtifactId && map.has(parentArtifactId)) {
+          map.get(parentArtifactId)!.children!.push(node);
+        } else {
+          roots.push(node);
+        }
+      });
 
-    return roots;
-  }, []);
+      return roots;
+    },
+    [],
+  );
 
   const groupedHistoryArtifacts = useMemo(() => {
     const groups: Array<{ label: string; items: GroupedArtifact[] }> = [];
@@ -3563,7 +4142,7 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
   const groupedRecentArtifacts = useMemo(() => {
     const groups: Array<{ label: string; items: GroupedArtifact[] }> = [];
     const roots = buildArtifactTree(artifacts).slice(0, 6);
-    
+
     for (const root of roots) {
       const label = dayGroupLabel(root.updated_at);
       const existing = groups[groups.length - 1];
@@ -3584,12 +4163,18 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
   const isSelectionMode = selectedArtifactIds.length > 0;
 
   const homeVisibleArtifactIds = useMemo(
-    () => groupedRecentArtifacts.flatMap((group) => group.items.map((artifact) => artifact.id)),
+    () =>
+      groupedRecentArtifacts.flatMap((group) =>
+        group.items.map((artifact) => artifact.id),
+      ),
     [groupedRecentArtifacts],
   );
 
   const historyVisibleArtifactIds = useMemo(
-    () => groupedHistoryArtifacts.flatMap((group) => group.items.map((artifact) => artifact.id)),
+    () =>
+      groupedHistoryArtifacts.flatMap((group) =>
+        group.items.map((artifact) => artifact.id),
+      ),
     [groupedHistoryArtifacts],
   );
 
@@ -3599,7 +4184,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     }
 
     const selectedModel = settings.transcription.model;
-    const modelEntry = modelCatalog.find((entry) => entry.key === selectedModel);
+    const modelEntry = modelCatalog.find(
+      (entry) => entry.key === selectedModel,
+    );
     if (!modelEntry) {
       return true;
     }
@@ -3613,7 +4200,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     }
 
     const selectedModel = settings.transcription.model;
-    const modelEntry = modelCatalog.find((entry) => entry.key === selectedModel);
+    const modelEntry = modelCatalog.find(
+      (entry) => entry.key === selectedModel,
+    );
     if (!modelEntry) {
       return true;
     }
@@ -3640,7 +4229,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
   useEffect(() => {
     const artifactIds = new Set(artifacts.map((artifact) => artifact.id));
-    setSelectedArtifactIds((previous) => previous.filter((id) => artifactIds.has(id)));
+    setSelectedArtifactIds((previous) =>
+      previous.filter((id) => artifactIds.has(id)),
+    );
   }, [artifacts]);
 
   const detailSegments = useMemo(
@@ -3648,7 +4239,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     [activeArtifact?.metadata?.timeline_v2],
   );
   const speakerColorMap = useMemo(
-    () => sanitizeSpeakerColorMap(settings?.transcription.speaker_diarization?.speaker_colors ?? {}),
+    () =>
+      sanitizeSpeakerColorMap(
+        settings?.transcription.speaker_diarization?.speaker_colors ?? {},
+      ),
     [settings?.transcription.speaker_diarization?.speaker_colors],
   );
 
@@ -3656,73 +4250,89 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     () =>
       selectedSegmentSourceIndex === null
         ? null
-        : detailSegments.find((segment) => segment.sourceIndex === selectedSegmentSourceIndex) ?? null,
+        : (detailSegments.find(
+            (segment) => segment.sourceIndex === selectedSegmentSourceIndex,
+          ) ?? null),
     [detailSegments, selectedSegmentSourceIndex],
   );
 
-  const resolveEmotionSegmentSourceIndex = useCallback((
-    segmentIndex: number,
-    evidenceText?: string | null,
-    timeLabel?: string | null,
-    startSeconds?: number | null,
-  ): number | null => {
-    if (detailSegments.some((segment) => segment.sourceIndex === segmentIndex)) {
-      return segmentIndex;
-    }
-
-    const normalizedEvidence = evidenceText?.trim().toLowerCase() ?? "";
-    if (startSeconds !== null && startSeconds !== undefined) {
-      const byStartSeconds = detailSegments.find((segment) =>
-        segment.startSeconds !== null
-        && Math.abs(segment.startSeconds - startSeconds) < 0.25
-        && (!normalizedEvidence
-          || segment.line.toLowerCase().includes(normalizedEvidence)
-          || normalizedEvidence.includes(segment.line.trim().toLowerCase())),
-      );
-      if (byStartSeconds) {
-        return byStartSeconds.sourceIndex;
+  const resolveEmotionSegmentSourceIndex = useCallback(
+    (
+      segmentIndex: number,
+      evidenceText?: string | null,
+      timeLabel?: string | null,
+      startSeconds?: number | null,
+    ): number | null => {
+      if (
+        detailSegments.some((segment) => segment.sourceIndex === segmentIndex)
+      ) {
+        return segmentIndex;
       }
-    }
 
-    if (timeLabel) {
-      const byTime = detailSegments.find((segment) =>
-        segment.time === timeLabel
-        && (!normalizedEvidence
-          || segment.line.toLowerCase().includes(normalizedEvidence)
-          || normalizedEvidence.includes(segment.line.trim().toLowerCase())),
-      );
-      if (byTime) {
-        return byTime.sourceIndex;
+      const normalizedEvidence = evidenceText?.trim().toLowerCase() ?? "";
+      if (startSeconds !== null && startSeconds !== undefined) {
+        const byStartSeconds = detailSegments.find(
+          (segment) =>
+            segment.startSeconds !== null &&
+            Math.abs(segment.startSeconds - startSeconds) < 0.25 &&
+            (!normalizedEvidence ||
+              segment.line.toLowerCase().includes(normalizedEvidence) ||
+              normalizedEvidence.includes(segment.line.trim().toLowerCase())),
+        );
+        if (byStartSeconds) {
+          return byStartSeconds.sourceIndex;
+        }
       }
-    }
 
-    if (normalizedEvidence) {
-      const byEvidence = detailSegments.find((segment) => {
-        const normalizedLine = segment.line.trim().toLowerCase();
-        return normalizedLine.includes(normalizedEvidence)
-          || normalizedEvidence.includes(normalizedLine);
-      });
-      if (byEvidence) {
-        return byEvidence.sourceIndex;
+      if (timeLabel) {
+        const byTime = detailSegments.find(
+          (segment) =>
+            segment.time === timeLabel &&
+            (!normalizedEvidence ||
+              segment.line.toLowerCase().includes(normalizedEvidence) ||
+              normalizedEvidence.includes(segment.line.trim().toLowerCase())),
+        );
+        if (byTime) {
+          return byTime.sourceIndex;
+        }
       }
-    }
 
-    return null;
-  }, [detailSegments]);
+      if (normalizedEvidence) {
+        const byEvidence = detailSegments.find((segment) => {
+          const normalizedLine = segment.line.trim().toLowerCase();
+          return (
+            normalizedLine.includes(normalizedEvidence) ||
+            normalizedEvidence.includes(normalizedLine)
+          );
+        });
+        if (byEvidence) {
+          return byEvidence.sourceIndex;
+        }
+      }
 
-  const setSegmentElementRef = useCallback((sourceIndex: number, node: HTMLElement | null) => {
-    if (node) {
-      segmentElementMapRef.current.set(sourceIndex, node);
-    } else {
-      segmentElementMapRef.current.delete(sourceIndex);
-    }
-  }, []);
+      return null;
+    },
+    [detailSegments],
+  );
+
+  const setSegmentElementRef = useCallback(
+    (sourceIndex: number, node: HTMLElement | null) => {
+      if (node) {
+        segmentElementMapRef.current.set(sourceIndex, node);
+      } else {
+        segmentElementMapRef.current.delete(sourceIndex);
+      }
+    },
+    [],
+  );
 
   const contextMenuSegment = useMemo(
     () =>
       segmentContextMenu === null
         ? null
-        : detailSegments.find((segment) => segment.sourceIndex === segmentContextMenu.sourceIndex) ?? null,
+        : (detailSegments.find(
+            (segment) => segment.sourceIndex === segmentContextMenu.sourceIndex,
+          ) ?? null),
     [detailSegments, segmentContextMenu],
   );
 
@@ -3742,14 +4352,19 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     });
 
     return Array.from(speakersById.values())
-      .sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: "base" }))
+      .sort((left, right) =>
+        left.label.localeCompare(right.label, undefined, {
+          sensitivity: "base",
+        }),
+      )
       .map((speaker) => ({
         ...speaker,
-        color: resolveSpeakerColor({
-          speakerId: speaker.id,
-          speakerLabel: speaker.label,
-          colorMap: speakerColorMap,
-        }) ?? "#4F7CFF",
+        color:
+          resolveSpeakerColor({
+            speakerId: speaker.id,
+            speakerLabel: speaker.label,
+            colorMap: speakerColorMap,
+          }) ?? "#4F7CFF",
       }));
   }, [detailSegments, speakerColorMap]);
   const knownSpeakerLabels = useMemo(
@@ -3757,37 +4372,42 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     [knownSpeakers],
   );
   const mergeTargetSpeakers = useMemo(
-    () => knownSpeakers.filter((speaker) => speaker.id !== mergeSpeakerSourceId),
+    () =>
+      knownSpeakers.filter((speaker) => speaker.id !== mergeSpeakerSourceId),
     [knownSpeakers, mergeSpeakerSourceId],
   );
   const artifactDiarizationUiState = useMemo(
     () => getArtifactDiarizationUiState(activeArtifact, knownSpeakerLabels),
     [activeArtifact, knownSpeakerLabels],
   );
-  const selectedSegmentSpeakerLabel = selectedDetailSegment?.speakerLabel?.trim() ?? "";
+  const selectedSegmentSpeakerLabel =
+    selectedDetailSegment?.speakerLabel?.trim() ?? "";
   const canRenameSelectedSpeaker =
-    detailMode === "segments"
-    && Boolean(activeArtifact)
-    && selectedSegmentSourceIndex !== null
-    && selectedSegmentSpeakerLabel.length > 0
-    && speakerDraft.trim().length > 0
-    && speakerDraft.trim() !== selectedSegmentSpeakerLabel;
+    detailMode === "segments" &&
+    Boolean(activeArtifact) &&
+    selectedSegmentSourceIndex !== null &&
+    selectedSegmentSpeakerLabel.length > 0 &&
+    speakerDraft.trim().length > 0 &&
+    speakerDraft.trim() !== selectedSegmentSpeakerLabel;
   const speakerDynamicsAvailable = knownSpeakerLabels.length > 1;
   const canMergeSpeakers =
-    Boolean(activeArtifact)
-    && knownSpeakers.length > 1
-    && mergeSpeakerSourceId.length > 0
-    && mergeSpeakerTargetId.length > 0
-    && mergeSpeakerSourceId !== mergeSpeakerTargetId;
+    Boolean(activeArtifact) &&
+    knownSpeakers.length > 1 &&
+    mergeSpeakerSourceId.length > 0 &&
+    mergeSpeakerTargetId.length > 0 &&
+    mergeSpeakerSourceId !== mergeSpeakerTargetId;
   const showSpeakerManagement = detailMode === "segments";
   const emotionAnalysisGeneratedAt =
-    activeArtifact?.metadata?.[EMOTION_ANALYSIS_GENERATED_AT_METADATA_KEY] ?? "";
+    activeArtifact?.metadata?.[EMOTION_ANALYSIS_GENERATED_AT_METADATA_KEY] ??
+    "";
 
   useEffect(() => {
     if (selectedSegmentSourceIndex === null) {
       return;
     }
-    const exists = detailSegments.some((segment) => segment.sourceIndex === selectedSegmentSourceIndex);
+    const exists = detailSegments.some(
+      (segment) => segment.sourceIndex === selectedSegmentSourceIndex,
+    );
     if (!exists) {
       setSelectedSegmentSourceIndex(null);
       setSpeakerDraft("");
@@ -3799,7 +4419,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       setSpeakerDraft("");
       return;
     }
-    const selected = detailSegments.find((segment) => segment.sourceIndex === selectedSegmentSourceIndex);
+    const selected = detailSegments.find(
+      (segment) => segment.sourceIndex === selectedSegmentSourceIndex,
+    );
     setSpeakerDraft(selected?.speakerLabel ?? "");
   }, [detailSegments, selectedSegmentSourceIndex]);
 
@@ -3809,11 +4431,11 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       return;
     }
 
-    setMergeSpeakerSourceId((previous) => (
+    setMergeSpeakerSourceId((previous) =>
       knownSpeakers.some((speaker) => speaker.id === previous)
         ? previous
-        : knownSpeakers[0]?.id ?? ""
-    ));
+        : (knownSpeakers[0]?.id ?? ""),
+    );
   }, [knownSpeakers]);
 
   useEffect(() => {
@@ -3822,11 +4444,11 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       return;
     }
 
-    setMergeSpeakerTargetId((previous) => (
+    setMergeSpeakerTargetId((previous) =>
       mergeTargetSpeakers.some((speaker) => speaker.id === previous)
         ? previous
-        : mergeTargetSpeakers[0]?.id ?? ""
-    ));
+        : (mergeTargetSpeakers[0]?.id ?? ""),
+    );
   }, [mergeTargetSpeakers]);
 
   useEffect(() => {
@@ -3835,8 +4457,14 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     }
 
     const frame = window.requestAnimationFrame(() => {
-      const element = segmentElementMapRef.current.get(selectedSegmentSourceIndex);
-      element?.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+      const element = segmentElementMapRef.current.get(
+        selectedSegmentSourceIndex,
+      );
+      element?.scrollIntoView({
+        block: "center",
+        inline: "nearest",
+        behavior: "smooth",
+      });
     });
 
     return () => window.cancelAnimationFrame(frame);
@@ -3846,7 +4474,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     if (segmentContextMenu === null) {
       return;
     }
-    const exists = detailSegments.some((segment) => segment.sourceIndex === segmentContextMenu.sourceIndex);
+    const exists = detailSegments.some(
+      (segment) => segment.sourceIndex === segmentContextMenu.sourceIndex,
+    );
     if (!exists) {
       setSegmentContextMenu(null);
     }
@@ -3863,7 +4493,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target;
-      if (target instanceof Element && target.closest(".segment-context-menu")) {
+      if (
+        target instanceof Element &&
+        target.closest(".segment-context-menu")
+      ) {
         return;
       }
       setSegmentContextMenu(null);
@@ -3894,7 +4527,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     if (!trimmedAudioDraft || !activeArtifact) {
       return null;
     }
-    return trimmedAudioDraft.parentArtifactId === activeArtifact.id ? trimmedAudioDraft : null;
+    return trimmedAudioDraft.parentArtifactId === activeArtifact.id
+      ? trimmedAudioDraft
+      : null;
   }, [activeArtifact, trimmedAudioDraft]);
 
   const effectiveDetailContext = useMemo(() => {
@@ -3911,7 +4546,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
     if (activeArtifact) {
       return buildActiveDetailContext({
-        artifactAudioId: activeArtifact.audio_available ? activeArtifact.id : null,
+        artifactAudioId: activeArtifact.audio_available
+          ? activeArtifact.id
+          : null,
         inputPath: null,
         requestedTitle: activeArtifact.title,
         sourceArtifact: activeArtifact,
@@ -3923,32 +4560,36 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
   }, [activeArtifact, activeDetailContext, activeTrimmedAudioDraft]);
 
   const effectiveTrimmedAudioDraft = useMemo(
-    () => effectiveDetailContext?.trimmedAudioDraft ?? activeTrimmedAudioDraft ?? null,
+    () =>
+      effectiveDetailContext?.trimmedAudioDraft ??
+      activeTrimmedAudioDraft ??
+      null,
     [activeTrimmedAudioDraft, effectiveDetailContext],
   );
   const realtimeTranscriptText = useMemo(
-    () => realtimeFinalLines.filter((line) => line.trim().length > 0).join("\n"),
+    () =>
+      realtimeFinalLines.filter((line) => line.trim().length > 0).join("\n"),
     [realtimeFinalLines],
   );
   const realtimePreviewText = realtimePreview.trim();
   const realtimeTranscriptDisplayText = useMemo(
-    () => [...realtimeFinalLines, realtimePreviewText]
-      .filter((line) => line.trim().length > 0)
-      .join("\n"),
+    () =>
+      [...realtimeFinalLines, realtimePreviewText]
+        .filter((line) => line.trim().length > 0)
+        .join("\n"),
     [realtimeFinalLines, realtimePreviewText],
   );
-  const realtimeHasAnyText = realtimeTranscriptText.trim().length > 0 || realtimePreviewText.length > 0;
-  const isRealtimeDetailActive = realtimeSessionOpen && !activeArtifact && !focusedJobId;
+  const realtimeHasAnyText =
+    realtimeTranscriptText.trim().length > 0 || realtimePreviewText.length > 0;
+  const isRealtimeDetailActive =
+    realtimeSessionOpen && !activeArtifact && !focusedJobId;
 
-  const detailAudioInputPath = useMemo(
-    () => {
-      if (effectiveDetailContext?.inputPath) {
-        return effectiveDetailContext.inputPath;
-      }
-      return null;
-    },
-    [effectiveDetailContext],
-  );
+  const detailAudioInputPath = useMemo(() => {
+    if (effectiveDetailContext?.inputPath) {
+      return effectiveDetailContext.inputPath;
+    }
+    return null;
+  }, [effectiveDetailContext]);
   const detailAudioArtifactId = useMemo(
     () => effectiveDetailContext?.artifactAudioId ?? null,
     [effectiveDetailContext],
@@ -3958,17 +4599,23 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     () =>
       detailAudioInputPath
         ? fileLabel(detailAudioInputPath)
-        : activeArtifact?.source_label
-        || effectiveDetailContext?.sourceArtifact?.source_label
-        || t("inspector.unknown", "Unknown"),
-    [activeArtifact?.source_label, detailAudioInputPath, effectiveDetailContext, language],
+        : activeArtifact?.source_label ||
+          effectiveDetailContext?.sourceArtifact?.source_label ||
+          t("inspector.unknown", "Unknown"),
+    [
+      activeArtifact?.source_label,
+      detailAudioInputPath,
+      effectiveDetailContext,
+      language,
+    ],
   );
 
   const detailAudioFormat = useMemo(() => {
-    const formatSource = detailAudioInputPath
-      ?? activeArtifact?.source_label
-      ?? effectiveDetailContext?.sourceArtifact?.source_label
-      ?? null;
+    const formatSource =
+      detailAudioInputPath ??
+      activeArtifact?.source_label ??
+      effectiveDetailContext?.sourceArtifact?.source_label ??
+      null;
     if (!formatSource) {
       return t("inspector.unknown", "Unknown");
     }
@@ -4003,27 +4650,38 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
   }, [activeArtifact, audioDurationSeconds, detailSegments]);
 
   const activeRawTranscript = activeArtifact?.raw_transcript ?? "";
-  const persistedOptimizedTranscriptAvailable = hasPersistedOptimizedTranscript(activeArtifact);
-  const hasOptimizedTranscript = !effectiveTrimmedAudioDraft && Boolean(activeArtifact) && (
-    optimizedTranscriptAvailable
-    || persistedOptimizedTranscriptAvailable
-  );
+  const persistedOptimizedTranscriptAvailable =
+    hasPersistedOptimizedTranscript(activeArtifact);
+  const hasOptimizedTranscript =
+    !effectiveTrimmedAudioDraft &&
+    Boolean(activeArtifact) &&
+    (optimizedTranscriptAvailable || persistedOptimizedTranscriptAvailable);
   const visibleTranscript = useMemo(() => {
     if (transcriptViewMode === "original" && hasOptimizedTranscript) {
       return activeRawTranscript;
     }
     return draftTranscript;
-  }, [activeRawTranscript, draftTranscript, hasOptimizedTranscript, transcriptViewMode]);
-  const transcriptReadOnly = transcriptViewMode === "original" && hasOptimizedTranscript;
+  }, [
+    activeRawTranscript,
+    draftTranscript,
+    hasOptimizedTranscript,
+    transcriptViewMode,
+  ]);
+  const transcriptReadOnly =
+    transcriptViewMode === "original" && hasOptimizedTranscript;
   const confidenceTranscriptDocument = useMemo(
-    () => buildConfidenceTranscript(activeRawTranscript, activeArtifact?.metadata?.timeline_v2),
+    () =>
+      buildConfidenceTranscript(
+        activeRawTranscript,
+        activeArtifact?.metadata?.timeline_v2,
+      ),
     [activeArtifact?.metadata?.timeline_v2, activeRawTranscript],
   );
   const confidenceColorsAvailable = Boolean(confidenceTranscriptDocument);
   const showingConfidenceTranscript =
-    showConfidenceColors
-    && transcriptViewMode === "original"
-    && Boolean(confidenceTranscriptDocument);
+    showConfidenceColors &&
+    transcriptViewMode === "original" &&
+    Boolean(confidenceTranscriptDocument);
 
   const transcriptWordCount = useMemo(
     () => visibleTranscript.split(/\s+/).filter(Boolean).length,
@@ -4057,10 +4715,18 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       ? activeArtifact.optimized_transcript
       : activeRawTranscript;
     return draftTranscript !== baselineTranscript;
-  }, [activeArtifact, activeRawTranscript, draftTranscript, persistedOptimizedTranscriptAvailable]);
+  }, [
+    activeArtifact,
+    activeRawTranscript,
+    draftTranscript,
+    persistedOptimizedTranscriptAvailable,
+  ]);
 
   const runningQueueJob = useMemo(
-    () => (activeJobId ? queueItems.find((item) => item.job_id === activeJobId) ?? null : null),
+    () =>
+      activeJobId
+        ? (queueItems.find((item) => item.job_id === activeJobId) ?? null)
+        : null,
     [activeJobId, queueItems],
   );
 
@@ -4070,7 +4736,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
   );
 
   const focusedQueueJob = useMemo(
-    () => (focusedJobId ? queueItems.find((item) => item.job_id === focusedJobId) ?? null : null),
+    () =>
+      focusedJobId
+        ? (queueItems.find((item) => item.job_id === focusedJobId) ?? null)
+        : null,
     [focusedJobId, queueItems],
   );
 
@@ -4078,7 +4747,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     () => activeJobPercentage(focusedJobId, focusedQueueJob, progress),
     [focusedJobId, focusedQueueJob, progress],
   );
-  const [displayedTranscriptionPercentage, setDisplayedTranscriptionPercentage] = useState(0);
+  const [
+    displayedTranscriptionPercentage,
+    setDisplayedTranscriptionPercentage,
+  ] = useState(0);
   const displayedTranscriptionJobIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -4117,7 +4789,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
   const queueActiveItems = useMemo(
     () =>
-      queueItems.filter((entry) => !["completed", "cancelled", "failed"].includes(entry.stage)),
+      queueItems.filter(
+        (entry) => !["completed", "cancelled", "failed"].includes(entry.stage),
+      ),
     [queueItems],
   );
 
@@ -4128,11 +4802,16 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     }
     return activeRawTranscript.trim();
   }, [activeRawTranscript, visibleTranscript]);
-  const segmentsAlignedWithVisibleTranscript = transcriptViewMode === "original" || !hasOptimizedTranscript;
+  const segmentsAlignedWithVisibleTranscript =
+    transcriptViewMode === "original" || !hasOptimizedTranscript;
 
   const selectedPromptTemplate = useMemo(() => {
     if (!settings || !activePromptId) return null;
-    return settings.prompts.templates.find((template) => template.id === activePromptId) ?? null;
+    return (
+      settings.prompts.templates.find(
+        (template) => template.id === activePromptId,
+      ) ?? null
+    );
   }, [activePromptId, settings]);
 
   const visibleSettingsPanes = useMemo(() => {
@@ -4148,7 +4827,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
   }, [settingsPaneDefinitions, settingsQuery]);
 
   const visibleSettingsPaneGroups = useMemo(() => {
-    const groups = new Map<SettingsPaneDefinition["group"], SettingsPaneDefinition[]>();
+    const groups = new Map<
+      SettingsPaneDefinition["group"],
+      SettingsPaneDefinition[]
+    >();
 
     for (const pane of visibleSettingsPanes) {
       const existing = groups.get(pane.group);
@@ -4159,11 +4841,16 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       }
     }
 
-    return Array.from(groups.entries()).map(([group, panes]) => ({ group, panes }));
+    return Array.from(groups.entries()).map(([group, panes]) => ({
+      group,
+      panes,
+    }));
   }, [visibleSettingsPanes]);
 
   const enabledRemoteServices = useMemo(() => {
-    return (settings?.ai.remote_services ?? []).filter((service) => service.enabled);
+    return (settings?.ai.remote_services ?? []).filter(
+      (service) => service.enabled,
+    );
   }, [settings?.ai.remote_services]);
 
   const activeAiServiceSelectValue = useMemo(() => {
@@ -4173,12 +4860,17 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     }
 
     const activeRemoteId = settings.ai.active_remote_service_id;
-    if (activeRemoteId && enabledRemoteServices.some((service) => service.id === activeRemoteId)) {
+    if (
+      activeRemoteId &&
+      enabledRemoteServices.some((service) => service.id === activeRemoteId)
+    ) {
       return `remote:${activeRemoteId}`;
     }
 
     if (settings.ai.active_provider === "gemini") {
-      const googleService = enabledRemoteServices.find((service) => service.kind === "google");
+      const googleService = enabledRemoteServices.find(
+        (service) => service.kind === "google",
+      );
       if (googleService) {
         return `remote:${googleService.id}`;
       }
@@ -4188,9 +4880,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
   }, [enabledRemoteServices, settings]);
 
   const aiServiceSelectOptions = useMemo(() => {
-    const options: Array<{ value: string; label: string; disabled?: boolean }> = [
-      { value: AI_SERVICE_NONE, label: t("settings.ai.noProvider", "No AI provider") },
-    ];
+    const options: Array<{ value: string; label: string; disabled?: boolean }> =
+      [
+        {
+          value: AI_SERVICE_NONE,
+          label: t("settings.ai.noProvider", "No AI provider"),
+        },
+      ];
 
     if (platformIsAppleSilicon) {
       options.push({
@@ -4235,7 +4931,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     }
 
     const updateElapsed = (): void => {
-      setRealtimeElapsedSeconds(Math.max(0, (Date.now() - realtimeStartedAtMs) / 1000));
+      setRealtimeElapsedSeconds(
+        Math.max(0, (Date.now() - realtimeStartedAtMs) / 1000),
+      );
     };
 
     updateElapsed();
@@ -4269,9 +4967,14 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       progress: null,
       statusMessage: status.ready
         ? t("settings.localModels.readyMessage", "Local models are ready")
-        : t("settings.localModels.missingAssets", "{count} model assets missing", {
-          count: status.missing_models.length + status.missing_encoders.length,
-        }),
+        : t(
+            "settings.localModels.missingAssets",
+            "{count} model assets missing",
+            {
+              count:
+                status.missing_models.length + status.missing_encoders.length,
+            },
+          ),
     }));
   }
 
@@ -4289,7 +4992,11 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       setActiveDetailContext(null);
     }
     setDraftTitle(artifact.title);
-    setDraftTranscript(optimizedTranscriptExists ? artifact.optimized_transcript : artifact.raw_transcript);
+    setDraftTranscript(
+      optimizedTranscriptExists
+        ? artifact.optimized_transcript
+        : artifact.raw_transcript,
+    );
     setOptimizedTranscriptAvailable(optimizedTranscriptExists);
     setTranscriptViewMode(optimizedTranscriptExists ? "optimized" : "original");
     setDraftSummary(artifact.summary);
@@ -4324,7 +5031,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     return `${prefix}-${chatMessageSerialRef.current}`;
   }
 
-  function focusRunningJob(jobId: string, detailContext: ActiveDetailContext | null | undefined): void {
+  function focusRunningJob(
+    jobId: string,
+    detailContext: ActiveDetailContext | null | undefined,
+  ): void {
     clearStartupWatchdog();
     const switchingJob = focusedJobIdRef.current !== jobId;
     setFocusedJobId(jobId);
@@ -4356,15 +5066,17 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     }
     const artifactId = activeArtifact?.id ?? null;
     const persistedSummary = activeArtifact?.summary ?? "";
-    if (!shouldAutostartSummary({
-      enabled: summaryAutostart,
-      artifactId,
-      persistedSummary,
-      draftSummary,
-      hasActiveJob: Boolean(activeJobId),
-      isGeneratingSummary,
-      triggeredArtifactIds: summaryAutostartedArtifactIdsRef.current,
-    })) {
+    if (
+      !shouldAutostartSummary({
+        enabled: summaryAutostart,
+        artifactId,
+        persistedSummary,
+        draftSummary,
+        hasActiveJob: Boolean(activeJobId),
+        isGeneratingSummary,
+        triggeredArtifactIds: summaryAutostartedArtifactIdsRef.current,
+      })
+    ) {
       return;
     }
 
@@ -4383,9 +5095,16 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
   ]);
 
   async function onCopyChatExchange(messageId: string): Promise<void> {
-    const assistantIndex = chatHistory.findIndex((message) => message.id === messageId);
-    const assistantMessage = assistantIndex >= 0 ? chatHistory[assistantIndex] : null;
-    if (!assistantMessage || assistantMessage.role !== "assistant" || !assistantMessage.canCopy) {
+    const assistantIndex = chatHistory.findIndex(
+      (message) => message.id === messageId,
+    );
+    const assistantMessage =
+      assistantIndex >= 0 ? chatHistory[assistantIndex] : null;
+    if (
+      !assistantMessage ||
+      assistantMessage.role !== "assistant" ||
+      !assistantMessage.canCopy
+    ) {
       return;
     }
 
@@ -4403,7 +5122,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         window.clearTimeout(copiedChatResetTimerRef.current);
       }
       copiedChatResetTimerRef.current = window.setTimeout(() => {
-        setCopiedChatMessageId((current) => (current === messageId ? null : current));
+        setCopiedChatMessageId((current) =>
+          current === messageId ? null : current,
+        );
         copiedChatResetTimerRef.current = null;
       }, 1800);
     } catch {
@@ -4420,22 +5141,31 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     setActiveSidebarResize(side);
   }
 
-  const windowFrameStyle = useMemo<CSSProperties | undefined>(() => (
-    leftSidebarOpen
-      ? { "--left-sidebar-width": `${leftSidebarWidth}px` } as CSSProperties
-      : undefined
-  ), [leftSidebarOpen, leftSidebarWidth]);
+  const windowFrameStyle = useMemo<CSSProperties | undefined>(
+    () =>
+      leftSidebarOpen
+        ? ({ "--left-sidebar-width": `${leftSidebarWidth}px` } as CSSProperties)
+        : undefined,
+    [leftSidebarOpen, leftSidebarWidth],
+  );
 
-  const detailLayoutStyle = useMemo<CSSProperties | undefined>(() => (
-    effectiveRightSidebarOpen
-      ? { "--detail-inspector-width": `${rightSidebarWidth}px` } as CSSProperties
-      : undefined
-  ), [effectiveRightSidebarOpen, rightSidebarWidth]);
+  const detailLayoutStyle = useMemo<CSSProperties | undefined>(
+    () =>
+      effectiveRightSidebarOpen
+        ? ({
+            "--detail-inspector-width": `${rightSidebarWidth}px`,
+          } as CSSProperties)
+        : undefined,
+    [effectiveRightSidebarOpen, rightSidebarWidth],
+  );
 
   function restoreDetailAfterFailedTranscription(
     detailContext: ActiveDetailContext | null | undefined,
   ): boolean {
-    if (!detailContext?.restoreArtifactOnFailure || !detailContext.sourceArtifact) {
+    if (
+      !detailContext?.restoreArtifactOnFailure ||
+      !detailContext.sourceArtifact
+    ) {
       return false;
     }
 
@@ -4475,7 +5205,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     }
   }
 
-  async function persistSettings(updated: AppSettings, previous: AppSettings | null): Promise<void> {
+  async function persistSettings(
+    updated: AppSettings,
+    previous: AppSettings | null,
+  ): Promise<void> {
     const sequence = ++settingsSaveSequenceRef.current;
     const normalized = normalizeSettings(updated);
     setSettings(normalized);
@@ -4489,11 +5222,19 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       if (sequence === settingsSaveSequenceRef.current && previous) {
         setSettings(previous);
       }
-      setError(formatUiError("error.saveSettings", "Could not save settings", settingsError));
+      setError(
+        formatUiError(
+          "error.saveSettings",
+          "Could not save settings",
+          settingsError,
+        ),
+      );
     }
   }
 
-  async function patchSettings(mutator: (current: AppSettings) => AppSettings): Promise<void> {
+  async function patchSettings(
+    mutator: (current: AppSettings) => AppSettings,
+  ): Promise<void> {
     if (!settings) return;
     const previous = normalizeSettings(settings);
     const next = normalizeSettings(mutator(normalizeSettings(settings)));
@@ -4522,7 +5263,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       if (sequence === settingsSaveSequenceRef.current) {
         setSettings(previous);
       }
-      setError(formatUiError("error.saveSettings", "Could not save settings", settingsError));
+      setError(
+        formatUiError(
+          "error.saveSettings",
+          "Could not save settings",
+          settingsError,
+        ),
+      );
     }
   }
 
@@ -4535,7 +5282,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         changeLanguage(normalized.general.app_language);
       }
     } catch (error) {
-      setError(formatUiError("error.reloadSettings", "Could not reload settings", error));
+      setError(
+        formatUiError(
+          "error.reloadSettings",
+          "Could not reload settings",
+          error,
+        ),
+      );
     }
   }
 
@@ -4613,7 +5366,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         ),
       );
     } catch (backupError) {
-      setError(formatUiError("error.backupExportFailed", "Backup export failed", backupError));
+      setError(
+        formatUiError(
+          "error.backupExportFailed",
+          "Backup export failed",
+          backupError,
+        ),
+      );
     } finally {
       setIsRunningBackupAction(false);
     }
@@ -4669,7 +5428,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       });
       window.location.reload();
     } catch (backupError) {
-      setError(formatUiError("error.backupImportFailed", "Backup import failed", backupError));
+      setError(
+        formatUiError(
+          "error.backupImportFailed",
+          "Backup import failed",
+          backupError,
+        ),
+      );
     } finally {
       setIsRunningBackupAction(false);
     }
@@ -4680,7 +5445,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       const status = await provisioningStatus();
       setProvisioningState(status);
     } catch (statusError) {
-      setError(formatUiError("error.readProvisioningStatus", "Could not read provisioning status", statusError));
+      setError(
+        formatUiError(
+          "error.readProvisioningStatus",
+          "Could not read provisioning status",
+          statusError,
+        ),
+      );
     }
   }
 
@@ -4689,17 +5460,32 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       const health = await fetchRuntimeHealth();
       setRuntimeHealth(health);
     } catch (healthError) {
-      setError(formatUiError("error.readRuntimeHealth", "Could not read transcription runtime health", healthError));
+      setError(
+        formatUiError(
+          "error.readRuntimeHealth",
+          "Could not read transcription runtime health",
+          healthError,
+        ),
+      );
     }
   }
 
   async function refreshProvisioningModels(): Promise<void> {
     try {
-      const [models, health] = await Promise.all([provisioningModels(), fetchRuntimeHealth()]);
+      const [models, health] = await Promise.all([
+        provisioningModels(),
+        fetchRuntimeHealth(),
+      ]);
       setModelCatalog(models);
       setRuntimeHealth(health);
     } catch (modelsError) {
-      setError(formatUiError("error.readModelsCatalog", "Could not read models catalog", modelsError));
+      setError(
+        formatUiError(
+          "error.readModelsCatalog",
+          "Could not read models catalog",
+          modelsError,
+        ),
+      );
     }
   }
 
@@ -4745,18 +5531,18 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     setInitialSetupStepLabel(label);
     setInitialSetupStepDetail(detail ?? null);
     await persistInitialSetupReport((current) =>
-      updateInitialSetupReportStep(current, stepId, status, detail, label));
+      updateInitialSetupReportStep(current, stepId, status, detail, label),
+    );
   }
 
-  function inferInitialSetupReasonCode(snapshot: StartupRequirementsSnapshot | null): string {
+  function inferInitialSetupReasonCode(
+    snapshot: StartupRequirementsSnapshot | null,
+  ): string {
     if (!snapshot) {
       return "setup_incomplete";
     }
     if (!isRuntimeToolchainReady(snapshot.runtimeHealth)) {
       return "runtime_repair_required";
-    }
-    if (INITIAL_SETUP_REQUIRES_PYANNOTE && !snapshot.runtimeHealth.pyannote.ready) {
-      return snapshot.runtimeHealth.pyannote.reason_code || "pyannote_repair_required";
     }
     if (
       getInitialSetupMissingModels(
@@ -4766,7 +5552,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     ) {
       return "models_missing";
     }
-    return snapshot.runtimeHealth.setup_complete ? "setup_complete" : "setup_incomplete";
+    return snapshot.runtimeHealth.setup_complete
+      ? "setup_complete"
+      : "setup_incomplete";
   }
 
   async function waitForProvisioningRun(
@@ -4784,12 +5572,22 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             }
 
             if (event.state === "cancelled") {
-              reject(new Error(event.message || t("provisioning.cancelled", "Provisioning cancelled")));
+              reject(
+                new Error(
+                  event.message ||
+                    t("provisioning.cancelled", "Provisioning cancelled"),
+                ),
+              );
               return;
             }
 
             if (event.state === "error") {
-              reject(new Error(event.message || t("error.provisioningFailed", "Provisioning failed")));
+              reject(
+                new Error(
+                  event.message ||
+                    t("error.provisioningFailed", "Provisioning failed"),
+                ),
+              );
             }
           });
 
@@ -4818,7 +5616,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         "privacy",
         "running",
         t("setup.firstLaunch.accept", "Accept and continue"),
-        t("setup.firstLaunch.privacyIntro", "Review the privacy summary before enabling local setup."),
+        t(
+          "setup.firstLaunch.privacyIntro",
+          "Review the privacy summary before enabling local setup.",
+        ),
       );
       await patchSettings((current) => ({
         ...current,
@@ -4877,16 +5678,28 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         await updateInitialSetupStepState(
           "speech-runtime",
           "running",
-          t("setup.firstLaunch.preparingRuntime", "Installing local transcription runtime..."),
-          t("setup.firstLaunch.inspectingDesc", "Checking local tools and prerequisites."),
+          t(
+            "setup.firstLaunch.preparingRuntime",
+            "Installing local transcription runtime...",
+          ),
+          t(
+            "setup.firstLaunch.inspectingDesc",
+            "Checking local tools and prerequisites.",
+          ),
         );
         await waitForProvisioningRun(() => provisioningInstallRuntime(false));
         snapshot = await loadStartupRequirements();
         await updateInitialSetupStepState(
           "speech-runtime",
           "completed",
-          t("setup.firstLaunch.preparingRuntime", "Installing local transcription runtime..."),
-          t("provisioning.runtimeReady", "Local transcription runtime is ready"),
+          t(
+            "setup.firstLaunch.preparingRuntime",
+            "Installing local transcription runtime...",
+          ),
+          t(
+            "provisioning.runtimeReady",
+            "Local transcription runtime is ready",
+          ),
         );
       }
 
@@ -4894,33 +5707,23 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         throw new Error(formatRuntimeNotReadyMessage(snapshot.runtimeHealth));
       }
 
-      if (INITIAL_SETUP_REQUIRES_PYANNOTE && !snapshot.runtimeHealth.pyannote.ready) {
-        const forceRepair = shouldRepairPyannoteRuntime(snapshot.runtimeHealth.pyannote);
-        await updateInitialSetupStepState(
-          "pyannote-runtime",
-          "running",
-          t("setup.firstLaunch.preparingPyannote", "Installing speaker diarization runtime..."),
-          snapshot.runtimeHealth.pyannote.message || t("settings.pyannote.desc"),
-        );
-        await waitForProvisioningRun(() => provisioningInstallPyannote(forceRepair));
-        snapshot = await loadStartupRequirements();
-        await updateInitialSetupStepState(
-          "pyannote-runtime",
-          snapshot.runtimeHealth.pyannote.ready ? "completed" : "failed",
-          t("setup.firstLaunch.preparingPyannote", "Installing speaker diarization runtime..."),
-          snapshot.runtimeHealth.pyannote.message,
-        );
-      }
-
       await updateInitialSetupStepState(
         "whisper-models",
         "running",
         t("setup.firstLaunch.downloading", "Downloading local models..."),
-        t("setup.firstLaunch.downloadingDesc", "This can take a few minutes the first time."),
+        t(
+          "setup.firstLaunch.downloadingDesc",
+          "This can take a few minutes the first time.",
+        ),
       );
       for (const model of ["base", "large_turbo"] as SpeechModel[]) {
         const entry = findProvisioningModelEntry(snapshot.modelCatalog, model);
-        if (isProvisionedModelReady(entry, snapshot.runtimeHealth.is_apple_silicon)) {
+        if (
+          isProvisionedModelReady(
+            entry,
+            snapshot.runtimeHealth.is_apple_silicon,
+          )
+        ) {
           continue;
         }
 
@@ -4932,13 +5735,17 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           }),
         );
         setInitialSetupStepDetail(
-          t("setup.firstLaunch.downloadingDesc", "This can take a few minutes the first time."),
+          t(
+            "setup.firstLaunch.downloadingDesc",
+            "This can take a few minutes the first time.",
+          ),
         );
         await waitForProvisioningRun(() =>
           provisioningDownloadModel({
             model,
             include_coreml: currentSnapshot.runtimeHealth.is_apple_silicon,
-          }));
+          }),
+        );
         snapshot = await loadStartupRequirements();
       }
       await updateInitialSetupStepState(
@@ -4952,20 +5759,23 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         "final-validation",
         "running",
         t("setup.firstLaunch.inspecting", "Inspecting local runtime..."),
-        t("setup.firstLaunch.inspectingDesc", "Checking local tools and prerequisites."),
+        INITIAL_SETUP_REQUIRES_PYANNOTE
+          ? t(
+              "setup.firstLaunch.inspectingDesc",
+              "Checking local tools and prerequisites.",
+            )
+          : t(
+              "setup.firstLaunch.inspectingRuntimeOnlyDesc",
+              "Checking local transcription tools and required models.",
+            ),
       );
 
-      if (INITIAL_SETUP_REQUIRES_PYANNOTE && !snapshot.runtimeHealth.pyannote.ready) {
-        throw new Error(
-          snapshot.runtimeHealth.pyannote.message
-          || t(
-            "setup.firstLaunch.assetsStillMissing",
-            "Initial setup did not complete correctly. Please try again.",
-          ),
-        );
-      }
-
-      if (getInitialSetupMissingModels(snapshot.modelCatalog, snapshot.runtimeHealth.is_apple_silicon).length > 0) {
+      if (
+        getInitialSetupMissingModels(
+          snapshot.modelCatalog,
+          snapshot.runtimeHealth.is_apple_silicon,
+        ).length > 0
+      ) {
         throw new Error(
           t(
             "setup.firstLaunch.assetsStillMissing",
@@ -5007,11 +5817,15 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       );
       const failedStepId = initialSetupStepIdRef.current;
       if (failedStepId) {
-        const failedStep = initialSetupReportRef.current.steps.find((step) => step.id === failedStepId);
+        const failedStep = initialSetupReportRef.current.steps.find(
+          (step) => step.id === failedStepId,
+        );
         await updateInitialSetupStepState(
           failedStepId,
           "failed",
-          failedStep?.label ?? initialSetupStepLabel ?? t("setup.firstLaunch.setupError", "Setup could not finish"),
+          failedStep?.label ??
+            initialSetupStepLabel ??
+            t("setup.firstLaunch.setupError", "Setup could not finish"),
           finalError,
         );
       }
@@ -5023,9 +5837,7 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         runtime_health: snapshot?.runtimeHealth ?? current.runtime_health,
         updated_at: new Date().toISOString(),
       }));
-      setInitialSetupError(
-        finalError,
-      );
+      setInitialSetupError(finalError);
     } finally {
       setInitialSetupRunning(false);
     }
@@ -5069,7 +5881,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
     const targetId = value.slice("remote:".length);
     await patchAiSettings((current) => {
-      const targetService = (current.remote_services ?? []).find((service) => service.id === targetId);
+      const targetService = (current.remote_services ?? []).find(
+        (service) => service.id === targetId,
+      );
       if (!targetService) return current;
 
       return {
@@ -5135,7 +5949,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     }));
   }
 
-  async function onChangeTranscriptionEngine(engine: TranscriptionEngine): Promise<void> {
+  async function onChangeTranscriptionEngine(
+    engine: TranscriptionEngine,
+  ): Promise<void> {
     await patchSettings((current) => ({
       ...current,
       transcription: {
@@ -5146,7 +5962,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
   }
 
   async function onPatchSpeakerDiarizationSettings(
-    mutator: (current: SpeakerDiarizationSettings) => SpeakerDiarizationSettings,
+    mutator: (
+      current: SpeakerDiarizationSettings,
+    ) => SpeakerDiarizationSettings,
   ): Promise<void> {
     await patchSettings((current) => ({
       ...current,
@@ -5154,8 +5972,8 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         ...current.transcription,
         speaker_diarization: sanitizeSpeakerDiarizationSettings(
           mutator(
-            current.transcription.speaker_diarization
-            ?? getDefaultSpeakerDiarizationSettings(),
+            current.transcription.speaker_diarization ??
+              getDefaultSpeakerDiarizationSettings(),
           ),
         ),
       },
@@ -5165,7 +5983,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
   }
 
   async function onPatchSpeakerDiarizationPreferences(
-    mutator: (current: SpeakerDiarizationSettings) => SpeakerDiarizationSettings,
+    mutator: (
+      current: SpeakerDiarizationSettings,
+    ) => SpeakerDiarizationSettings,
   ): Promise<void> {
     await patchSettings((current) => ({
       ...current,
@@ -5173,8 +5993,8 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         ...current.transcription,
         speaker_diarization: sanitizeSpeakerDiarizationSettings(
           mutator(
-            current.transcription.speaker_diarization
-            ?? getDefaultSpeakerDiarizationSettings(),
+            current.transcription.speaker_diarization ??
+              getDefaultSpeakerDiarizationSettings(),
           ),
         ),
       },
@@ -5196,7 +6016,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       }));
       setError(null);
     } catch (colorError) {
-      setError(formatUiError("error.speakerColorFailed", "Failed to save speaker color", colorError));
+      setError(
+        formatUiError(
+          "error.speakerColorFailed",
+          "Failed to save speaker color",
+          colorError,
+        ),
+      );
     }
   }
 
@@ -5208,244 +6034,289 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       transcription: {
         ...current.transcription,
         whisper_options: sanitizeWhisperOptions(
-          mutator(current.transcription.whisper_options ?? getDefaultWhisperOptions(platformIsAppleSilicon)),
+          mutator(
+            current.transcription.whisper_options ??
+              getDefaultWhisperOptions(platformIsAppleSilicon),
+          ),
         ),
       },
     }));
   }
 
-  const launchTranscriptionStart = useCallback(async (
-    request: TranscriptionStartRequest,
-    options?: { queuedJobId?: string },
-  ): Promise<void> => {
-    if (!settings) return;
+  const launchTranscriptionStart = useCallback(
+    async (
+      request: TranscriptionStartRequest,
+      options?: { queuedJobId?: string },
+    ): Promise<void> => {
+      if (!settings) return;
 
-    const targetFile = request.inputPath;
-    const parentId = request.parentId;
-    const requestedTitle = request.title?.trim() ? request.title.trim() : undefined;
-    const nextDetailContext = request.detailContext ?? null;
-    const preserveCurrentArtifact = Boolean(activeArtifact && section === "detail");
-
-    clearStartupWatchdog();
-    setIsStarting(true);
-    setError(null);
-    setTrimRetranscriptionError(null);
-    try {
-      const trimValidationError = validateTrimmedAudioDraftForTranscription(
-        request.trimValidationSnapshot ?? null,
+      const targetFile = request.inputPath;
+      const parentId = request.parentId;
+      const requestedTitle = request.title?.trim()
+        ? request.title.trim()
+        : undefined;
+      const nextDetailContext = request.detailContext ?? null;
+      const preserveCurrentArtifact = Boolean(
+        activeArtifact && section === "detail",
       );
-      if (trimValidationError) {
-        if (preserveCurrentArtifact) {
-          setError(trimValidationError);
-        } else {
-          presentTranscriptionFailure(trimValidationError, nextDetailContext);
-        }
-        if (options?.queuedJobId) {
-          setQueueItems((previous) => previous.filter((entry) => entry.job_id !== options.queuedJobId));
-        }
-        return;
-      }
 
-      const runtimeStatus = await withTimeout(
-        ensureTranscriptionRuntime(),
-        20_000,
-        t("error.runtimeSetupTimedOut", "Runtime setup timed out."),
-      );
-      if (!runtimeStatus.ready) {
-        const failureMessage = runtimeStatus.message || formatRuntimeNotReadyMessage(runtimeHealth);
-        if (preserveCurrentArtifact) {
-          setError(failureMessage);
-        } else {
-          presentTranscriptionFailure(failureMessage, nextDetailContext);
-        }
-        if (options?.queuedJobId) {
-          setQueueItems((previous) => previous.filter((entry) => entry.job_id !== options.queuedJobId));
-        }
-        return;
-      }
-      if (runtimeStatus.did_setup) {
-        void refreshRuntimeHealth();
-      }
-
-      let preflight: TranscriptionStartPreflight | null = null;
+      clearStartupWatchdog();
+      setIsStarting(true);
+      setError(null);
+      setTrimRetranscriptionError(null);
       try {
-        preflight = await withTimeout(
-          fetchTranscriptionStartPreflight({
-            model: settings.transcription.model,
-          }),
-          8_000,
-          t("error.preflightTimedOut", "Preflight timed out."),
+        const trimValidationError = validateTrimmedAudioDraftForTranscription(
+          request.trimValidationSnapshot ?? null,
         );
-      } catch (preflightError) {
-        console.warn("Transcription preflight failed, continuing with backend start:", preflightError);
-      }
-      if (preflight && !preflight.allowed) {
-        const failureMessage = formatTranscriptionPreflightMessage(preflight);
-        if (preserveCurrentArtifact) {
-          setError(failureMessage);
-        } else {
-          presentTranscriptionFailure(failureMessage, nextDetailContext);
-        }
-        if (options?.queuedJobId) {
-          setQueueItems((previous) => previous.filter((entry) => entry.job_id !== options.queuedJobId));
-        }
-        return;
-      }
-
-      const startResult = await withTimeout(
-        startTranscription({
-          input_path: targetFile,
-          engine: settings.transcription.engine,
-          language: settings.transcription.language,
-          model: settings.transcription.model,
-          enable_ai: false,
-          whisper_options: sanitizeWhisperOptions(
-            settings.transcription.whisper_options ?? getDefaultWhisperOptions(platformIsAppleSilicon),
-          ),
-          title: requestedTitle,
-          parent_id: parentId,
-        }),
-        12_000,
-        t("error.startRequestTimedOut", "Start request timed out while waiting for backend response."),
-      );
-
-      const { job_id } = startResult;
-      pendingTranscriptionContextRef.current.set(job_id, {
-        inputPath: targetFile,
-        parentId,
-        title: requestedTitle,
-        detailContext: nextDetailContext,
-      });
-
-      if (failedJobMessagesRef.current.has(job_id)) {
-        const earlyFailure =
-          failedJobMessagesRef.current.get(job_id) ?? t("error.transcriptionFailed", "Transcription failed.");
-        failedJobMessagesRef.current.delete(job_id);
-        const failedContext = pendingTranscriptionContextRef.current.get(job_id);
-        pendingTranscriptionContextRef.current.delete(job_id);
-        clearActiveJob();
-        activeJobIdRef.current = null;
-        setActiveJobTitle("");
-        if (options?.queuedJobId) {
-          setQueueItems((previous) => previous.filter((entry) => entry.job_id !== options.queuedJobId));
-        }
-        if (preserveCurrentArtifact) {
-          setError(earlyFailure);
-        } else {
-          setFocusedJobId(null);
-          setActiveJobPreviewText("");
-          activeJobDeltaSequenceRef.current = -1;
-          setActiveDetailContext(null);
-          presentTranscriptionFailure(earlyFailure, failedContext?.detailContext);
-        }
-        return;
-      }
-
-      activeJobIdRef.current = job_id;
-      setJobStarted(job_id);
-      setQueueItems((previous) => {
-        const startedJob = buildQueuedTranscriptionJob(
-          job_id,
-          t("queue.queuedJob", "Queued transcription job."),
-        );
-        if (options?.queuedJobId) {
-          const replaced = replaceQueuedTranscriptionJob(previous, options.queuedJobId, startedJob);
-          return replaced.some((entry) => entry.job_id === job_id)
-            ? replaced
-            : pushOrReplaceQueueItem(replaced, startedJob);
-        }
-        if (previous.some((entry) => entry.job_id === job_id)) {
-          return previous;
-        }
-        return pushOrReplaceQueueItem(previous, startedJob);
-      });
-      setActiveJobTitle(requestedTitle ?? fileLabel(targetFile));
-
-      if (!preserveCurrentArtifact) {
-        setShowExportSheet(false);
-        focusRunningJob(job_id, nextDetailContext);
-      }
-
-      startupWatchdogRef.current = window.setTimeout(() => {
-        if (activeJobIdRef.current !== job_id) {
+        if (trimValidationError) {
+          if (preserveCurrentArtifact) {
+            setError(trimValidationError);
+          } else {
+            presentTranscriptionFailure(trimValidationError, nextDetailContext);
+          }
+          if (options?.queuedJobId) {
+            setQueueItems((previous) =>
+              previous.filter((entry) => entry.job_id !== options.queuedJobId),
+            );
+          }
           return;
         }
-        const stalledContext = pendingTranscriptionContextRef.current.get(job_id);
-        pendingTranscriptionContextRef.current.delete(job_id);
-        clearActiveJob();
-        activeJobIdRef.current = null;
-        setActiveJobTitle("");
-        if (focusedJobIdRef.current === job_id) {
-          setFocusedJobId(null);
-          setActiveJobPreviewText("");
-          activeJobDeltaSequenceRef.current = -1;
-          setActiveDetailContext(null);
-          presentTranscriptionFailure(
-            t(
-              "error.transcriptionStartupProblem",
-              "Transcription is not starting correctly. Check Whisper CLI/Whisper Stream paths in Settings > Local Models.",
-            ),
-            stalledContext?.detailContext,
+
+        const runtimeStatus = await withTimeout(
+          ensureTranscriptionRuntime(),
+          20_000,
+          t("error.runtimeSetupTimedOut", "Runtime setup timed out."),
+        );
+        if (!runtimeStatus.ready) {
+          const failureMessage =
+            runtimeStatus.message ||
+            formatRuntimeNotReadyMessage(runtimeHealth);
+          if (preserveCurrentArtifact) {
+            setError(failureMessage);
+          } else {
+            presentTranscriptionFailure(failureMessage, nextDetailContext);
+          }
+          if (options?.queuedJobId) {
+            setQueueItems((previous) =>
+              previous.filter((entry) => entry.job_id !== options.queuedJobId),
+            );
+          }
+          return;
+        }
+        if (runtimeStatus.did_setup) {
+          void refreshRuntimeHealth();
+        }
+
+        let preflight: TranscriptionStartPreflight | null = null;
+        try {
+          preflight = await withTimeout(
+            fetchTranscriptionStartPreflight({
+              model: settings.transcription.model,
+            }),
+            8_000,
+            t("error.preflightTimedOut", "Preflight timed out."),
           );
-        } else {
-          setError(
-            t(
-              "error.transcriptionStartupProblem",
-              "Transcription is not starting correctly. Check Whisper CLI/Whisper Stream paths in Settings > Local Models.",
-            ),
+        } catch (preflightError) {
+          console.warn(
+            "Transcription preflight failed, continuing with backend start:",
+            preflightError,
           );
         }
-      }, 120_000);
-    } catch (startError) {
-      clearStartupWatchdog();
-      if (options?.queuedJobId) {
-        setQueueItems((previous) => previous.filter((entry) => entry.job_id !== options.queuedJobId));
+        if (preflight && !preflight.allowed) {
+          const failureMessage = formatTranscriptionPreflightMessage(preflight);
+          if (preserveCurrentArtifact) {
+            setError(failureMessage);
+          } else {
+            presentTranscriptionFailure(failureMessage, nextDetailContext);
+          }
+          if (options?.queuedJobId) {
+            setQueueItems((previous) =>
+              previous.filter((entry) => entry.job_id !== options.queuedJobId),
+            );
+          }
+          return;
+        }
+
+        const startResult = await withTimeout(
+          startTranscription({
+            input_path: targetFile,
+            engine: settings.transcription.engine,
+            language: settings.transcription.language,
+            model: settings.transcription.model,
+            enable_ai: false,
+            whisper_options: sanitizeWhisperOptions(
+              settings.transcription.whisper_options ??
+                getDefaultWhisperOptions(platformIsAppleSilicon),
+            ),
+            title: requestedTitle,
+            parent_id: parentId,
+          }),
+          12_000,
+          t(
+            "error.startRequestTimedOut",
+            "Start request timed out while waiting for backend response.",
+          ),
+        );
+
+        const { job_id } = startResult;
+        pendingTranscriptionContextRef.current.set(job_id, {
+          inputPath: targetFile,
+          parentId,
+          title: requestedTitle,
+          detailContext: nextDetailContext,
+        });
+
+        if (failedJobMessagesRef.current.has(job_id)) {
+          const earlyFailure =
+            failedJobMessagesRef.current.get(job_id) ??
+            t("error.transcriptionFailed", "Transcription failed.");
+          failedJobMessagesRef.current.delete(job_id);
+          const failedContext =
+            pendingTranscriptionContextRef.current.get(job_id);
+          pendingTranscriptionContextRef.current.delete(job_id);
+          clearActiveJob();
+          activeJobIdRef.current = null;
+          setActiveJobTitle("");
+          if (options?.queuedJobId) {
+            setQueueItems((previous) =>
+              previous.filter((entry) => entry.job_id !== options.queuedJobId),
+            );
+          }
+          if (preserveCurrentArtifact) {
+            setError(earlyFailure);
+          } else {
+            setFocusedJobId(null);
+            setActiveJobPreviewText("");
+            activeJobDeltaSequenceRef.current = -1;
+            setActiveDetailContext(null);
+            presentTranscriptionFailure(
+              earlyFailure,
+              failedContext?.detailContext,
+            );
+          }
+          return;
+        }
+
+        activeJobIdRef.current = job_id;
+        setJobStarted(job_id);
+        setQueueItems((previous) => {
+          const startedJob = buildQueuedTranscriptionJob(
+            job_id,
+            t("queue.queuedJob", "Queued transcription job."),
+          );
+          if (options?.queuedJobId) {
+            const replaced = replaceQueuedTranscriptionJob(
+              previous,
+              options.queuedJobId,
+              startedJob,
+            );
+            return replaced.some((entry) => entry.job_id === job_id)
+              ? replaced
+              : pushOrReplaceQueueItem(replaced, startedJob);
+          }
+          if (previous.some((entry) => entry.job_id === job_id)) {
+            return previous;
+          }
+          return pushOrReplaceQueueItem(previous, startedJob);
+        });
+        setActiveJobTitle(requestedTitle ?? fileLabel(targetFile));
+
+        if (!preserveCurrentArtifact) {
+          setShowExportSheet(false);
+          focusRunningJob(job_id, nextDetailContext);
+        }
+
+        startupWatchdogRef.current = window.setTimeout(() => {
+          if (activeJobIdRef.current !== job_id) {
+            return;
+          }
+          const stalledContext =
+            pendingTranscriptionContextRef.current.get(job_id);
+          pendingTranscriptionContextRef.current.delete(job_id);
+          clearActiveJob();
+          activeJobIdRef.current = null;
+          setActiveJobTitle("");
+          if (focusedJobIdRef.current === job_id) {
+            setFocusedJobId(null);
+            setActiveJobPreviewText("");
+            activeJobDeltaSequenceRef.current = -1;
+            setActiveDetailContext(null);
+            presentTranscriptionFailure(
+              t(
+                "error.transcriptionStartupProblem",
+                "Transcription is not starting correctly. Check Whisper CLI/Whisper Stream paths in Settings > Local Models.",
+              ),
+              stalledContext?.detailContext,
+            );
+          } else {
+            setError(
+              t(
+                "error.transcriptionStartupProblem",
+                "Transcription is not starting correctly. Check Whisper CLI/Whisper Stream paths in Settings > Local Models.",
+              ),
+            );
+          }
+        }, 120_000);
+      } catch (startError) {
+        clearStartupWatchdog();
+        if (options?.queuedJobId) {
+          setQueueItems((previous) =>
+            previous.filter((entry) => entry.job_id !== options.queuedJobId),
+          );
+        }
+        if (preserveCurrentArtifact) {
+          setError(formatAppError(startError));
+        } else {
+          setActiveDetailContext(null);
+          presentTranscriptionFailure(
+            formatAppError(startError),
+            nextDetailContext,
+          );
+        }
+      } finally {
+        setIsStarting(false);
       }
-      if (preserveCurrentArtifact) {
-        setError(formatAppError(startError));
-      } else {
-        setActiveDetailContext(null);
-        presentTranscriptionFailure(formatAppError(startError), nextDetailContext);
-      }
-    } finally {
-      setIsStarting(false);
-    }
-  }, [
-    activeArtifact,
-    clearStartupWatchdog,
-    focusRunningJob,
-    platformIsAppleSilicon,
-    presentTranscriptionFailure,
-    refreshRuntimeHealth,
-    section,
-    settings,
-    t,
-  ]);
+    },
+    [
+      activeArtifact,
+      clearStartupWatchdog,
+      focusRunningJob,
+      platformIsAppleSilicon,
+      presentTranscriptionFailure,
+      refreshRuntimeHealth,
+      section,
+      settings,
+      t,
+    ],
+  );
 
   async function onStartTranscription(
     fileToProcess?: string,
     options?: { parentId?: string; title?: string },
   ): Promise<void> {
     const preparedHomeTrim =
-      !fileToProcess
-      && preparedImportTrimDraft
-      && preparedImportTrimDraft.sourcePath === selectedFile
+      !fileToProcess &&
+      preparedImportTrimDraft &&
+      preparedImportTrimDraft.sourcePath === selectedFile
         ? preparedImportTrimDraft
         : null;
     const targetFile =
       fileToProcess && typeof fileToProcess === "string"
         ? fileToProcess
-        : preparedHomeTrim?.path ?? selectedFile;
+        : (preparedHomeTrim?.path ?? selectedFile);
     if (!settings || !targetFile) return;
     const parentId = options?.parentId;
-    const requestedTitle =
-      options?.title?.trim()
+    const requestedTitle = options?.title?.trim()
       ? options.title.trim()
       : preparedHomeTrim?.title;
-    const sourceArtifactForContext = parentId ? activeArtifact : section === "detail" ? activeArtifact : null;
+    const sourceArtifactForContext = parentId
+      ? activeArtifact
+      : section === "detail"
+        ? activeArtifact
+        : null;
     const isTrimRetranscription =
-      trimmedAudioDraft?.path === targetFile
-      && trimmedAudioDraft.parentArtifactId === parentId;
+      trimmedAudioDraft?.path === targetFile &&
+      trimmedAudioDraft.parentArtifactId === parentId;
     const nextDetailContext = buildActiveDetailContext({
       inputPath: targetFile,
       requestedTitle,
@@ -5470,13 +6341,22 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     }
 
     if (activeJobId || isStarting) {
-      const queueId = buildQueuedTranscriptionJobId(++queuedTranscriptionSequenceRef.current);
-      setQueuedTranscriptionStarts((previous) => [...previous, { ...request, queueId }]);
+      const queueId = buildQueuedTranscriptionJobId(
+        ++queuedTranscriptionSequenceRef.current,
+      );
+      setQueuedTranscriptionStarts((previous) => [
+        ...previous,
+        { ...request, queueId },
+      ]);
       setQueueItems((previous) =>
         pushOrReplaceQueueItem(
           previous,
-          buildQueuedTranscriptionJob(queueId, t("queue.queuedJob", "Queued transcription job.")),
-        ));
+          buildQueuedTranscriptionJob(
+            queueId,
+            t("queue.queuedJob", "Queued transcription job."),
+          ),
+        ),
+      );
       setError(null);
       setTrimRetranscriptionError(null);
       return;
@@ -5497,7 +6377,12 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
     setQueuedTranscriptionStarts(rest);
     void launchTranscriptionStart(next, { queuedJobId: next.queueId });
-  }, [activeJobId, isStarting, launchTranscriptionStart, queuedTranscriptionStarts]);
+  }, [
+    activeJobId,
+    isStarting,
+    launchTranscriptionStart,
+    queuedTranscriptionStarts,
+  ]);
 
   async function onCancel(): Promise<void> {
     if (!activeJobId) return;
@@ -5505,7 +6390,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     try {
       await cancelTranscription(activeJobId);
     } catch (cancelError) {
-      setError(formatUiError("error.cancelTranscriptionFailed", "Failed to cancel transcription", cancelError));
+      setError(
+        formatUiError(
+          "error.cancelTranscriptionFailed",
+          "Failed to cancel transcription",
+          cancelError,
+        ),
+      );
     }
   }
 
@@ -5521,15 +6412,29 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       setSection("detail");
       setError(null);
     } catch (artifactError) {
-      setError(formatUiError("error.openTranscriptFailed", "Failed to open transcript", artifactError));
+      setError(
+        formatUiError(
+          "error.openTranscriptFailed",
+          "Failed to open transcript",
+          artifactError,
+        ),
+      );
     }
   }
 
-  async function onOpenStandaloneSettingsWindow(pane?: SettingsPane): Promise<void> {
+  async function onOpenStandaloneSettingsWindow(
+    pane?: SettingsPane,
+  ): Promise<void> {
     try {
       await openSettingsWindow(pane);
     } catch (windowError) {
-      setError(formatUiError("error.openSettingsFailed", "Failed to open settings window", windowError));
+      setError(
+        formatUiError(
+          "error.openSettingsFailed",
+          "Failed to open settings window",
+          windowError,
+        ),
+      );
     }
   }
 
@@ -5537,7 +6442,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     if (isQueuedTranscriptionJobId(item.job_id)) {
       return;
     }
-    const pendingContext = pendingTranscriptionContextRef.current.get(item.job_id);
+    const pendingContext = pendingTranscriptionContextRef.current.get(
+      item.job_id,
+    );
     focusRunningJob(item.job_id, pendingContext?.detailContext ?? null);
   }
 
@@ -5563,7 +6470,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       });
 
       if (!updated) {
-        setError(t("error.artifactNotFoundSaving", "Artifact not found while saving."));
+        setError(
+          t("error.artifactNotFoundSaving", "Artifact not found while saving."),
+        );
         return;
       }
 
@@ -5586,7 +6495,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
       setError(null);
     } catch (saveError) {
-      setError(formatUiError("error.saveChangesFailed", "Failed to save changes", saveError));
+      setError(
+        formatUiError(
+          "error.saveChangesFailed",
+          "Failed to save changes",
+          saveError,
+        ),
+      );
     } finally {
       setIsSavingArtifact(false);
     }
@@ -5602,21 +6517,34 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       return;
     }
 
-    const parsedTimeline = parseTimelineV2Document(activeArtifact.metadata?.timeline_v2);
+    const parsedTimeline = parseTimelineV2Document(
+      activeArtifact.metadata?.timeline_v2,
+    );
     if (!parsedTimeline) {
-      setError(t("error.segmentTimelineInvalid", "Segment timeline metadata is missing or invalid."));
+      setError(
+        t(
+          "error.segmentTimelineInvalid",
+          "Segment timeline metadata is missing or invalid.",
+        ),
+      );
       return;
     }
     if (sourceIndex < 0 || sourceIndex >= parsedTimeline.segments.length) {
-      setError(t("error.segmentOutOfRange", "Selected segment is out of range."));
+      setError(
+        t("error.segmentOutOfRange", "Selected segment is out of range."),
+      );
       return;
     }
 
     const normalizedSpeakerLabel = speakerLabel?.trim() ?? "";
     const shouldSetSpeaker = normalizedSpeakerLabel.length > 0;
-    const speakerId = shouldSetSpeaker ? normalizeSpeakerId(normalizedSpeakerLabel) : null;
+    const speakerId = shouldSetSpeaker
+      ? normalizeSpeakerId(normalizedSpeakerLabel)
+      : null;
 
-    const nextSegments = parsedTimeline.segments.map((segment) => ({ ...segment }));
+    const nextSegments = parsedTimeline.segments.map((segment) => ({
+      ...segment,
+    }));
     const assignSpeaker = (index: number) => {
       const target = { ...nextSegments[index] };
       if (shouldSetSpeaker) {
@@ -5643,9 +6571,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         const currentEnd = readSegmentEndSeconds(segment);
         const nextStart = readSegmentStartSeconds(nextSegments[index + 1]);
         if (
-          currentEnd !== null
-          && nextStart !== null
-          && nextStart - currentEnd > maxGapSeconds
+          currentEnd !== null &&
+          nextStart !== null &&
+          nextStart - currentEnd > maxGapSeconds
         ) {
           break;
         }
@@ -5653,7 +6581,11 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         assignSpeaker(index);
       }
 
-      for (let index = sourceIndex + 1; index < nextSegments.length; index += 1) {
+      for (
+        let index = sourceIndex + 1;
+        index < nextSegments.length;
+        index += 1
+      ) {
         const segment = nextSegments[index];
         if (readSegmentSpeakerLabel(segment)) {
           break;
@@ -5662,9 +6594,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         const previousEnd = readSegmentEndSeconds(nextSegments[index - 1]);
         const currentStart = readSegmentStartSeconds(segment);
         if (
-          previousEnd !== null
-          && currentStart !== null
-          && currentStart - previousEnd > maxGapSeconds
+          previousEnd !== null &&
+          currentStart !== null &&
+          currentStart - previousEnd > maxGapSeconds
         ) {
           break;
         }
@@ -5685,14 +6617,25 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         timeline_v2: JSON.stringify(nextTimeline),
       });
       if (!updated) {
-        setError(t("error.transcriptNotFoundAssigning", "Transcript not found while assigning speaker."));
+        setError(
+          t(
+            "error.transcriptNotFoundAssigning",
+            "Transcript not found while assigning speaker.",
+          ),
+        );
         return;
       }
       upsertArtifact(updated);
       syncArtifactDraftState(updated);
       setError(null);
     } catch (assignError) {
-      setError(formatUiError("error.assignSpeakerFailed", "Failed to assign speaker", assignError));
+      setError(
+        formatUiError(
+          "error.assignSpeakerFailed",
+          "Failed to assign speaker",
+          assignError,
+        ),
+      );
     } finally {
       setIsAssigningSpeaker(false);
     }
@@ -5734,17 +6677,31 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     if (!renameResult.ok) {
       switch (renameResult.reason) {
         case "speaker_name_empty":
-          setError(t("error.speakerNameEmpty", "Speaker name cannot be empty."));
+          setError(
+            t("error.speakerNameEmpty", "Speaker name cannot be empty."),
+          );
           break;
         case "speaker_missing":
-          setError(t("error.selectLabeledSpeakerFirst", "Select a labeled speaker first."));
+          setError(
+            t(
+              "error.selectLabeledSpeakerFirst",
+              "Select a labeled speaker first.",
+            ),
+          );
           break;
         case "segment_out_of_range":
-          setError(t("error.segmentOutOfRange", "Selected segment is out of range."));
+          setError(
+            t("error.segmentOutOfRange", "Selected segment is out of range."),
+          );
           break;
         case "missing_timeline":
         default:
-          setError(t("error.segmentTimelineInvalid", "Segment timeline metadata is missing or invalid."));
+          setError(
+            t(
+              "error.segmentTimelineInvalid",
+              "Segment timeline metadata is missing or invalid.",
+            ),
+          );
           break;
       }
       return;
@@ -5757,12 +6714,17 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         timeline_v2: JSON.stringify(renameResult.timeline),
       });
       if (!updated) {
-        setError(t("error.transcriptNotFoundAssigning", "Transcript not found while assigning speaker."));
+        setError(
+          t(
+            "error.transcriptNotFoundAssigning",
+            "Transcript not found while assigning speaker.",
+          ),
+        );
         return;
       }
       if (
-        renameResult.previousSpeakerId
-        && renameResult.previousSpeakerId !== renameResult.nextSpeakerId
+        renameResult.previousSpeakerId &&
+        renameResult.previousSpeakerId !== renameResult.nextSpeakerId
       ) {
         try {
           await onPatchSpeakerDiarizationPreferences((current) => ({
@@ -5774,14 +6736,23 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             ),
           }));
         } catch (colorError) {
-          console.warn("failed to move speaker color mapping after rename", colorError);
+          console.warn(
+            "failed to move speaker color mapping after rename",
+            colorError,
+          );
         }
       }
       upsertArtifact(updated);
       syncArtifactDraftState(updated);
       setError(null);
     } catch (renameError) {
-      setError(formatUiError("error.renameSpeakerFailed", "Failed to rename speaker", renameError));
+      setError(
+        formatUiError(
+          "error.renameSpeakerFailed",
+          "Failed to rename speaker",
+          renameError,
+        ),
+      );
     } finally {
       setIsAssigningSpeaker(false);
     }
@@ -5793,16 +6764,24 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       return;
     }
 
-    const sourceSpeaker = knownSpeakers.find((speaker) => speaker.id === mergeSpeakerSourceId);
-    const targetSpeaker = knownSpeakers.find((speaker) => speaker.id === mergeSpeakerTargetId);
+    const sourceSpeaker = knownSpeakers.find(
+      (speaker) => speaker.id === mergeSpeakerSourceId,
+    );
+    const targetSpeaker = knownSpeakers.find(
+      (speaker) => speaker.id === mergeSpeakerTargetId,
+    );
 
     if (!sourceSpeaker) {
-      setError(t("error.selectLabeledSpeakerFirst", "Select a labeled speaker first."));
+      setError(
+        t("error.selectLabeledSpeakerFirst", "Select a labeled speaker first."),
+      );
       return;
     }
 
     if (!targetSpeaker) {
-      setError(t("error.selectDifferentSpeaker", "Select a different target speaker."));
+      setError(
+        t("error.selectDifferentSpeaker", "Select a different target speaker."),
+      );
       return;
     }
 
@@ -5818,14 +6797,29 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       switch (mergeResult.reason) {
         case "same_speaker":
         case "target_missing":
-          setError(t("error.selectDifferentSpeaker", "Select a different target speaker."));
+          setError(
+            t(
+              "error.selectDifferentSpeaker",
+              "Select a different target speaker.",
+            ),
+          );
           break;
         case "speaker_missing":
-          setError(t("error.selectLabeledSpeakerFirst", "Select a labeled speaker first."));
+          setError(
+            t(
+              "error.selectLabeledSpeakerFirst",
+              "Select a labeled speaker first.",
+            ),
+          );
           break;
         case "missing_timeline":
         default:
-          setError(t("error.segmentTimelineInvalid", "Segment timeline metadata is missing or invalid."));
+          setError(
+            t(
+              "error.segmentTimelineInvalid",
+              "Segment timeline metadata is missing or invalid.",
+            ),
+          );
           break;
       }
       return;
@@ -5838,7 +6832,12 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         timeline_v2: JSON.stringify(mergeResult.timeline),
       });
       if (!updated) {
-        setError(t("error.transcriptNotFoundAssigning", "Transcript not found while assigning speaker."));
+        setError(
+          t(
+            "error.transcriptNotFoundAssigning",
+            "Transcript not found while assigning speaker.",
+          ),
+        );
         return;
       }
 
@@ -5852,7 +6851,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             ),
           }));
         } catch (colorError) {
-          console.warn("failed to remove merged speaker color mapping", colorError);
+          console.warn(
+            "failed to remove merged speaker color mapping",
+            colorError,
+          );
         }
       }
 
@@ -5862,7 +6864,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       setMergeSpeakerSourceId(mergeResult.targetSpeakerId);
       setError(null);
     } catch (mergeError) {
-      setError(formatUiError("error.mergeSpeakerFailed", "Failed to merge speakers", mergeError));
+      setError(
+        formatUiError(
+          "error.mergeSpeakerFailed",
+          "Failed to merge speakers",
+          mergeError,
+        ),
+      );
     } finally {
       setIsAssigningSpeaker(false);
     }
@@ -5877,7 +6885,7 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     const confirmed = await confirmDialog(
       t(
         "inspector.removeSpeakerConfirm",
-        "Remove speaker \"{speaker}\" from this transcript?\n\nAll segments currently assigned to this speaker will become unlabeled.",
+        'Remove speaker "{speaker}" from this transcript?\n\nAll segments currently assigned to this speaker will become unlabeled.',
         { speaker: speaker.label },
       ),
       {
@@ -5898,11 +6906,21 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     if (!removeResult.ok) {
       switch (removeResult.reason) {
         case "speaker_missing":
-          setError(t("error.selectLabeledSpeakerFirst", "Select a labeled speaker first."));
+          setError(
+            t(
+              "error.selectLabeledSpeakerFirst",
+              "Select a labeled speaker first.",
+            ),
+          );
           break;
         case "missing_timeline":
         default:
-          setError(t("error.segmentTimelineInvalid", "Segment timeline metadata is missing or invalid."));
+          setError(
+            t(
+              "error.segmentTimelineInvalid",
+              "Segment timeline metadata is missing or invalid.",
+            ),
+          );
           break;
       }
       return;
@@ -5915,7 +6933,12 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         timeline_v2: JSON.stringify(removeResult.timeline),
       });
       if (!updated) {
-        setError(t("error.transcriptNotFoundAssigning", "Transcript not found while assigning speaker."));
+        setError(
+          t(
+            "error.transcriptNotFoundAssigning",
+            "Transcript not found while assigning speaker.",
+          ),
+        );
         return;
       }
 
@@ -5928,7 +6951,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           ),
         }));
       } catch (colorError) {
-        console.warn("failed to remove speaker color mapping after speaker removal", colorError);
+        console.warn(
+          "failed to remove speaker color mapping after speaker removal",
+          colorError,
+        );
       }
 
       upsertArtifact(updated);
@@ -5938,7 +6964,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       }
       setError(null);
     } catch (removeError) {
-      setError(formatUiError("error.removeSpeakerFailed", "Failed to remove speaker", removeError));
+      setError(
+        formatUiError(
+          "error.removeSpeakerFailed",
+          "Failed to remove speaker",
+          removeError,
+        ),
+      );
     } finally {
       setIsAssigningSpeaker(false);
     }
@@ -5957,7 +6989,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     const matchingSegment = detailSegments.find(
       (segment) => segment.speakerLabel?.trim() === normalizedLabel,
     );
-    const matchingSpeaker = knownSpeakers.find((speaker) => speaker.label.trim() === normalizedLabel);
+    const matchingSpeaker = knownSpeakers.find(
+      (speaker) => speaker.label.trim() === normalizedLabel,
+    );
     setSpeakerDraft(normalizedLabel);
     if (matchingSpeaker) {
       setMergeSpeakerSourceId(matchingSpeaker.id);
@@ -6085,9 +7119,17 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
     setIsRenamingArtifact(true);
     try {
-      const updated = await renameArtifact({ id: renameTarget.id, new_title: newTitle });
+      const updated = await renameArtifact({
+        id: renameTarget.id,
+        new_title: newTitle,
+      });
       if (!updated) {
-        setError(t("error.transcriptNotFoundRenaming", "Transcript not found while renaming."));
+        setError(
+          t(
+            "error.transcriptNotFoundRenaming",
+            "Transcript not found while renaming.",
+          ),
+        );
         return;
       }
 
@@ -6099,7 +7141,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       setError(null);
       closeRenameDialog();
     } catch (renameError) {
-      setError(formatUiError("error.renameFailed", "Rename failed", renameError));
+      setError(
+        formatUiError("error.renameFailed", "Rename failed", renameError),
+      );
     } finally {
       setIsRenamingArtifact(false);
     }
@@ -6109,25 +7153,37 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     const uniqueIds = Array.from(new Set(ids));
     if (uniqueIds.length === 0) return;
 
-    const targets = artifacts.filter((artifact) => uniqueIds.includes(artifact.id));
+    const targets = artifacts.filter((artifact) =>
+      uniqueIds.includes(artifact.id),
+    );
     if (targets.length === 0) return;
 
-    const details =
-      `${targets
-        .slice(0, 5)
-        .map((artifact) => `- ${artifact.title}`)
-        .join("\n")}${targets.length > 5 ? "\n- ..." : ""}`;
+    const details = `${targets
+      .slice(0, 5)
+      .map((artifact) => `- ${artifact.title}`)
+      .join("\n")}${targets.length > 5 ? "\n- ..." : ""}`;
 
     const confirmed = await confirmDialog(
       targets.length === 1
-        ? t("deleted.confirmMove", "Move \"{title}\" to Recently Deleted?\n\nYou can restore this item later from Recently Deleted.", {
-          title: targets[0].title,
-        })
-        : t("deleted.confirmMoveMany", "Move {count} transcriptions to Recently Deleted?\n\n{items}\n\nYou can restore these items later from Recently Deleted.", {
-          count: targets.length,
-          items: details,
-        }),
-      { title: t("deleted.confirmMoveTitle", "Move to Recently Deleted"), kind: "warning" },
+        ? t(
+            "deleted.confirmMove",
+            'Move "{title}" to Recently Deleted?\n\nYou can restore this item later from Recently Deleted.',
+            {
+              title: targets[0].title,
+            },
+          )
+        : t(
+            "deleted.confirmMoveMany",
+            "Move {count} transcriptions to Recently Deleted?\n\n{items}\n\nYou can restore these items later from Recently Deleted.",
+            {
+              count: targets.length,
+              items: details,
+            },
+          ),
+      {
+        title: t("deleted.confirmMoveTitle", "Move to Recently Deleted"),
+        kind: "warning",
+      },
     );
     if (!confirmed) return;
 
@@ -6149,14 +7205,15 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
       setError(null);
     } catch (deleteError) {
-      setError(formatUiError("error.deleteFailed", "Delete failed", deleteError));
+      setError(
+        formatUiError("error.deleteFailed", "Delete failed", deleteError),
+      );
     }
   }
 
   async function onDeleteArtifact(artifact: TranscriptArtifact): Promise<void> {
     await onDeleteArtifactsWithConsent([artifact.id]);
   }
-
 
   function toggleArtifactSelection(id: string): void {
     setSelectedArtifactIds((previous) => {
@@ -6175,7 +7232,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
   }
 
   function selectAllVisibleArtifacts(): void {
-    const visibleIds = section === "history" ? historyVisibleArtifactIds : homeVisibleArtifactIds;
+    const visibleIds =
+      section === "history"
+        ? historyVisibleArtifactIds
+        : homeVisibleArtifactIds;
     setSelectedArtifactIds(Array.from(new Set(visibleIds)));
   }
 
@@ -6193,10 +7253,17 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
     const confirmed = await confirmDialog(
       uniqueIds.length === 1
-        ? t("deleted.confirmRestore", "Restore this transcription from Recently Deleted?")
-        : t("deleted.confirmRestoreMany", "Restore {count} transcriptions from Recently Deleted?", {
-          count: uniqueIds.length,
-        }),
+        ? t(
+            "deleted.confirmRestore",
+            "Restore this transcription from Recently Deleted?",
+          )
+        : t(
+            "deleted.confirmRestoreMany",
+            "Restore {count} transcriptions from Recently Deleted?",
+            {
+              count: uniqueIds.length,
+            },
+          ),
       { title: t("deleted.confirmRestoreTitle", "Restore transcription") },
     );
     if (!confirmed) return;
@@ -6208,24 +7275,41 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         return;
       }
 
-      await Promise.all([refreshActiveArtifacts(), refreshDeletedArtifactsList()]);
+      await Promise.all([
+        refreshActiveArtifacts(),
+        refreshDeletedArtifactsList(),
+      ]);
       setError(null);
     } catch (restoreError) {
-      setError(formatUiError("error.restoreFailed", "Restore failed", restoreError));
+      setError(
+        formatUiError("error.restoreFailed", "Restore failed", restoreError),
+      );
     }
   }
 
-  async function onHardDeleteArtifactsWithConsent(ids: string[]): Promise<void> {
+  async function onHardDeleteArtifactsWithConsent(
+    ids: string[],
+  ): Promise<void> {
     const uniqueIds = Array.from(new Set(ids));
     if (uniqueIds.length === 0) return;
 
     const confirmed = await confirmDialog(
       uniqueIds.length === 1
-        ? t("deleted.confirmPermanentDelete", "Permanently delete this transcription from Recently Deleted? This action cannot be undone.")
-        : t("deleted.confirmPermanentDeleteMany", "Permanently delete {count} transcriptions from Recently Deleted? This action cannot be undone.", {
-          count: uniqueIds.length,
-        }),
-      { title: t("deleted.confirmPermanentDeleteTitle", "Permanent delete"), kind: "warning" },
+        ? t(
+            "deleted.confirmPermanentDelete",
+            "Permanently delete this transcription from Recently Deleted? This action cannot be undone.",
+          )
+        : t(
+            "deleted.confirmPermanentDeleteMany",
+            "Permanently delete {count} transcriptions from Recently Deleted? This action cannot be undone.",
+            {
+              count: uniqueIds.length,
+            },
+          ),
+      {
+        title: t("deleted.confirmPermanentDeleteTitle", "Permanent delete"),
+        kind: "warning",
+      },
     );
     if (!confirmed) return;
 
@@ -6233,21 +7317,38 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       const result = await hardDeleteArtifacts(uniqueIds);
       if (result.deleted <= 0) {
         await refreshDeletedArtifactsList();
-        setError(t("deleted.nonePermanentlyDeleted", "No transcriptions were permanently deleted."));
+        setError(
+          t(
+            "deleted.nonePermanentlyDeleted",
+            "No transcriptions were permanently deleted.",
+          ),
+        );
         return;
       }
 
       await refreshDeletedArtifactsList();
       setError(null);
     } catch (deleteError) {
-      setError(formatUiError("error.permanentDeleteFailed", "Permanent delete failed", deleteError));
+      setError(
+        formatUiError(
+          "error.permanentDeleteFailed",
+          "Permanent delete failed",
+          deleteError,
+        ),
+      );
     }
   }
 
   async function onEmptyTrash(): Promise<void> {
     const confirmed = await confirmDialog(
-      t("deleted.confirmEmpty", "Empty Recently Deleted? This permanently deletes all trashed transcriptions."),
-      { title: t("deleted.confirmEmptyTitle", "Empty Recently Deleted"), kind: "warning" },
+      t(
+        "deleted.confirmEmpty",
+        "Empty Recently Deleted? This permanently deletes all trashed transcriptions.",
+      ),
+      {
+        title: t("deleted.confirmEmptyTitle", "Empty Recently Deleted"),
+        kind: "warning",
+      },
     );
     if (!confirmed) return;
 
@@ -6255,13 +7356,21 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       const result = await emptyDeletedArtifacts();
       if (result.deleted <= 0) {
         await refreshDeletedArtifactsList();
-        setError(t("deleted.alreadyEmpty", "Recently Deleted is already empty."));
+        setError(
+          t("deleted.alreadyEmpty", "Recently Deleted is already empty."),
+        );
         return;
       }
       await refreshDeletedArtifactsList();
       setError(null);
     } catch (emptyError) {
-      setError(formatUiError("error.emptyTrashFailed", "Empty trash failed", emptyError));
+      setError(
+        formatUiError(
+          "error.emptyTrashFailed",
+          "Empty trash failed",
+          emptyError,
+        ),
+      );
     }
   }
 
@@ -6296,7 +7405,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           setActiveArtifact(updated);
         }
       } catch (syncError) {
-        setError(formatUiError("error.copyBeforeExportSync", "Could not sync changes before export", syncError));
+        setError(
+          formatUiError(
+            "error.copyBeforeExportSync",
+            "Could not sync changes before export",
+            syncError,
+          ),
+        );
         return false;
       }
     }
@@ -6327,7 +7442,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       setError(null);
       return true;
     } catch (exportError) {
-      setError(formatUiError("error.exportFailed", "Export failed", exportError));
+      setError(
+        formatUiError("error.exportFailed", "Export failed", exportError),
+      );
       throw exportError;
     }
   }
@@ -6368,7 +7485,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     } catch (startError) {
       setRealtimeSessionOpen(false);
       setRealtimeStartedAtMs(null);
-      setError(formatUiError("error.realtimeStartFailed", "Realtime start failed", startError));
+      setError(
+        formatUiError(
+          "error.realtimeStartFailed",
+          "Realtime start failed",
+          startError,
+        ),
+      );
     }
   }
 
@@ -6376,7 +7499,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     try {
       await pauseRealtime();
     } catch (pauseError) {
-      setError(formatUiError("error.realtimePauseFailed", "Realtime pause failed", pauseError));
+      setError(
+        formatUiError(
+          "error.realtimePauseFailed",
+          "Realtime pause failed",
+          pauseError,
+        ),
+      );
     }
   }
 
@@ -6384,7 +7513,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     try {
       await resumeRealtime();
     } catch (resumeError) {
-      setError(formatUiError("error.realtimeResumeFailed", "Realtime resume failed", resumeError));
+      setError(
+        formatUiError(
+          "error.realtimeResumeFailed",
+          "Realtime resume failed",
+          resumeError,
+        ),
+      );
     }
   }
 
@@ -6406,10 +7541,12 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         setTranscriptViewMode("original");
         setSection("detail");
       } else if (saveResult && currentLiveTranscript) {
-        setError(t(
-          "error.realtimeSaveIncomplete",
-          "Live transcription stopped, but the final transcript was not returned. The current live text is still visible here.",
-        ));
+        setError(
+          t(
+            "error.realtimeSaveIncomplete",
+            "Live transcription stopped, but the final transcript was not returned. The current live text is still visible here.",
+          ),
+        );
         return;
       } else {
         setActiveDetailContext(null);
@@ -6421,7 +7558,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       setRealtimeStartedAtMs(null);
       setError(null);
     } catch (stopError) {
-      setError(formatUiError("error.realtimeStopFailed", "Realtime stop failed", stopError));
+      setError(
+        formatUiError(
+          "error.realtimeStopFailed",
+          "Realtime stop failed",
+          stopError,
+        ),
+      );
     } finally {
       setIsStoppingRealtime(false);
     }
@@ -6436,17 +7579,19 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
     setIsGeneratingSummary(true);
     try {
-      const answer = await summarizeArtifact(buildSummaryArtifactPayload({
-        id: activeArtifact.id,
-        language: summaryLanguage,
-        includeTimestamps: summaryIncludeTimestamps,
-        includeSpeakers: summaryIncludeSpeakers,
-        sections: summarySections,
-        bulletPoints: summaryBulletPoints,
-        actionItems: summaryActionItems,
-        keyPointsOnly: summaryKeyPointsOnly,
-        customPrompt: summaryCustomPrompt,
-      }));
+      const answer = await summarizeArtifact(
+        buildSummaryArtifactPayload({
+          id: activeArtifact.id,
+          language: summaryLanguage,
+          includeTimestamps: summaryIncludeTimestamps,
+          includeSpeakers: summaryIncludeSpeakers,
+          sections: summarySections,
+          bulletPoints: summaryBulletPoints,
+          actionItems: summaryActionItems,
+          keyPointsOnly: summaryKeyPointsOnly,
+          customPrompt: summaryCustomPrompt,
+        }),
+      );
       setDraftSummary(answer);
       if (revealOnSuccess) {
         setDetailMode("summary");
@@ -6455,7 +7600,12 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     } catch (summaryError) {
       const code = formatAppErrorCode(summaryError);
       if (code === "missing_ai_provider" || code === "missing_api_key") {
-        setError(t("error.summaryConfigureProvider", "Summary failed: configure an AI provider in Settings > AI Services."));
+        setError(
+          t(
+            "error.summaryConfigureProvider",
+            "Summary failed: configure an AI provider in Settings > AI Services.",
+          ),
+        );
       } else {
         setError(t("error.summaryFailed", "Summary failed"));
       }
@@ -6464,7 +7614,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     }
   }
 
-  async function onGenerateEmotionAnalysis(revealOnSuccess = true): Promise<void> {
+  async function onGenerateEmotionAnalysis(
+    revealOnSuccess = true,
+  ): Promise<void> {
     if (!activeArtifact || isGeneratingEmotionAnalysis) return;
     if (!aiFeaturesAvailable) {
       setError(aiUnavailableReason);
@@ -6473,13 +7625,17 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
     setIsGeneratingEmotionAnalysis(true);
     try {
-      const result = await analyzeArtifactEmotions(buildEmotionAnalysisPayload({
-        id: activeArtifact.id,
-        language: emotionLanguage,
-        includeTimestamps: emotionIncludeTimestamps,
-        includeSpeakers: emotionIncludeSpeakers,
-        speakerDynamics: speakerDynamicsAvailable ? emotionSpeakerDynamics : false,
-      }));
+      const result = await analyzeArtifactEmotions(
+        buildEmotionAnalysisPayload({
+          id: activeArtifact.id,
+          language: emotionLanguage,
+          includeTimestamps: emotionIncludeTimestamps,
+          includeSpeakers: emotionIncludeSpeakers,
+          speakerDynamics: speakerDynamicsAvailable
+            ? emotionSpeakerDynamics
+            : false,
+        }),
+      );
 
       const refreshedArtifact = await getArtifact(activeArtifact.id);
       if (refreshedArtifact) {
@@ -6491,7 +7647,8 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           metadata: {
             ...activeArtifact.metadata,
             [EMOTION_ANALYSIS_METADATA_KEY]: JSON.stringify(result),
-            [EMOTION_ANALYSIS_GENERATED_AT_METADATA_KEY]: new Date().toISOString(),
+            [EMOTION_ANALYSIS_GENERATED_AT_METADATA_KEY]:
+              new Date().toISOString(),
           },
         };
         upsertArtifact(patchedArtifact);
@@ -6506,7 +7663,12 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     } catch (emotionError) {
       const code = formatAppErrorCode(emotionError);
       if (code === "missing_ai_provider" || code === "missing_api_key") {
-        setError(t("error.emotionConfigureProvider", "Emotion analysis failed: configure an AI provider in Settings > AI Services."));
+        setError(
+          t(
+            "error.emotionConfigureProvider",
+            "Emotion analysis failed: configure an AI provider in Settings > AI Services.",
+          ),
+        );
       } else {
         const detail = formatAppError(emotionError).trim();
         setError(detail || t("error.emotionFailed", "Emotion analysis failed"));
@@ -6534,7 +7696,12 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       startSeconds,
     );
     if (sourceIndex === null) {
-      setError(t("error.segmentTimelineInvalid", "Segment timeline metadata is missing or invalid."));
+      setError(
+        t(
+          "error.segmentTimelineInvalid",
+          "Segment timeline metadata is missing or invalid.",
+        ),
+      );
       return;
     }
     setSelectedSegmentSourceIndex(sourceIndex);
@@ -6555,9 +7722,8 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       return;
     }
 
-    const transcriptToOptimize = transcriptViewMode === "original"
-      ? activeRawTranscript
-      : draftTranscript;
+    const transcriptToOptimize =
+      transcriptViewMode === "original" ? activeRawTranscript : draftTranscript;
 
     if (transcriptToOptimize.trim() === "") {
       return;
@@ -6576,7 +7742,12 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     } catch (optimizeError) {
       const code = formatAppErrorCode(optimizeError);
       if (code === "missing_ai_provider" || code === "missing_api_key") {
-        setError(t("error.improveConfigureProvider", "Improve text failed: configure an AI provider in Settings > AI Services."));
+        setError(
+          t(
+            "error.improveConfigureProvider",
+            "Improve text failed: configure an AI provider in Settings > AI Services.",
+          ),
+        );
       } else {
         setError(t("error.improveFailed", "Improve text failed"));
       }
@@ -6627,38 +7798,49 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     ]);
 
     try {
-      const answer = await chatArtifact(buildChatArtifactPayload({
-        id: activeArtifact.id,
-        prompt,
-        includeTimestamps: chatIncludeTimestamps,
-        includeSpeakers: chatIncludeSpeakers,
-      }));
-      setChatHistory((previous) => previous.map((message) =>
-        message.id === assistantMessageId
-          ? {
-            ...message,
-            text: answer,
-            status: "complete",
-            canCopy: true,
-          }
-          : message
-      ));
+      const answer = await chatArtifact(
+        buildChatArtifactPayload({
+          id: activeArtifact.id,
+          prompt,
+          includeTimestamps: chatIncludeTimestamps,
+          includeSpeakers: chatIncludeSpeakers,
+        }),
+      );
+      setChatHistory((previous) =>
+        previous.map((message) =>
+          message.id === assistantMessageId
+            ? {
+                ...message,
+                text: answer,
+                status: "complete",
+                canCopy: true,
+              }
+            : message,
+        ),
+      );
     } catch (chatError) {
       const code = formatAppErrorCode(chatError);
-      const providerMissing = code === "missing_ai_provider" || code === "missing_api_key";
-      setChatHistory((previous) => previous.map((message) =>
-        message.id === assistantMessageId
-          ? {
-            ...message,
-            text: providerMissing
-              ? aiUnavailableReason
-              : t("error.chatFailed", "Chat failed"),
-            status: "error",
-            canCopy: true,
-          }
-          : message
-      ));
-      setError(providerMissing ? aiUnavailableReason : t("error.chatFailed", "Chat failed"));
+      const providerMissing =
+        code === "missing_ai_provider" || code === "missing_api_key";
+      setChatHistory((previous) =>
+        previous.map((message) =>
+          message.id === assistantMessageId
+            ? {
+                ...message,
+                text: providerMissing
+                  ? aiUnavailableReason
+                  : t("error.chatFailed", "Chat failed"),
+                status: "error",
+                canCopy: true,
+              }
+            : message,
+        ),
+      );
+      setError(
+        providerMissing
+          ? aiUnavailableReason
+          : t("error.chatFailed", "Chat failed"),
+      );
     } finally {
       setIsAskingChat(false);
     }
@@ -6678,7 +7860,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         ...previous,
         running: false,
       }));
-      setError(formatUiError("error.provisioningFailed", "Provisioning failed", provisionError));
+      setError(
+        formatUiError(
+          "error.provisioningFailed",
+          "Provisioning failed",
+          provisionError,
+        ),
+      );
     }
   }
 
@@ -6688,7 +7876,11 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         ...previous,
         running: true,
         progress: null,
-        statusMessage: t("provisioning.downloadingModel", "Downloading {model}...", { model }),
+        statusMessage: t(
+          "provisioning.downloadingModel",
+          "Downloading {model}...",
+          { model },
+        ),
       }));
       await provisioningDownloadModel({ model, include_coreml: true });
     } catch (downloadError) {
@@ -6696,7 +7888,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         ...previous,
         running: false,
       }));
-      setError(formatUiError("error.modelDownloadFailed", "Model download failed", downloadError));
+      setError(
+        formatUiError(
+          "error.modelDownloadFailed",
+          "Model download failed",
+          downloadError,
+        ),
+      );
     }
   }
 
@@ -6707,8 +7905,14 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         running: true,
         progress: null,
         statusMessage: force
-          ? t("provisioning.repairingRuntime", "Repairing local transcription runtime...")
-          : t("provisioning.installingRuntime", "Installing local transcription runtime..."),
+          ? t(
+              "provisioning.repairingRuntime",
+              "Repairing local transcription runtime...",
+            )
+          : t(
+              "provisioning.installingRuntime",
+              "Installing local transcription runtime...",
+            ),
       }));
       await provisioningInstallRuntime(force);
     } catch (installError) {
@@ -6716,7 +7920,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         ...previous,
         running: false,
       }));
-      setError(formatUiError("error.runtimeInstallFailed", "Local runtime install failed", installError));
+      setError(
+        formatUiError(
+          "error.runtimeInstallFailed",
+          "Local runtime install failed",
+          installError,
+        ),
+      );
     }
   }
 
@@ -6727,8 +7937,14 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         running: true,
         progress: null,
         statusMessage: force
-          ? t("provisioning.repairingPyannote", "Repairing pyannote diarization runtime...")
-          : t("provisioning.installingPyannote", "Installing pyannote diarization runtime..."),
+          ? t(
+              "provisioning.repairingPyannote",
+              "Repairing pyannote diarization runtime...",
+            )
+          : t(
+              "provisioning.installingPyannote",
+              "Installing pyannote diarization runtime...",
+            ),
       }));
       await provisioningInstallPyannote(force);
     } catch (installError) {
@@ -6736,7 +7952,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         ...previous,
         running: false,
       }));
-      setError(formatUiError("error.pyannoteInstallFailed", "Pyannote install failed", installError));
+      setError(
+        formatUiError(
+          "error.pyannoteInstallFailed",
+          "Pyannote install failed",
+          installError,
+        ),
+      );
     }
   }
 
@@ -6749,7 +7971,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         statusMessage: t("provisioning.cancelled", "Provisioning cancelled"),
       }));
     } catch (cancelError) {
-      setError(formatUiError("error.provisioningCancelFailed", "Provisioning cancel failed", cancelError));
+      setError(
+        formatUiError(
+          "error.provisioningCancelFailed",
+          "Provisioning cancel failed",
+          cancelError,
+        ),
+      );
     }
   }
 
@@ -6814,7 +8042,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       setUpdateSource("github");
     } catch (updateError) {
       if (!silent) {
-        setError(formatUiError("error.updateCheckFailed", "Update check failed", updateError));
+        setError(
+          formatUiError(
+            "error.updateCheckFailed",
+            "Update check failed",
+            updateError,
+          ),
+        );
       }
     } finally {
       if (!shouldCancel?.()) {
@@ -6833,7 +8067,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     }
 
     setInstallingUpdate(true);
-    setUpdateStatusMessage(t("settings.general.downloadingUpdate", "Downloading update..."));
+    setUpdateStatusMessage(
+      t("settings.general.downloadingUpdate", "Downloading update..."),
+    );
     setUpdateDownloadPercent(0);
     try {
       let expectedBytes = 0;
@@ -6842,7 +8078,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         if (event.event === "Started") {
           expectedBytes = event.data.contentLength ?? 0;
           downloadedBytes = 0;
-          setUpdateStatusMessage(t("settings.general.downloadingUpdate", "Downloading update..."));
+          setUpdateStatusMessage(
+            t("settings.general.downloadingUpdate", "Downloading update..."),
+          );
           return;
         }
         if (event.event === "Progress") {
@@ -6850,7 +8088,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           if (expectedBytes > 0) {
             const percent = Math.max(
               0,
-              Math.min(100, Math.round((downloadedBytes / expectedBytes) * 100)),
+              Math.min(
+                100,
+                Math.round((downloadedBytes / expectedBytes) * 100),
+              ),
             );
             setUpdateDownloadPercent(percent);
           }
@@ -6858,23 +8099,37 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         }
         if (event.event === "Finished") {
           setUpdateDownloadPercent(100);
-          setUpdateStatusMessage(t("settings.general.installingUpdate", "Installing update..."));
+          setUpdateStatusMessage(
+            t("settings.general.installingUpdate", "Installing update..."),
+          );
         }
       });
 
-      setUpdateStatusMessage(t("settings.general.updateInstalled", "Update installed. Restart the app to apply it."));
+      setUpdateStatusMessage(
+        t(
+          "settings.general.updateInstalled",
+          "Update installed. Restart the app to apply it.",
+        ),
+      );
       setUpdateInfo((previous) =>
         previous
           ? {
               ...previous,
               has_update: false,
-              current_version: previous.latest_version ?? previous.current_version,
+              current_version:
+                previous.latest_version ?? previous.current_version,
             }
           : previous,
       );
       setNativeUpdate(null);
     } catch (installError) {
-      setError(formatUiError("error.updateInstallFailed", "Update install failed", installError));
+      setError(
+        formatUiError(
+          "error.updateInstallFailed",
+          "Update install failed",
+          installError,
+        ),
+      );
       setUpdateStatusMessage(null);
     } finally {
       setInstallingUpdate(false);
@@ -6934,15 +8189,25 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       await resetPromptTemplates();
       await refreshSettingsFromDisk();
     } catch (error) {
-      setError(formatUiError("error.resetPromptsFailed", "Could not reset prompts", error));
+      setError(
+        formatUiError(
+          "error.resetPromptsFailed",
+          "Could not reset prompts",
+          error,
+        ),
+      );
     }
   }
 
   function renderHome(): JSX.Element {
-    const homeAudioInputPath = preparedImportTrimDraft?.path ?? selectedFile ?? null;
+    const homeAudioInputPath =
+      preparedImportTrimDraft?.path ?? selectedFile ?? null;
     const homeAudioIsTrimmed = Boolean(preparedImportTrimDraft);
 
-    const renderHomeTree = (artifact: GroupedArtifact, depth = 0): React.ReactNode => {
+    const renderHomeTree = (
+      artifact: GroupedArtifact,
+      depth = 0,
+    ): React.ReactNode => {
       return (
         <React.Fragment key={artifact.id}>
           <article
@@ -6962,31 +8227,71 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                 <AudioLines size={12} />
               </span>
               <div className="home-history-copy">
-                <div className="home-history-head" style={{ display: 'flex', alignItems: 'center' }}>
+                <div
+                  className="home-history-head"
+                  style={{ display: "flex", alignItems: "center" }}
+                >
                   {artifact.children && artifact.children.length > 0 && (
-                    <button 
-                      className="tree-expand-button" 
+                    <button
+                      className="tree-expand-button"
                       onClick={(e) => toggleArtifactExpansion(artifact.id, e)}
-                      title={expandedArtifactIds.has(artifact.id) ? t("history.collapseChildTrims", "Collapse child trims") : t("history.expandChildTrims", "Expand child trims")}
+                      title={
+                        expandedArtifactIds.has(artifact.id)
+                          ? t(
+                              "history.collapseChildTrims",
+                              "Collapse child trims",
+                            )
+                          : t("history.expandChildTrims", "Expand child trims")
+                      }
                     >
-                      {expandedArtifactIds.has(artifact.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      {expandedArtifactIds.has(artifact.id) ? (
+                        <ChevronDown size={14} />
+                      ) : (
+                        <ChevronRight size={14} />
+                      )}
                     </button>
                   )}
                   <strong>
                     <HighlightMatch text={artifact.title} search={search} />
                   </strong>
-                  <span className="history-inline-time" style={{ marginLeft: "auto" }}>{formatHomeTime(artifact.updated_at)}</span>
+                  <span
+                    className="history-inline-time"
+                    style={{ marginLeft: "auto" }}
+                  >
+                    {formatHomeTime(artifact.updated_at)}
+                  </span>
                 </div>
-                <p className="history-preview" style={artifact.children && artifact.children.length > 0 ? { paddingLeft: 22 } : {}}>
+                <p
+                  className="history-preview"
+                  style={
+                    artifact.children && artifact.children.length > 0
+                      ? { paddingLeft: 22 }
+                      : {}
+                  }
+                >
                   <HighlightMatch
-                    text={previewSnippet(artifact.optimized_transcript || artifact.raw_transcript, 210)}
+                    text={previewSnippet(
+                      artifact.optimized_transcript || artifact.raw_transcript,
+                      210,
+                    )}
                     search={search}
                   />
                 </p>
               </div>
             </button>
             <div className="home-history-actions">
-              <label className="home-history-select" title={depth > 0 ? t("history.selectTrimTranscription", "Select trim transcription") : t("history.selectTranscription", "Select transcription")} onClick={(e) => e.stopPropagation()}>
+              <label
+                className="home-history-select"
+                title={
+                  depth > 0
+                    ? t(
+                        "history.selectTrimTranscription",
+                        "Select trim transcription",
+                      )
+                    : t("history.selectTranscription", "Select transcription")
+                }
+                onClick={(e) => e.stopPropagation()}
+              >
                 <input
                   type="checkbox"
                   checked={selectedArtifactIdSet.has(artifact.id)}
@@ -7001,19 +8306,27 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                     void onDeleteArtifact(artifact);
                   }}
                   title={t("history.moveToTrashTitle", "Move to trash")}
-                  aria-label={t("history.moveToTrashAria", "Move {title} to trash", { title: artifact.title })}
+                  aria-label={t(
+                    "history.moveToTrashAria",
+                    "Move {title} to trash",
+                    { title: artifact.title },
+                  )}
                 >
                   <Trash2 size={14} />
                 </button>
               ) : null}
             </div>
           </article>
-  
-          {artifact.children && artifact.children.length > 0 && expandedArtifactIds.has(artifact.id) && (
-            <div className="history-children-list">
-              {artifact.children.map((child) => renderHomeTree(child, depth + 1))}
-            </div>
-          )}
+
+          {artifact.children &&
+            artifact.children.length > 0 &&
+            expandedArtifactIds.has(artifact.id) && (
+              <div className="history-children-list">
+                {artifact.children.map((child) =>
+                  renderHomeTree(child, depth + 1),
+                )}
+              </div>
+            )}
         </React.Fragment>
       );
     };
@@ -7027,7 +8340,11 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             value={selectedFile ? fileLabel(selectedFile) : ""}
             readOnly
           />
-          <button className="icon-button" onClick={() => void onPickFile()} title={t("home.openLocalFile", "Open Local File")}>
+          <button
+            className="icon-button"
+            onClick={() => void onPickFile()}
+            title={t("home.openLocalFile", "Open Local File")}
+          >
             <Upload size={16} />
           </button>
         </section>
@@ -7042,10 +8359,17 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             {isStarting
               ? t("home.starting", "Starting...")
               : homeAudioIsTrimmed
-                ? t("home.startTrimmedTranscription", "Start Trimmed Transcription")
+                ? t(
+                    "home.startTrimmedTranscription",
+                    "Start Trimmed Transcription",
+                  )
                 : t("home.startTranscription", "Start Transcription")}
           </button>
-          <button className="quick-action" onClick={() => void onStartRealtime()} disabled={!canStartRealtime}>
+          <button
+            className="quick-action"
+            onClick={() => void onStartRealtime()}
+            disabled={!canStartRealtime}
+          >
             <Mic size={18} strokeWidth={2.5} />
             {t("home.startLive", "Start Live")}
           </button>
@@ -7055,13 +8379,18 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             disabled={realtimeState === "idle" || isStoppingRealtime}
           >
             <Radio size={18} strokeWidth={2.5} />
-            {isStoppingRealtime ? t("home.stopping", "Stopping...") : t("home.stopLiveSave", "Stop Live & Save")}
+            {isStoppingRealtime
+              ? t("home.stopping", "Stopping...")
+              : t("home.stopLiveSave", "Stop Live & Save")}
           </button>
           <button className="quick-action" onClick={() => setSection("queue")}>
             <ListChecks size={18} strokeWidth={2.5} />
             {t("home.queue", "Queue")}
           </button>
-          <button className="quick-action" onClick={() => setSection("history")}>
+          <button
+            className="quick-action"
+            onClick={() => setSection("history")}
+          >
             <HistoryIcon size={18} strokeWidth={2.5} />
             {t("home.history", "History")}
           </button>
@@ -7097,7 +8426,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         <section className="panel-card">
           {isSelectionMode ? (
             <div className="history-selection-toolbar">
-              <button className="secondary-button" onClick={() => setSelectedArtifactIds([])}>
+              <button
+                className="secondary-button"
+                onClick={() => setSelectedArtifactIds([])}
+              >
                 {t("action.cancel", "Cancel")}
               </button>
               <button
@@ -7112,7 +8444,8 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                 onClick={() => void onDeleteSelectedArtifacts()}
                 disabled={selectedArtifactIds.length === 0}
               >
-                {t("selection.deleteSelected", "Delete selected")} ({selectedArtifactIds.length})
+                {t("selection.deleteSelected", "Delete selected")} (
+                {selectedArtifactIds.length})
               </button>
             </div>
           ) : null}
@@ -7126,7 +8459,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
               {groupedRecentArtifacts.map((group) => (
                 <section key={group.label} className="history-group">
                   <h3 className="history-group-label">{group.label}</h3>
-                  <div className={`history-list ${isSelectionMode ? "selection-active" : ""}`}>
+                  <div
+                    className={`history-list ${isSelectionMode ? "selection-active" : ""}`}
+                  >
                     {group.items.map((artifact) => renderHomeTree(artifact))}
                   </div>
                 </section>
@@ -7144,10 +8479,17 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         <div className="view-toolbar">
           <h2>{t("queue.title")}</h2>
           <div className="toolbar-actions">
-            <button className="secondary-button" onClick={() => setQueueItems([])}>
+            <button
+              className="secondary-button"
+              onClick={() => setQueueItems([])}
+            >
               {t("queue.clearFinished", "Clear Finished")}
             </button>
-            <button className="secondary-button" onClick={() => void onCancel()} disabled={!activeJobId}>
+            <button
+              className="secondary-button"
+              onClick={() => void onCancel()}
+              disabled={!activeJobId}
+            >
               {t("queue.cancelActiveJob", "Cancel Active Job")}
             </button>
           </div>
@@ -7155,22 +8497,34 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
         {queueActiveItems.length === 0 ? (
           <div className="center-empty">
-            <div className="center-empty-icon"><ListChecks size={28} /></div>
+            <div className="center-empty-icon">
+              <ListChecks size={28} />
+            </div>
             <h3>{t("queue.noActive")}</h3>
             <p>{t("queue.noActiveDesc")}</p>
           </div>
         ) : (
           <div className="queue-list">
             {queueActiveItems.map((item) => {
-              const isQueuedPlaceholder = isQueuedTranscriptionJobId(item.job_id);
-              const queuedStart = queuedTranscriptionStarts.find((entry) => entry.queueId === item.job_id);
-              const pendingContext = pendingTranscriptionContextRef.current.get(item.job_id);
+              const isQueuedPlaceholder = isQueuedTranscriptionJobId(
+                item.job_id,
+              );
+              const queuedStart = queuedTranscriptionStarts.find(
+                (entry) => entry.queueId === item.job_id,
+              );
+              const pendingContext = pendingTranscriptionContextRef.current.get(
+                item.job_id,
+              );
               const queueItemTitle =
-                queuedStart?.title
-                ?? (queuedStart?.inputPath ? fileLabel(queuedStart.inputPath) : undefined)
-                ?? pendingContext?.title
-                ?? (pendingContext?.inputPath ? fileLabel(pendingContext.inputPath) : undefined)
-                ?? (item.job_id === activeJobId && activeJobTitle
+                queuedStart?.title ??
+                (queuedStart?.inputPath
+                  ? fileLabel(queuedStart.inputPath)
+                  : undefined) ??
+                pendingContext?.title ??
+                (pendingContext?.inputPath
+                  ? fileLabel(pendingContext.inputPath)
+                  : undefined) ??
+                (item.job_id === activeJobId && activeJobTitle
                   ? activeJobTitle
                   : t("queue.activeJobFallback", "Transcription in progress"));
               const displayPercentage =
@@ -7182,22 +8536,26 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                 <article
                   key={item.job_id}
                   className={`queue-card ${isQueuedPlaceholder ? "" : "queue-card-clickable"}`}
-                  onClick={isQueuedPlaceholder ? undefined : () => onFocusQueueJob(item)}
+                  onClick={
+                    isQueuedPlaceholder
+                      ? undefined
+                      : () => onFocusQueueJob(item)
+                  }
                   role={isQueuedPlaceholder ? undefined : "button"}
                   tabIndex={isQueuedPlaceholder ? undefined : 0}
-                  onKeyDown={isQueuedPlaceholder
-                    ? undefined
-                    : (event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        onFocusQueueJob(item);
-                      }
-                    }}
+                  onKeyDown={
+                    isQueuedPlaceholder
+                      ? undefined
+                      : (event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            onFocusQueueJob(item);
+                          }
+                        }
+                  }
                 >
                   <div className="queue-card-head">
-                    <strong>
-                      {queueItemTitle}
-                    </strong>
+                    <strong>{queueItemTitle}</strong>
                     <span className="queue-stage">
                       <ProgressRing percentage={displayPercentage} size={18} />
                       <small>{formatJobStageLabel(item.stage)}</small>
@@ -7217,10 +8575,15 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
   }
 
   function renderHistory(): JSX.Element {
-    const renderHistoryTree = (artifact: GroupedArtifact, depth = 0): React.ReactNode => {
+    const renderHistoryTree = (
+      artifact: GroupedArtifact,
+      depth = 0,
+    ): React.ReactNode => {
       return (
         <React.Fragment key={artifact.id}>
-          <article className={`history-item ${depth > 0 ? "history-child-item" : ""}${selectedArtifactIdSet.has(artifact.id) ? " selected" : ""}`}>
+          <article
+            className={`history-item ${depth > 0 ? "history-child-item" : ""}${selectedArtifactIdSet.has(artifact.id) ? " selected" : ""}`}
+          >
             <button
               className="history-main history-main-rich"
               onClick={() => {
@@ -7235,31 +8598,71 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                 <AudioLines size={12} />
               </span>
               <div className="history-main-copy">
-                <div className="home-history-head" style={{ display: 'flex', alignItems: 'center' }}>
+                <div
+                  className="home-history-head"
+                  style={{ display: "flex", alignItems: "center" }}
+                >
                   {artifact.children && artifact.children.length > 0 && (
-                    <button 
-                      className="tree-expand-button" 
+                    <button
+                      className="tree-expand-button"
                       onClick={(e) => toggleArtifactExpansion(artifact.id, e)}
-                      title={expandedArtifactIds.has(artifact.id) ? t("history.collapseChildTrims", "Collapse child trims") : t("history.expandChildTrims", "Expand child trims")}
+                      title={
+                        expandedArtifactIds.has(artifact.id)
+                          ? t(
+                              "history.collapseChildTrims",
+                              "Collapse child trims",
+                            )
+                          : t("history.expandChildTrims", "Expand child trims")
+                      }
                     >
-                      {expandedArtifactIds.has(artifact.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      {expandedArtifactIds.has(artifact.id) ? (
+                        <ChevronDown size={14} />
+                      ) : (
+                        <ChevronRight size={14} />
+                      )}
                     </button>
                   )}
                   <strong>
                     <HighlightMatch text={artifact.title} search={search} />
                   </strong>
-                  <span className="history-inline-time" style={{ marginLeft: "auto" }}>{formatHomeTime(artifact.updated_at)}</span>
+                  <span
+                    className="history-inline-time"
+                    style={{ marginLeft: "auto" }}
+                  >
+                    {formatHomeTime(artifact.updated_at)}
+                  </span>
                 </div>
-                <p className="history-preview" style={artifact.children && artifact.children.length > 0 ? { paddingLeft: 22 } : {}}>
+                <p
+                  className="history-preview"
+                  style={
+                    artifact.children && artifact.children.length > 0
+                      ? { paddingLeft: 22 }
+                      : {}
+                  }
+                >
                   <HighlightMatch
-                    text={previewSnippet(artifact.optimized_transcript || artifact.raw_transcript, 220)}
+                    text={previewSnippet(
+                      artifact.optimized_transcript || artifact.raw_transcript,
+                      220,
+                    )}
                     search={search}
                   />
                 </p>
               </div>
             </button>
             <div className="history-actions">
-              <label className="home-history-select history-select" title={depth > 0 ? t("history.selectTrimTranscription", "Select trim transcription") : t("history.selectTranscription", "Select transcription")} onClick={(e) => e.stopPropagation()}>
+              <label
+                className="home-history-select history-select"
+                title={
+                  depth > 0
+                    ? t(
+                        "history.selectTrimTranscription",
+                        "Select trim transcription",
+                      )
+                    : t("history.selectTranscription", "Select transcription")
+                }
+                onClick={(e) => e.stopPropagation()}
+              >
                 <input
                   type="checkbox"
                   checked={selectedArtifactIdSet.has(artifact.id)}
@@ -7268,18 +8671,25 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
               </label>
               {!isSelectionMode ? (
                 <>
-                  <button className="secondary-button history-action-button" onClick={() => void onRenameArtifact(artifact)}>
+                  <button
+                    className="secondary-button history-action-button"
+                    onClick={() => void onRenameArtifact(artifact)}
+                  >
                     <Pencil size={14} />
                     {t("history.rename", "Rename")}
                   </button>
                   <button
                     className="icon-button danger-icon-button history-inline-delete"
                     onClick={(event) => {
-                        event.stopPropagation();
-                        void onDeleteArtifact(artifact);
+                      event.stopPropagation();
+                      void onDeleteArtifact(artifact);
                     }}
                     title={t("history.moveToTrashTitle", "Move to trash")}
-                    aria-label={t("history.moveToTrashAria", "Move {title} to trash", { title: artifact.title })}
+                    aria-label={t(
+                      "history.moveToTrashAria",
+                      "Move {title} to trash",
+                      { title: artifact.title },
+                    )}
                   >
                     <Trash2 size={14} />
                   </button>
@@ -7287,12 +8697,16 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
               ) : null}
             </div>
           </article>
-  
-          {artifact.children && artifact.children.length > 0 && expandedArtifactIds.has(artifact.id) && (
-            <div className="history-children-list">
-              {artifact.children.map((child) => renderHistoryTree(child, depth + 1))}
-            </div>
-          )}
+
+          {artifact.children &&
+            artifact.children.length > 0 &&
+            expandedArtifactIds.has(artifact.id) && (
+              <div className="history-children-list">
+                {artifact.children.map((child) =>
+                  renderHistoryTree(child, depth + 1),
+                )}
+              </div>
+            )}
         </React.Fragment>
       );
     };
@@ -7301,7 +8715,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       <div className="view-body history-view">
         {isSelectionMode ? (
           <div className="history-selection-toolbar">
-            <button className="secondary-button" onClick={() => setSelectedArtifactIds([])}>
+            <button
+              className="secondary-button"
+              onClick={() => setSelectedArtifactIds([])}
+            >
               {t("selection.cancel", "Cancel")}
             </button>
             <button
@@ -7316,13 +8733,16 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
               onClick={() => void onDeleteSelectedArtifacts()}
               disabled={selectedArtifactIds.length === 0}
             >
-              {t("selection.deleteSelected", "Delete selected")} ({selectedArtifactIds.length})
+              {t("selection.deleteSelected", "Delete selected")} (
+              {selectedArtifactIds.length})
             </button>
           </div>
         ) : null}
         {groupedHistoryArtifacts.length === 0 ? (
           <div className="center-empty">
-            <div className="center-empty-icon"><Clock3 size={28} /></div>
+            <div className="center-empty-icon">
+              <Clock3 size={28} />
+            </div>
             <h3>{t("history.noTranscriptions")}</h3>
           </div>
         ) : (
@@ -7330,7 +8750,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             {groupedHistoryArtifacts.map((group) => (
               <section key={group.label} className="history-group">
                 <h3 className="history-group-label">{group.label}</h3>
-                <div className={`history-list ${isSelectionMode ? "selection-active" : ""}`}>
+                <div
+                  className={`history-list ${isSelectionMode ? "selection-active" : ""}`}
+                >
                   {group.items.map((artifact) => renderHistoryTree(artifact))}
                 </div>
               </section>
@@ -7346,14 +8768,19 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       <div className="view-body">
         {filteredDeletedArtifacts.length === 0 ? (
           <div className="center-empty">
-            <div className="center-empty-icon"><Trash2 size={28} /></div>
+            <div className="center-empty-icon">
+              <Trash2 size={28} />
+            </div>
             <h3>{t("deleted.empty")}</h3>
             <p>{t("deleted.emptyDesc")}</p>
           </div>
         ) : (
           <div className="history-list">
             {filteredDeletedArtifacts.map((artifact) => (
-              <article key={artifact.id} className="history-item deleted-history-item">
+              <article
+                key={artifact.id}
+                className="history-item deleted-history-item"
+              >
                 <div className="history-main">
                   <div>
                     <strong>
@@ -7361,7 +8788,11 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                     </strong>
                     <p>
                       <HighlightMatch
-                        text={previewSnippet(artifact.optimized_transcript || artifact.raw_transcript, 220)}
+                        text={previewSnippet(
+                          artifact.optimized_transcript ||
+                            artifact.raw_transcript,
+                          220,
+                        )}
                         search={search}
                       />
                     </p>
@@ -7369,16 +8800,24 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                   <small>{formatDate(artifact.updated_at)}</small>
                 </div>
                 <div className="history-actions">
-                  <span className="kind-chip">{artifact.kind === "realtime" ? t("history.live", "Live") : t("history.file", "File")}</span>
+                  <span className="kind-chip">
+                    {artifact.kind === "realtime"
+                      ? t("history.live", "Live")
+                      : t("history.file", "File")}
+                  </span>
                   <button
                     className="secondary-button history-action-button"
-                    onClick={() => void onRestoreArtifactsWithConsent([artifact.id])}
+                    onClick={() =>
+                      void onRestoreArtifactsWithConsent([artifact.id])
+                    }
                   >
                     {t("deleted.restore", "Restore")}
                   </button>
                   <button
                     className="secondary-button history-action-button history-action-danger"
-                    onClick={() => void onHardDeleteArtifactsWithConsent([artifact.id])}
+                    onClick={() =>
+                      void onHardDeleteArtifactsWithConsent([artifact.id])
+                    }
                   >
                     <Trash2 size={14} />
                     {t("deleted.deletePermanently", "Delete Permanently")}
@@ -7395,7 +8834,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     if (isRealtimeDetailActive) {
       return (
         <div className="transcript-shell realtime-transcript-shell">
-          <div className="transcript-container realtime-transcript-container" style={{ position: "relative", height: "100%" }}>
+          <div
+            className="transcript-container realtime-transcript-container"
+            style={{ position: "relative", height: "100%" }}
+          >
             <textarea
               className="detail-editor realtime-detail-editor"
               value={realtimeTranscriptDisplayText}
@@ -7444,7 +8886,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           <LoadingAnimation
             icon={Sparkles}
             title={t("detail.summarizing", "Summarizing...")}
-            description={t("detail.summaryGenerating", "Generating a summary from your transcript...")}
+            description={t(
+              "detail.summaryGenerating",
+              "Generating a summary from your transcript...",
+            )}
             variant="summarizing"
           />
         );
@@ -7453,7 +8898,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       if (!draftSummary) {
         return (
           <div className="detail-empty">
-            <div className="center-empty-icon"><Sparkles size={28} /></div>
+            <div className="center-empty-icon">
+              <Sparkles size={28} />
+            </div>
             <h2>{t("detail.aiSummaryTitle")}</h2>
             <p>{t("detail.summaryEmptyDesc")}</p>
           </div>
@@ -7475,7 +8922,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           <LoadingAnimation
             icon={HeartPulse}
             title={t("emotion.generating", "Analyzing emotions...")}
-            description={t("emotion.generatingDesc", "Building an emotional map of your transcript...")}
+            description={t(
+              "emotion.generatingDesc",
+              "Building an emotional map of your transcript...",
+            )}
             variant="summarizing"
           />
         );
@@ -7484,18 +8934,30 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       if (!draftEmotionAnalysis) {
         return (
           <div className="detail-empty">
-            <div className="center-empty-icon"><HeartPulse size={28} /></div>
+            <div className="center-empty-icon">
+              <HeartPulse size={28} />
+            </div>
             <h2>{t("detail.emotion", "Emotion Analysis")}</h2>
-            <p>{t("emotion.emptyDesc", "Generate a structured emotional reading from the right panel, then use it to reflect or continue in chat.")}</p>
+            <p>
+              {t(
+                "emotion.emptyDesc",
+                "Generate a structured emotional reading from the right panel, then use it to reflect or continue in chat.",
+              )}
+            </p>
           </div>
         );
       }
 
       const timelineEntries = draftEmotionAnalysis.timeline;
       const timelineStart = timelineEntries[0] ?? null;
-      const timelineEnd = timelineEntries.length > 1 ? timelineEntries[timelineEntries.length - 1] : null;
+      const timelineEnd =
+        timelineEntries.length > 1
+          ? timelineEntries[timelineEntries.length - 1]
+          : null;
       const canCollapseTimeline = timelineEntries.length > 2;
-      const emotionNarrative = normalizeEmotionNarrative(draftEmotionAnalysis.narrative_markdown);
+      const emotionNarrative = normalizeEmotionNarrative(
+        draftEmotionAnalysis.narrative_markdown,
+      );
 
       return (
         <div className="emotion-view">
@@ -7503,17 +8965,27 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             <div className="emotion-section-header">
               <h3>{t("emotion.overview", "General reading")}</h3>
               <div className="emotion-chip-row">
-                {draftEmotionAnalysis.overview.primary_emotions.map((emotion) => (
-                  <span key={emotion} className="kind-chip">{emotion}</span>
-                ))}
+                {draftEmotionAnalysis.overview.primary_emotions.map(
+                  (emotion) => (
+                    <span key={emotion} className="kind-chip">
+                      {emotion}
+                    </span>
+                  ),
+                )}
               </div>
             </div>
-            <p className="emotion-overview-copy">{draftEmotionAnalysis.overview.emotional_arc}</p>
+            <p className="emotion-overview-copy">
+              {draftEmotionAnalysis.overview.emotional_arc}
+            </p>
             {draftEmotionAnalysis.overview.speaker_dynamics ? (
-              <p className="emotion-overview-copy">{draftEmotionAnalysis.overview.speaker_dynamics}</p>
+              <p className="emotion-overview-copy">
+                {draftEmotionAnalysis.overview.speaker_dynamics}
+              </p>
             ) : null}
             {draftEmotionAnalysis.overview.confidence_note ? (
-              <p className="muted">{draftEmotionAnalysis.overview.confidence_note}</p>
+              <p className="muted">
+                {draftEmotionAnalysis.overview.confidence_note}
+              </p>
             ) : null}
           </section>
 
@@ -7548,7 +9020,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             {emotionTimelineExpanded || !canCollapseTimeline ? (
               <>
                 <div className="emotion-card-grid">
-                  {timelineEntries.map((entry) => renderEmotionTimelineCard(entry))}
+                  {timelineEntries.map((entry) =>
+                    renderEmotionTimelineCard(entry),
+                  )}
                 </div>
                 {canCollapseTimeline ? (
                   <button
@@ -7561,17 +9035,29 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
               </>
             ) : (
               <div className="emotion-timeline-preview">
-                {timelineStart ? renderEmotionTimelineCard(timelineStart) : null}
+                {timelineStart
+                  ? renderEmotionTimelineCard(timelineStart)
+                  : null}
                 <div className="emotion-timeline-connector" aria-hidden="true">
                   <div className="emotion-timeline-connector-line" />
                   <span className="emotion-timeline-connector-arrow">→</span>
                   <p>
-                    {t("emotion.timelineCollapsedSummary", "Showing the start and end of the conversation.")}
+                    {t(
+                      "emotion.timelineCollapsedSummary",
+                      "Showing the start and end of the conversation.",
+                    )}
                   </p>
                   <small>
-                    {t("emotion.timelineCollapsedCount", "{count} moments hidden in between", {
-                      count: Math.max(0, timelineEntries.length - (timelineEnd ? 2 : 1)),
-                    })}
+                    {t(
+                      "emotion.timelineCollapsedCount",
+                      "{count} moments hidden in between",
+                      {
+                        count: Math.max(
+                          0,
+                          timelineEntries.length - (timelineEnd ? 2 : 1),
+                        ),
+                      },
+                    )}
                   </small>
                 </div>
                 {timelineEnd ? renderEmotionTimelineCard(timelineEnd) : null}
@@ -7596,7 +9082,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                   <p>{cluster.summary}</p>
                   <div className="emotion-chip-row">
                     {cluster.node_ids.slice(0, 6).map((nodeId) => (
-                      <span key={nodeId} className="kind-chip">{nodeId.replace(/^.*:/, "")}</span>
+                      <span key={nodeId} className="kind-chip">
+                        {nodeId.replace(/^.*:/, "")}
+                      </span>
                     ))}
                   </div>
                   <div className="emotion-card-actions">
@@ -7634,21 +9122,32 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             </div>
             <div className="emotion-card-grid">
               {draftEmotionAnalysis.bridges.map((bridge, index) => (
-                <article key={`${bridge.from_segment_index}-${bridge.to_segment_index}-${index}`} className="emotion-card">
+                <article
+                  key={`${bridge.from_segment_index}-${bridge.to_segment_index}-${index}`}
+                  className="emotion-card"
+                >
                   <strong>{bridge.bridge_theme}</strong>
                   <p>{bridge.reason}</p>
                   <small>
-                    {t("emotion.bridgeRange", "Segments")} {bridge.from_segment_index + 1} → {bridge.to_segment_index + 1}
+                    {t("emotion.bridgeRange", "Segments")}{" "}
+                    {bridge.from_segment_index + 1} →{" "}
+                    {bridge.to_segment_index + 1}
                   </small>
                   <div className="emotion-chip-row">
                     {bridge.shared_keywords.map((keyword) => (
-                      <span key={keyword} className="kind-chip">{keyword}</span>
+                      <span key={keyword} className="kind-chip">
+                        {keyword}
+                      </span>
                     ))}
                   </div>
                   <div className="emotion-card-actions">
                     <button
                       className="secondary-button"
-                      onClick={() => onJumpToEmotionSegment({ segmentIndex: bridge.from_segment_index })}
+                      onClick={() =>
+                        onJumpToEmotionSegment({
+                          segmentIndex: bridge.from_segment_index,
+                        })
+                      }
                     >
                       {t("emotion.jump", "Jump to segment")}
                     </button>
@@ -7695,12 +9194,24 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             messages={chatHistory}
             copiedMessageId={copiedChatMessageId}
             emptyTitle={t("detail.aiChatTitle", "AI Chat")}
-            emptyDescription={t("detail.chatEmptyDesc", "Ask questions on the current transcript.")}
-            scrollToLatestLabel={t("detail.chatScrollToBottom", "Scroll to latest message")}
+            emptyDescription={t(
+              "detail.chatEmptyDesc",
+              "Ask questions on the current transcript.",
+            )}
+            scrollToLatestLabel={t(
+              "detail.chatScrollToBottom",
+              "Scroll to latest message",
+            )}
             pendingLabel={t("detail.thinking", "Thinking...")}
-            pendingDescription={t("detail.thinkingDesc", "AI is analyzing your transcript and generating a response...")}
+            pendingDescription={t(
+              "detail.thinkingDesc",
+              "AI is analyzing your transcript and generating a response...",
+            )}
             promptOriginLabel={t("detail.chatOriginPrompt", "Prompt")}
-            emotionOriginLabel={t("detail.chatOriginEmotion", "Emotion insight")}
+            emotionOriginLabel={t(
+              "detail.chatOriginEmotion",
+              "Emotion insight",
+            )}
             copyLabel={t("detail.chatCopyExchange", "Copy question and answer")}
             copiedLabel={t("detail.chatCopied", "Copied")}
             onCopyMessage={(messageId) => {
@@ -7709,21 +9220,31 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           />
           <ChatComposer
             inputValue={chatInput}
-            inputPlaceholder={t("detail.chatPlaceholder", "Chat with your transcript...")}
+            inputPlaceholder={t(
+              "detail.chatPlaceholder",
+              "Chat with your transcript...",
+            )}
             suggestionsTitle={t("detail.chatSuggestions", "Quick prompts")}
             serviceSelectValue={activeAiServiceSelectValue}
             serviceOptions={aiServiceSelectOptions}
             promptSuggestions={chatPromptSuggestions}
             submitLabel={t("detail.submitChat", "Submit Chat")}
             disabled={!aiFeaturesAvailable}
-            submitDisabled={!aiFeaturesAvailable || isAskingChat || chatInput.trim().length === 0}
+            submitDisabled={
+              !aiFeaturesAvailable ||
+              isAskingChat ||
+              chatInput.trim().length === 0
+            }
             footerMessage={!aiFeaturesAvailable ? aiUnavailableReason : null}
             onInputChange={setChatInput}
             onSelectService={(value) => {
               void onSelectAiService(value);
             }}
             onSelectPrompt={(suggestion) => {
-              void onSendChat({ prefilledPrompt: suggestion.body, origin: "prompt" });
+              void onSendChat({
+                prefilledPrompt: suggestion.body,
+                origin: "prompt",
+              });
             }}
             onSubmit={() => {
               void onSendChat();
@@ -7736,18 +9257,24 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     if (detailMode === "segments") {
       return (
         <div className="segments-view">
-          {detailSegments.length === 0 ? <p className="muted">{t("detail.noSegments")}</p> : null}
+          {detailSegments.length === 0 ? (
+            <p className="muted">{t("detail.noSegments")}</p>
+          ) : null}
           {detailSegments.map((segment, index) => (
             <article
               ref={(node) => {
                 setSegmentElementRef(segment.sourceIndex, node);
               }}
               className={`segment-row ${
-                selectedSegmentSourceIndex === segment.sourceIndex ? "selected" : ""
+                selectedSegmentSourceIndex === segment.sourceIndex
+                  ? "selected"
+                  : ""
               } ${segmentContextMenu?.sourceIndex === segment.sourceIndex ? "context-open" : ""}`}
               key={`${segment.time}-${index}`}
               onClick={() => setSelectedSegmentSourceIndex(segment.sourceIndex)}
-              onContextMenu={(event) => openSegmentContextMenu(event, segment.sourceIndex)}
+              onContextMenu={(event) =>
+                openSegmentContextMenu(event, segment.sourceIndex)
+              }
               role="button"
               tabIndex={0}
               onKeyDown={(event) => {
@@ -7786,7 +9313,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         <LoadingAnimation
           icon={Sparkles}
           title={t("detail.improvingText", "Improving Text...")}
-          description={t("detail.improvingTextDesc", "AI is correcting punctuation and likely transcription mistakes...")}
+          description={t(
+            "detail.improvingTextDesc",
+            "AI is correcting punctuation and likely transcription mistakes...",
+          )}
           variant="transcribing"
         />
       );
@@ -7806,7 +9336,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                   count: artifactDiarizationUiState.speakerCount,
                 })}
               </strong>
-              <span>{formatSpeakerSummary(artifactDiarizationUiState.speakerLabels)}</span>
+              <span>
+                {formatSpeakerSummary(artifactDiarizationUiState.speakerLabels)}
+              </span>
             </div>
             <div className="transcript-speaker-banner-actions">
               <button
@@ -7823,25 +9355,40 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
       if (artifactDiarizationUiState.kind === "failed") {
         const diarizationError =
-          artifactDiarizationUiState.error
-          ?? t("detail.diarizationFailedFallback", "Speaker diarization failed after transcription.");
+          artifactDiarizationUiState.error ??
+          t(
+            "detail.diarizationFailedFallback",
+            "Speaker diarization failed after transcription.",
+          );
         return (
           <div className="transcript-speaker-banner is-warning">
             <div className="transcript-speaker-banner-copy">
-              <strong>{t("detail.diarizationFailed", "Speaker diarization failed for this transcript.")}</strong>
+              <strong>
+                {t(
+                  "detail.diarizationFailed",
+                  "Speaker diarization failed for this transcript.",
+                )}
+              </strong>
               <span>{diarizationError}</span>
             </div>
             <div className="transcript-speaker-banner-actions">
               <button
                 type="button"
                 className="secondary-button"
-                onClick={() => void onOpenStandaloneSettingsWindow(
-                  shouldOfferLocalModelsCta(diarizationError) ? "local_models" : "transcription",
-                )}
+                onClick={() =>
+                  void onOpenStandaloneSettingsWindow(
+                    shouldOfferLocalModelsCta(diarizationError)
+                      ? "local_models"
+                      : "transcription",
+                  )
+                }
               >
                 {shouldOfferLocalModelsCta(diarizationError)
                   ? t("action.openLocalModels", "Open Local Models")
-                  : t("action.openTranscriptionDefaults", "Open Transcription Defaults")}
+                  : t(
+                      "action.openTranscriptionDefaults",
+                      "Open Transcription Defaults",
+                    )}
               </button>
             </div>
           </div>
@@ -7852,8 +9399,18 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         return (
           <div className="transcript-speaker-banner">
             <div className="transcript-speaker-banner-copy">
-              <strong>{t("detail.noSpeakersDetected", "Speaker diarization completed, but no speaker labels were assigned.")}</strong>
-              <span>{t("detail.noSpeakersDetectedHint", "Open Segments to inspect the timeline or assign speakers manually.")}</span>
+              <strong>
+                {t(
+                  "detail.noSpeakersDetected",
+                  "Speaker diarization completed, but no speaker labels were assigned.",
+                )}
+              </strong>
+              <span>
+                {t(
+                  "detail.noSpeakersDetectedHint",
+                  "Open Segments to inspect the timeline or assign speakers manually.",
+                )}
+              </span>
             </div>
             <div className="transcript-speaker-banner-actions">
               <button
@@ -7874,7 +9431,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     return (
       <div className="transcript-shell">
         {transcriptSpeakerBanner}
-        <div className="transcript-container" style={{ position: "relative", height: "100%" }}>
+        <div
+          className="transcript-container"
+          style={{ position: "relative", height: "100%" }}
+        >
           {search.trim() ? (
             <div
               className="detail-editor highlight-layer"
@@ -7905,12 +9465,14 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
               value={visibleTranscript}
               onChange={(event) => setDraftTranscript(event.target.value)}
               readOnly={transcriptReadOnly}
-              title={transcriptReadOnly
-                ? t(
-                  "detail.originalTranscriptReadonly",
-                  "Original transcript is read-only. Switch back to the optimized version to edit.",
-                )
-                : undefined}
+              title={
+                transcriptReadOnly
+                  ? t(
+                      "detail.originalTranscriptReadonly",
+                      "Original transcript is read-only. Switch back to the optimized version to edit.",
+                    )
+                  : undefined
+              }
               style={{
                 fontSize: `${fontSize}px`,
                 position: search.trim() ? "absolute" : "relative",
@@ -7932,7 +9494,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
   function renderDefaultInspector(): JSX.Element {
     const peoplePillText = (() => {
       if (detailMode === "segments" && selectedDetailSegment) {
-        return selectedDetailSegment.speakerLabel ?? t("inspector.unknown", "Unknown");
+        return (
+          selectedDetailSegment.speakerLabel ??
+          t("inspector.unknown", "Unknown")
+        );
       }
 
       if (!artifactDiarizationUiState) {
@@ -7957,9 +9522,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     const peopleSummaryText = (() => {
       if (detailMode === "segments") {
         if (
-          selectedSegmentSpeakerLabel.length > 0
-          && speakerDraft.trim().length > 0
-          && speakerDraft.trim() !== selectedSegmentSpeakerLabel
+          selectedSegmentSpeakerLabel.length > 0 &&
+          speakerDraft.trim().length > 0 &&
+          speakerDraft.trim() !== selectedSegmentSpeakerLabel
         ) {
           return t(
             "inspector.renameSpeakerHint",
@@ -7967,31 +9532,54 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           );
         }
         return selectedSegmentSourceIndex === null
-          ? t("inspector.selectSegmentHint", "Select a segment to assign a speaker manually.")
-          : t("inspector.speakerSavedHint", "Speaker label is saved into segment metadata. Right-click a segment for quick actions.");
+          ? t(
+              "inspector.selectSegmentHint",
+              "Select a segment to assign a speaker manually.",
+            )
+          : t(
+              "inspector.speakerSavedHint",
+              "Speaker label is saved into segment metadata. Right-click a segment for quick actions.",
+            );
       }
 
       if (!artifactDiarizationUiState) {
-        return t("detail.manualSpeakerHint", "Assign speakers manually in Segments. You can decide later whether to run speaker diarization.");
+        return t(
+          "detail.manualSpeakerHint",
+          "Assign speakers manually in Segments. You can decide later whether to run speaker diarization.",
+        );
       }
 
       switch (artifactDiarizationUiState.kind) {
         case "speakers_detected":
           return formatSpeakerSummary(artifactDiarizationUiState.speakerLabels);
         case "failed":
-          return artifactDiarizationUiState.error
-            ?? t("detail.diarizationFailedFallback", "Speaker diarization failed after transcription.");
+          return (
+            artifactDiarizationUiState.error ??
+            t(
+              "detail.diarizationFailedFallback",
+              "Speaker diarization failed after transcription.",
+            )
+          );
         case "no_speakers_detected":
-          return t("detail.noSpeakersDetectedHint", "Open Segments to inspect the timeline or assign speakers manually.");
+          return t(
+            "detail.noSpeakersDetectedHint",
+            "Open Segments to inspect the timeline or assign speakers manually.",
+          );
         case "not_requested":
         default:
-          return t("detail.manualSpeakerHint", "Assign speakers manually in Segments. You can decide later whether to run speaker diarization.");
+          return t(
+            "detail.manualSpeakerHint",
+            "Assign speakers manually in Segments. You can decide later whether to run speaker diarization.",
+          );
       }
     })();
 
     return (
       <div className="inspector-body">
-        <button className="secondary-button" onClick={() => void navigator.clipboard.writeText(visibleTranscript)}>
+        <button
+          className="secondary-button"
+          onClick={() => void navigator.clipboard.writeText(visibleTranscript)}
+        >
           {t("inspector.copy", "Copy")}
         </button>
 
@@ -8009,20 +9597,30 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             >
               <button
                 type="button"
-                className={transcriptViewMode === "optimized" ? "seg active" : "seg"}
+                className={
+                  transcriptViewMode === "optimized" ? "seg active" : "seg"
+                }
                 onClick={() => {
                   setShowConfidenceColors(false);
                   setTranscriptViewMode("optimized");
                 }}
-                title={t("detail.showOptimizedTranscript", "Show optimized transcript")}
+                title={t(
+                  "detail.showOptimizedTranscript",
+                  "Show optimized transcript",
+                )}
               >
                 {t("detail.showOptimized", "Show optimized")}
               </button>
               <button
                 type="button"
-                className={transcriptViewMode === "original" ? "seg active" : "seg"}
+                className={
+                  transcriptViewMode === "original" ? "seg active" : "seg"
+                }
                 onClick={() => setTranscriptViewMode("original")}
-                title={t("detail.showOriginalTranscript", "Show original transcript")}
+                title={t(
+                  "detail.showOriginalTranscript",
+                  "Show original transcript",
+                )}
               >
                 {t("detail.showOriginal", "Show original")}
               </button>
@@ -8071,7 +9669,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           <h4>{t("inspector.audio")}</h4>
           <div className="property-line">
             <span>{t("inspector.file")}</span>
-            <strong className="truncate-value" title={detailAudioFileLabel}>{detailAudioFileLabel}</strong>
+            <strong className="truncate-value" title={detailAudioFileLabel}>
+              {detailAudioFileLabel}
+            </strong>
           </div>
           <div className="property-line">
             <span>{t("inspector.format")}</span>
@@ -8107,46 +9707,67 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           </div>
           {showSpeakerManagement && knownSpeakerLabels.length > 0 ? (
             <div className="speaker-known-list">
-              <span className="speaker-known-label">{t("inspector.detectedSpeakers", "Detected speakers")}</span>
+              <span className="speaker-known-label">
+                {t("inspector.detectedSpeakers", "Detected speakers")}
+              </span>
               <div className="speaker-chip-list">
                 {knownSpeakers.map((speaker) => (
                   <div key={speaker.id} className="speaker-chip-row">
                     <button
                       type="button"
                       className={`speaker-chip-button ${
-                        speaker.label === selectedSegmentSpeakerLabel ? "is-active" : ""
+                        speaker.label === selectedSegmentSpeakerLabel
+                          ? "is-active"
+                          : ""
                       }`}
                       style={buildSpeakerAccentStyle(speaker.color)}
                       onClick={() => onStartRenameSpeakerLabel(speaker.label)}
                     >
-                      <span className="speaker-chip-button-label">{speaker.label}</span>
+                      <span className="speaker-chip-button-label">
+                        {speaker.label}
+                      </span>
                     </button>
                     <label
                       className="speaker-color-control"
                       title={t("inspector.speakerColor", "Speaker color")}
                     >
                       <span className="sr-only">
-                        {t("inspector.speakerColorFor", "Speaker color for {speaker}", {
-                          speaker: speaker.label,
-                        })}
+                        {t(
+                          "inspector.speakerColorFor",
+                          "Speaker color for {speaker}",
+                          {
+                            speaker: speaker.label,
+                          },
+                        )}
                       </span>
                       <input
                         type="color"
                         value={speaker.color}
                         onChange={(event) => {
-                          void onSetSpeakerColor(speaker.id, event.target.value);
+                          void onSetSpeakerColor(
+                            speaker.id,
+                            event.target.value,
+                          );
                         }}
                       />
                     </label>
                     <button
                       type="button"
                       className="icon-button danger-icon-button speaker-chip-inline-remove"
-                      title={t("inspector.removeSpeakerFor", "Remove speaker {speaker}", {
-                        speaker: speaker.label,
-                      })}
-                      aria-label={t("inspector.removeSpeakerFor", "Remove speaker {speaker}", {
-                        speaker: speaker.label,
-                      })}
+                      title={t(
+                        "inspector.removeSpeakerFor",
+                        "Remove speaker {speaker}",
+                        {
+                          speaker: speaker.label,
+                        },
+                      )}
+                      aria-label={t(
+                        "inspector.removeSpeakerFor",
+                        "Remove speaker {speaker}",
+                        {
+                          speaker: speaker.label,
+                        },
+                      )}
                       disabled={isAssigningSpeaker}
                       onClick={(event) => {
                         event.stopPropagation();
@@ -8162,13 +9783,17 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           ) : null}
           {showSpeakerManagement && knownSpeakers.length > 1 ? (
             <div className="speaker-merge-panel">
-              <span className="speaker-known-label">{t("inspector.mergeSpeakers", "Merge speakers")}</span>
+              <span className="speaker-known-label">
+                {t("inspector.mergeSpeakers", "Merge speakers")}
+              </span>
               <div className="speaker-merge-row">
                 <select
                   className="inspector-select"
                   value={mergeSpeakerSourceId}
                   disabled={isAssigningSpeaker || !activeArtifact}
-                  onChange={(event) => setMergeSpeakerSourceId(event.target.value)}
+                  onChange={(event) =>
+                    setMergeSpeakerSourceId(event.target.value)
+                  }
                 >
                   {knownSpeakers.map((speaker) => (
                     <option key={speaker.id} value={speaker.id}>
@@ -8176,12 +9801,20 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                     </option>
                   ))}
                 </select>
-                <span className="speaker-merge-arrow">{t("inspector.mergeInto", "into")}</span>
+                <span className="speaker-merge-arrow">
+                  {t("inspector.mergeInto", "into")}
+                </span>
                 <select
                   className="inspector-select"
                   value={mergeSpeakerTargetId}
-                  disabled={isAssigningSpeaker || !activeArtifact || mergeTargetSpeakers.length === 0}
-                  onChange={(event) => setMergeSpeakerTargetId(event.target.value)}
+                  disabled={
+                    isAssigningSpeaker ||
+                    !activeArtifact ||
+                    mergeTargetSpeakers.length === 0
+                  }
+                  onChange={(event) =>
+                    setMergeSpeakerTargetId(event.target.value)
+                  }
                 >
                   {mergeTargetSpeakers.map((speaker) => (
                     <option key={speaker.id} value={speaker.id}>
@@ -8194,11 +9827,16 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                   disabled={isAssigningSpeaker || !canMergeSpeakers}
                   onClick={() => void onMergeSelectedSpeaker()}
                 >
-                  {isAssigningSpeaker ? "..." : t("inspector.mergeSpeakerAction", "Merge")}
+                  {isAssigningSpeaker
+                    ? "..."
+                    : t("inspector.mergeSpeakerAction", "Merge")}
                 </button>
               </div>
               <small className="muted">
-                {t("inspector.mergeSpeakerHint", "All segments assigned to the first speaker will be reassigned to the second speaker.")}
+                {t(
+                  "inspector.mergeSpeakerHint",
+                  "All segments assigned to the first speaker will be reassigned to the second speaker.",
+                )}
               </small>
             </div>
           ) : null}
@@ -8211,7 +9849,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                   placeholder={t("inspector.addSpeaker", "Add a speaker...")}
                   list="speaker-suggestions"
                   value={speakerDraft}
-                  disabled={!activeArtifact || selectedSegmentSourceIndex === null}
+                  disabled={
+                    !activeArtifact || selectedSegmentSourceIndex === null
+                  }
                   onChange={(event) => setSpeakerDraft(event.target.value)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter") {
@@ -8223,10 +9863,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                 <button
                   className="secondary-button speaker-assign-button"
                   disabled={
-                    isAssigningSpeaker
-                    || !activeArtifact
-                    || selectedSegmentSourceIndex === null
-                    || !speakerDraft.trim()
+                    isAssigningSpeaker ||
+                    !activeArtifact ||
+                    selectedSegmentSourceIndex === null ||
+                    !speakerDraft.trim()
                   }
                   onClick={() => void onAssignSpeakerToSelectedSegment()}
                 >
@@ -8237,7 +9877,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                   disabled={isAssigningSpeaker || !canRenameSelectedSpeaker}
                   onClick={() => void onRenameSelectedSpeaker()}
                 >
-                  {isAssigningSpeaker ? "..." : t("inspector.renameSpeaker", "Rename")}
+                  {isAssigningSpeaker
+                    ? "..."
+                    : t("inspector.renameSpeaker", "Rename")}
                 </button>
               </div>
               <label className="toggle-row compact">
@@ -8245,7 +9887,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                 <input
                   type="checkbox"
                   checked={propagateSpeakerAssignment}
-                  onChange={(event) => setPropagateSpeakerAssignment(event.target.checked)}
+                  onChange={(event) =>
+                    setPropagateSpeakerAssignment(event.target.checked)
+                  }
                 />
               </label>
               {knownSpeakerLabels.length > 0 ? (
@@ -8255,13 +9899,14 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                   ))}
                 </datalist>
               ) : null}
-              <small className="muted">
-                {peopleSummaryText}
-              </small>
+              <small className="muted">{peopleSummaryText}</small>
             </>
           ) : (
             <small className="muted">
-              {t("inspector.manageSpeakersInSegments", "Open Segments to manage speakers.")}
+              {t(
+                "inspector.manageSpeakersInSegments",
+                "Open Segments to manage speakers.",
+              )}
             </small>
           )}
         </div>
@@ -8297,7 +9942,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             <input
               type="checkbox"
               checked={groupSegmentsWithoutSpeakers}
-              onChange={(event) => setGroupSegmentsWithoutSpeakers(event.target.checked)}
+              onChange={(event) =>
+                setGroupSegmentsWithoutSpeakers(event.target.checked)
+              }
             />
           </label>
         </div>
@@ -8318,33 +9965,57 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             }}
           >
             {aiServiceSelectOptions.map((option) => (
-              <option key={option.value} value={option.value} disabled={option.disabled}>
+              <option
+                key={option.value}
+                value={option.value}
+                disabled={option.disabled}
+              >
                 {option.label}
               </option>
             ))}
           </select>
         </label>
 
-        <button className="secondary-button" onClick={() => void navigator.clipboard.writeText(draftSummary || visibleTranscript)}>
+        <button
+          className="secondary-button"
+          onClick={() =>
+            void navigator.clipboard.writeText(
+              draftSummary || visibleTranscript,
+            )
+          }
+        >
           {t("summary.copy", "Copy")}
         </button>
         <button
           className="secondary-button"
           onClick={() => void onGenerateSummary()}
-          disabled={isGeneratingSummary || !activeArtifact || !aiFeaturesAvailable}
+          disabled={
+            isGeneratingSummary || !activeArtifact || !aiFeaturesAvailable
+          }
           title={!aiFeaturesAvailable ? aiUnavailableReason : undefined}
         >
-          {isGeneratingSummary ? t("detail.summarizing", "Summarizing...") : t("summary.summarize", "Summarize")}
+          {isGeneratingSummary
+            ? t("detail.summarizing", "Summarizing...")
+            : t("summary.summarize", "Summarize")}
         </button>
-        <button className="secondary-button" onClick={() => setDraftSummary("")}>{t("summary.clear")}</button>
-        {!aiFeaturesAvailable ? <p className="muted">{aiUnavailableReason}</p> : null}
+        <button
+          className="secondary-button"
+          onClick={() => setDraftSummary("")}
+        >
+          {t("summary.clear")}
+        </button>
+        {!aiFeaturesAvailable ? (
+          <p className="muted">{aiUnavailableReason}</p>
+        ) : null}
 
         <label className="toggle-row">
           <span>{t("summary.includeTimestamps")}</span>
           <input
             type="checkbox"
             checked={summaryIncludeTimestamps}
-            onChange={(event) => setSummaryIncludeTimestamps(event.target.checked)}
+            onChange={(event) =>
+              setSummaryIncludeTimestamps(event.target.checked)
+            }
           />
         </label>
         <label className="toggle-row">
@@ -8352,7 +10023,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           <input
             type="checkbox"
             checked={summaryIncludeSpeakers}
-            onChange={(event) => setSummaryIncludeSpeakers(event.target.checked)}
+            onChange={(event) =>
+              setSummaryIncludeSpeakers(event.target.checked)
+            }
           />
         </label>
         <label className="toggle-row">
@@ -8395,7 +10068,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             <input
               type="checkbox"
               checked={summaryKeyPointsOnly}
-              onChange={(event) => setSummaryKeyPointsOnly(event.target.checked)}
+              onChange={(event) =>
+                setSummaryKeyPointsOnly(event.target.checked)
+              }
             />
           </label>
         </div>
@@ -8405,13 +10080,17 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           <select
             className="inspector-select"
             value={summaryLanguage}
-            onChange={(event) => setSummaryLanguage(event.target.value as LanguageCode)}
+            onChange={(event) =>
+              setSummaryLanguage(event.target.value as LanguageCode)
+            }
           >
-            {languageOptions.filter((option) => option.value !== "auto").map((option) => (
-              <option key={option.value} value={option.value}>
-                {t(`lang.${option.value}`, option.label)}
-              </option>
-            ))}
+            {languageOptions
+              .filter((option) => option.value !== "auto")
+              .map((option) => (
+                <option key={option.value} value={option.value}>
+                  {t(`lang.${option.value}`, option.label)}
+                </option>
+              ))}
           </select>
         </label>
 
@@ -8421,7 +10100,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             className="inspector-prompt"
             value={summaryCustomPrompt}
             onChange={(event) => setSummaryCustomPrompt(event.target.value)}
-            placeholder={t("summary.customPromptPlaceholder", "Optional: override summary instructions...")}
+            placeholder={t(
+              "summary.customPromptPlaceholder",
+              "Optional: override summary instructions...",
+            )}
           />
         </label>
       </div>
@@ -8441,7 +10123,11 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             }}
           >
             {aiServiceSelectOptions.map((option) => (
-              <option key={option.value} value={option.value} disabled={option.disabled}>
+              <option
+                key={option.value}
+                value={option.value}
+                disabled={option.disabled}
+              >
                 {option.label}
               </option>
             ))}
@@ -8461,7 +10147,11 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         <button
           className="secondary-button"
           onClick={() => void onGenerateEmotionAnalysis()}
-          disabled={isGeneratingEmotionAnalysis || !activeArtifact || !aiFeaturesAvailable}
+          disabled={
+            isGeneratingEmotionAnalysis ||
+            !activeArtifact ||
+            !aiFeaturesAvailable
+          }
           title={!aiFeaturesAvailable ? aiUnavailableReason : undefined}
         >
           {isGeneratingEmotionAnalysis
@@ -8471,13 +10161,17 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         {!aiFeaturesAvailable ? (
           <p className="muted">
             {draftEmotionAnalysis
-              ? t("emotion.cachedOnly", "Cached emotion analysis is available, but regeneration needs an AI provider.")
+              ? t(
+                  "emotion.cachedOnly",
+                  "Cached emotion analysis is available, but regeneration needs an AI provider.",
+                )
               : aiUnavailableReason}
           </p>
         ) : null}
         {emotionAnalysisGeneratedAt ? (
           <p className="muted">
-            {t("emotion.generatedAt", "Last generated")}: {formatDate(emotionAnalysisGeneratedAt)}
+            {t("emotion.generatedAt", "Last generated")}:{" "}
+            {formatDate(emotionAnalysisGeneratedAt)}
           </p>
         ) : null}
 
@@ -8496,7 +10190,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           <input
             type="checkbox"
             checked={emotionIncludeTimestamps}
-            onChange={(event) => setEmotionIncludeTimestamps(event.target.checked)}
+            onChange={(event) =>
+              setEmotionIncludeTimestamps(event.target.checked)
+            }
           />
         </label>
         <label className="toggle-row">
@@ -8514,7 +10210,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           <input
             type="checkbox"
             checked={emotionIncludeSpeakers}
-            onChange={(event) => setEmotionIncludeSpeakers(event.target.checked)}
+            onChange={(event) =>
+              setEmotionIncludeSpeakers(event.target.checked)
+            }
           />
         </label>
         <label className="toggle-row">
@@ -8533,7 +10231,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             type="checkbox"
             checked={speakerDynamicsAvailable && emotionSpeakerDynamics}
             disabled={!speakerDynamicsAvailable}
-            onChange={(event) => setEmotionSpeakerDynamics(event.target.checked)}
+            onChange={(event) =>
+              setEmotionSpeakerDynamics(event.target.checked)
+            }
           />
         </label>
 
@@ -8542,13 +10242,17 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           <select
             className="inspector-select"
             value={emotionLanguage}
-            onChange={(event) => setEmotionLanguage(event.target.value as LanguageCode)}
+            onChange={(event) =>
+              setEmotionLanguage(event.target.value as LanguageCode)
+            }
           >
-            {languageOptions.filter((option) => option.value !== "auto").map((option) => (
-              <option key={option.value} value={option.value}>
-                {t(`lang.${option.value}`, option.label)}
-              </option>
-            ))}
+            {languageOptions
+              .filter((option) => option.value !== "auto")
+              .map((option) => (
+                <option key={option.value} value={option.value}>
+                  {t(`lang.${option.value}`, option.label)}
+                </option>
+              ))}
           </select>
         </label>
       </div>
@@ -8559,7 +10263,12 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     return (
       <div className="inspector-body">
         <h4>{t("chat.prompts")}</h4>
-        <p className="muted">{t("detail.chatPromptsHint", "Quick prompts are available above the composer.")}</p>
+        <p className="muted">
+          {t(
+            "detail.chatPromptsHint",
+            "Quick prompts are available above the composer.",
+          )}
+        </p>
         <button
           className="secondary-button"
           onClick={() => {
@@ -8576,7 +10285,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             <input
               type="checkbox"
               checked={chatIncludeTimestamps}
-              onChange={(event) => setChatIncludeTimestamps(event.target.checked)}
+              onChange={(event) =>
+                setChatIncludeTimestamps(event.target.checked)
+              }
             />
           </label>
           <label className="toggle-row">
@@ -8588,7 +10299,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             />
           </label>
         </div>
-        {!aiFeaturesAvailable ? <p className="muted">{aiUnavailableReason}</p> : null}
+        {!aiFeaturesAvailable ? (
+          <p className="muted">{aiUnavailableReason}</p>
+        ) : null}
       </div>
     );
   }
@@ -8602,7 +10315,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           <label>{t("metadata.model")}</label>
           <select
             value={settings?.transcription.model ?? "base"}
-            onChange={(event) => void onChangeModel(event.target.value as SpeechModel)}
+            onChange={(event) =>
+              void onChangeModel(event.target.value as SpeechModel)
+            }
           >
             {modelOptions.map((option) => (
               <option key={option.value} value={option.value}>
@@ -8614,7 +10329,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           <label>{t("metadata.language")}</label>
           <select
             value={settings?.transcription.language ?? "auto"}
-            onChange={(event) => void onChangeLanguage(event.target.value as LanguageCode)}
+            onChange={(event) =>
+              void onChangeLanguage(event.target.value as LanguageCode)
+            }
           >
             {languageOptions.map((option) => (
               <option key={option.value} value={option.value}>
@@ -8626,17 +10343,41 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
         {activeArtifact ? (
           <>
-            <div className="property-line"><span>{t("metadata.kind")}</span><strong>{formatArtifactKindLabel(activeArtifact.kind)}</strong></div>
-            <div className="property-line"><span>{t("metadata.audioDuration")}</span><strong>{formatShortDuration(transcriptSeconds)}</strong></div>
-            <div className="property-line"><span>{t("metadata.created")}</span><strong>{formatDate(activeArtifact.created_at)}</strong></div>
-            <div className="property-line"><span>{t("metadata.updated")}</span><strong>{formatDate(activeArtifact.updated_at)}</strong></div>
-            <div className="property-line"><span>{t("metadata.characters")}</span><strong>{visibleTranscript.length}</strong></div>
-            <div className="property-line"><span>{t("metadata.words")}</span><strong>{transcriptWordCount}</strong></div>
+            <div className="property-line">
+              <span>{t("metadata.kind")}</span>
+              <strong>{formatArtifactKindLabel(activeArtifact.kind)}</strong>
+            </div>
+            <div className="property-line">
+              <span>{t("metadata.audioDuration")}</span>
+              <strong>{formatShortDuration(transcriptSeconds)}</strong>
+            </div>
+            <div className="property-line">
+              <span>{t("metadata.created")}</span>
+              <strong>{formatDate(activeArtifact.created_at)}</strong>
+            </div>
+            <div className="property-line">
+              <span>{t("metadata.updated")}</span>
+              <strong>{formatDate(activeArtifact.updated_at)}</strong>
+            </div>
+            <div className="property-line">
+              <span>{t("metadata.characters")}</span>
+              <strong>{visibleTranscript.length}</strong>
+            </div>
+            <div className="property-line">
+              <span>{t("metadata.words")}</span>
+              <strong>{transcriptWordCount}</strong>
+            </div>
           </>
         ) : null}
 
-        <button className="primary-button" onClick={() => void onSaveArtifact()} disabled={isSavingArtifact}>
-          {isSavingArtifact ? t("metadata.saving", "Saving...") : t("metadata.save", "Save")}
+        <button
+          className="primary-button"
+          onClick={() => void onSaveArtifact()}
+          disabled={isSavingArtifact}
+        >
+          {isSavingArtifact
+            ? t("metadata.saving", "Saving...")
+            : t("metadata.save", "Save")}
         </button>
       </div>
     );
@@ -8648,7 +10389,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         <div className="inspector-body">
           <button
             className="secondary-button"
-            onClick={() => void navigator.clipboard.writeText(realtimeTranscriptText)}
+            onClick={() =>
+              void navigator.clipboard.writeText(realtimeTranscriptText)
+            }
             disabled={!realtimeTranscriptText.trim()}
           >
             {t("inspector.copy", "Copy")}
@@ -8658,7 +10401,11 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             <h4>{t("realtime.status")}</h4>
             <div className="property-line">
               <span>{t("realtime.status")}</span>
-              <strong>{realtimeState === "idle" ? t("realtime.idle", "Realtime idle") : realtimeMessage}</strong>
+              <strong>
+                {realtimeState === "idle"
+                  ? t("realtime.idle", "Realtime idle")
+                  : realtimeMessage}
+              </strong>
             </div>
             <div className="property-line">
               <span>{t("inspector.duration")}</span>
@@ -8679,15 +10426,23 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             <h4>{t("inspector.audio")}</h4>
             <div className="property-line">
               <span>{t("inspector.file")}</span>
-              <strong className="truncate-value">{t("realtime.liveMicrophone", "Live microphone")}</strong>
+              <strong className="truncate-value">
+                {t("realtime.liveMicrophone", "Live microphone")}
+              </strong>
             </div>
             <div className="property-line">
               <span>{t("inspector.format")}</span>
-              <strong>{t("realtime.recordingPending", "Recording in progress")}</strong>
+              <strong>
+                {t("realtime.recordingPending", "Recording in progress")}
+              </strong>
             </div>
             <div className="property-line">
               <span>{t("detail.transcript", "Transcript")}</span>
-              <strong>{realtimeHasAnyText ? t("realtime.transcriptUpdating", "Updating live") : t("realtime.waitingForSpeech", "Waiting for speech")}</strong>
+              <strong>
+                {realtimeHasAnyText
+                  ? t("realtime.transcriptUpdating", "Updating live")
+                  : t("realtime.waitingForSpeech", "Waiting for speech")}
+              </strong>
             </div>
           </div>
         </div>
@@ -8700,19 +10455,33 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           <div className="inspector-body">
             <button
               className="secondary-button"
-              onClick={() => void navigator.clipboard.writeText(stripAnsi(activeJobPreviewText))}
+              onClick={() =>
+                void navigator.clipboard.writeText(
+                  stripAnsi(activeJobPreviewText),
+                )
+              }
               disabled={!activeJobPreviewText}
             >
               {t("inspector.copy", "Copy")}
             </button>
             <div className="inspector-block">
               <h4>{t("inspector.transcribingTitle")}</h4>
-              <p className="muted">{progress?.message ?? t("inspector.whisperRunning", "Running Whisper transcription...")}</p>
+              <p className="muted">
+                {progress?.message ??
+                  t(
+                    "inspector.whisperRunning",
+                    "Running Whisper transcription...",
+                  )}
+              </p>
             </div>
           </div>
         );
       }
-      return <div className="inspector-body muted">{t("inspector.noTranscript")}</div>;
+      return (
+        <div className="inspector-body muted">
+          {t("inspector.noTranscript")}
+        </div>
+      );
     }
 
     if (inspectorMode === "info") return renderMetadataInspector();
@@ -8723,12 +10492,17 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
   }
 
   function renderDetail(): JSX.Element {
-    const isTrimRetranscriptionStarting = isStarting && Boolean(effectiveTrimmedAudioDraft);
+    const isTrimRetranscriptionStarting =
+      isStarting && Boolean(effectiveTrimmedAudioDraft);
 
     return (
       <div
         ref={detailLayoutRef}
-        className={effectiveRightSidebarOpen ? "detail-layout" : "detail-layout right-collapsed"}
+        className={
+          effectiveRightSidebarOpen
+            ? "detail-layout"
+            : "detail-layout right-collapsed"
+        }
         style={detailLayoutStyle}
       >
         <section className="detail-main" ref={detailMainRef}>
@@ -8739,8 +10513,12 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             detailMode={detailMode}
             title={
               isRealtimeDetailActive
-                ? (draftTitle.trim() || effectiveDetailContext?.title || t("topbar.live", "Live"))
-                : (effectiveDetailContext?.title ?? activeJobTitle ?? t("detail.transcribing", "Transcribing"))
+                ? draftTitle.trim() ||
+                  effectiveDetailContext?.title ||
+                  t("topbar.live", "Live")
+                : (effectiveDetailContext?.title ??
+                  activeJobTitle ??
+                  t("detail.transcribing", "Transcribing"))
             }
             hasArtifact={Boolean(activeArtifact)}
             hasActiveJob={Boolean(focusedJobId)}
@@ -8753,7 +10531,11 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
               }
               setSection("history");
             }}
-            onRenameTitle={activeArtifact ? () => onRenameArtifact(activeArtifact) : undefined}
+            onRenameTitle={
+              activeArtifact
+                ? () => onRenameArtifact(activeArtifact)
+                : undefined
+            }
             onSelectMode={(mode) => {
               if (mode === "transcript") {
                 if (detailMode !== "segments") {
@@ -8773,8 +10555,12 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             chatDisabled={!aiFeaturesAvailable}
             optimizeDisabled={!aiFeaturesAvailable}
             optimizeDisabledTitle={aiUnavailableReason}
-            showRetranscribe={Boolean(effectiveTrimmedAudioDraft && !activeJobId)}
-            isStartingTrimmedAudioRetranscription={isTrimRetranscriptionStarting}
+            showRetranscribe={Boolean(
+              effectiveTrimmedAudioDraft && !activeJobId,
+            )}
+            isStartingTrimmedAudioRetranscription={
+              isTrimRetranscriptionStarting
+            }
             onRetranscribeTrimmedAudio={() => {
               if (effectiveTrimmedAudioDraft) {
                 void onStartTranscription(effectiveTrimmedAudioDraft.path, {
@@ -8783,16 +10569,26 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                 });
               }
             }}
-            realtimeControls={isRealtimeDetailActive ? {
-              state: realtimeState,
-              isStopping: isStoppingRealtime,
-              onPause: () => void onPauseRealtime(),
-              onResume: () => void onResumeRealtime(),
-              onStop: () => void onStopRealtime(true),
-            } : null}
+            realtimeControls={
+              isRealtimeDetailActive
+                ? {
+                    state: realtimeState,
+                    isStopping: isStoppingRealtime,
+                    onPause: () => void onPauseRealtime(),
+                    onResume: () => void onResumeRealtime(),
+                    onStop: () => void onStopRealtime(true),
+                  }
+                : null
+            }
           />
 
-          <div className={detailMode === "chat" ? "detail-body detail-body--chat" : "detail-body"}>
+          <div
+            className={
+              detailMode === "chat"
+                ? "detail-body detail-body--chat"
+                : "detail-body"
+            }
+          >
             {renderDetailMain()}
           </div>
 
@@ -8821,20 +10617,26 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                     className="segment-context-item"
                     role="menuitem"
                     disabled={isAssigningSpeaker}
-                    onClick={() => onAssignKnownSpeakerFromContextMenu(speakerLabel)}
+                    onClick={() =>
+                      onAssignKnownSpeakerFromContextMenu(speakerLabel)
+                    }
                   >
                     {speakerLabel}
                   </button>
                 ))
               ) : (
-                <p className="segment-context-empty">{t("inspector.unknown")}</p>
+                <p className="segment-context-empty">
+                  {t("inspector.unknown")}
+                </p>
               )}
               <div className="segment-context-separator" />
               <button
                 type="button"
                 className="segment-context-item danger"
                 role="menuitem"
-                disabled={isAssigningSpeaker || !contextMenuSegment?.speakerLabel}
+                disabled={
+                  isAssigningSpeaker || !contextMenuSegment?.speakerLabel
+                }
                 onClick={onClearSpeakerFromContextMenu}
               >
                 {t("inspector.clearSpeaker", "Clear Speaker")}
@@ -8845,7 +10647,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           <div className="detail-audio-stack">
             <div className="detail-audio-player-group">
               {effectiveTrimmedAudioDraft ? (
-                <div className="detail-audio-player-label">{t("detail.trimmedAudio", "Trimmed audio")}</div>
+                <div className="detail-audio-player-label">
+                  {t("detail.trimmedAudio", "Trimmed audio")}
+                </div>
               ) : null}
               {trimRetranscriptionError ? (
                 <div className="detail-inline-error" role="alert">
@@ -8854,7 +10658,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                     <button
                       type="button"
                       className="secondary-button"
-                      onClick={() => void onOpenStandaloneSettingsWindow("local_models")}
+                      onClick={() =>
+                        void onOpenStandaloneSettingsWindow("local_models")
+                      }
                     >
                       {t("action.openLocalModels", "Open Local Models")}
                     </button>
@@ -8862,7 +10668,11 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                 </div>
               ) : null}
               {isTrimRetranscriptionStarting && !trimRetranscriptionError ? (
-                <div className="detail-inline-status" role="status" aria-live="polite">
+                <div
+                  className="detail-inline-status"
+                  role="status"
+                  aria-live="polite"
+                >
                   <span>
                     {t(
                       "detail.preparingTrimmedRetranscription",
@@ -8873,25 +10683,40 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
               ) : null}
               {isRealtimeDetailActive ? (
                 <LiveMicrophoneWaveform
-                  ariaLabel={t("realtime.waveformAriaLabel", "Live microphone waveform")}
+                  ariaLabel={t(
+                    "realtime.waveformAriaLabel",
+                    "Live microphone waveform",
+                  )}
                   mode={realtimeState}
                   elapsedSeconds={realtimeElapsedSeconds}
                   runningLabel={t("realtime.waveformRunning", "Mic live")}
                   pausedLabel={t("realtime.waveformPaused", "Preview paused")}
                   idleStatusLabel={t("realtime.waveformIdleShort", "Mic idle")}
-                  idleLabel={t("realtime.waveformIdle", "Start live mode to preview microphone activity.")}
-                  connectingLabel={t("realtime.waveformConnecting", "Connecting to the microphone...")}
-                  blockedLabel={t("realtime.waveformBlocked", "Microphone preview is blocked. Check microphone permissions.")}
-                  unavailableLabel={t("realtime.waveformUnavailable", "Microphone preview is unavailable on this device.")}
+                  idleLabel={t(
+                    "realtime.waveformIdle",
+                    "Start live mode to preview microphone activity.",
+                  )}
+                  connectingLabel={t(
+                    "realtime.waveformConnecting",
+                    "Connecting to the microphone...",
+                  )}
+                  blockedLabel={t(
+                    "realtime.waveformBlocked",
+                    "Microphone preview is blocked. Check microphone permissions.",
+                  )}
+                  unavailableLabel={t(
+                    "realtime.waveformUnavailable",
+                    "Microphone preview is unavailable on this device.",
+                  )}
                 />
               ) : (
                 <AudioPlayer
                   artifactId={detailAudioArtifactId}
                   inputPath={detailAudioInputPath}
                   sourceLabel={
-                    activeArtifact?.source_label
-                    ?? effectiveDetailContext?.sourceArtifact?.source_label
-                    ?? null
+                    activeArtifact?.source_label ??
+                    effectiveDetailContext?.sourceArtifact?.source_label ??
+                    null
                   }
                   trimEnabled
                   onMetadataLoaded={(metadata) => {
@@ -8902,14 +10727,15 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                     setTrimRetranscriptionError(null);
                   }}
                   onTrimApplied={(trimmedAudio, regions) => {
-                    const trimSourceArtifact = activeArtifact ?? effectiveDetailContext?.sourceArtifact;
+                    const trimSourceArtifact =
+                      activeArtifact ?? effectiveDetailContext?.sourceArtifact;
                     if (!trimSourceArtifact) {
                       return;
                     }
                     const sourceLabel =
-                      trimSourceArtifact.title.trim()
-                      || trimSourceArtifact.source_label
-                      || t("inspector.unknown", "Unknown");
+                      trimSourceArtifact.title.trim() ||
+                      trimSourceArtifact.source_label ||
+                      t("inspector.unknown", "Unknown");
                     setTrimRetranscriptionError(null);
                     setTrimmedAudioDraft({
                       path: trimmedAudio.path,
@@ -8929,23 +10755,22 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         <aside
           className={`detail-inspector ${detailMode === "chat" ? "detail-inspector--chat " : ""}${effectiveRightSidebarOpen ? "" : "collapsed"}`}
         >
-            <DetailInspectorHeader
-              inspectorMode={inspectorMode}
-              onInspectorModeChange={setInspectorMode}
-              onHideDetailsPanel={() => setRightSidebarOpen(false)}
+          <DetailInspectorHeader
+            inspectorMode={inspectorMode}
+            onInspectorModeChange={setInspectorMode}
+            onHideDetailsPanel={() => setRightSidebarOpen(false)}
+          />
+          {renderInspector()}
+          {effectiveRightSidebarOpen && !rightSidebarForcedCollapsed ? (
+            <div
+              className="sidebar-resize-handle sidebar-resize-handle-right"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label={t("detail.resizeInspector", "Resize details panel")}
+              onMouseDown={(event) => onStartSidebarResize("right", event)}
             />
-            {renderInspector()}
-            {effectiveRightSidebarOpen && !rightSidebarForcedCollapsed ? (
-              <div
-                className="sidebar-resize-handle sidebar-resize-handle-right"
-                role="separator"
-                aria-orientation="vertical"
-                aria-label={t("detail.resizeInspector", "Resize details panel")}
-                onMouseDown={(event) => onStartSidebarResize("right", event)}
-              />
-            ) : null}
-          </aside>
-
+          ) : null}
+        </aside>
       </div>
     );
   }
@@ -8965,7 +10790,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             >
               <span className="button-content">
                 <Play size={14} />
-                <span className="detail-action-label">{t("realtime.start", "Start")}</span>
+                <span className="detail-action-label">
+                  {t("realtime.start", "Start")}
+                </span>
               </span>
             </button>
             <button
@@ -8975,7 +10802,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             >
               <span className="button-content">
                 <Pause size={14} />
-                <span className="detail-action-label">{t("realtime.pause", "Pause")}</span>
+                <span className="detail-action-label">
+                  {t("realtime.pause", "Pause")}
+                </span>
               </span>
             </button>
             <button
@@ -8985,7 +10814,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             >
               <span className="button-content">
                 <Play size={14} />
-                <span className="detail-action-label">{t("realtime.resume", "Resume")}</span>
+                <span className="detail-action-label">
+                  {t("realtime.resume", "Resume")}
+                </span>
               </span>
             </button>
             <button
@@ -8995,7 +10826,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             >
               <span className="button-content">
                 <Square size={13} />
-                <span className="detail-action-label">{t("realtime.stopAndSave", "Stop & Save")}</span>
+                <span className="detail-action-label">
+                  {t("realtime.stopAndSave", "Stop & Save")}
+                </span>
               </span>
             </button>
           </div>
@@ -9005,22 +10838,39 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           <div className="panel-head">
             <strong>{t("realtime.status")}</strong>
             <span className={`status-chip ${realtimeState}`}>
-              {realtimeState === "idle" ? t("realtime.idle", "Realtime idle") : realtimeMessage}
+              {realtimeState === "idle"
+                ? t("realtime.idle", "Realtime idle")
+                : realtimeMessage}
             </span>
           </div>
 
           <div className="live-view">
             <LiveMicrophoneWaveform
-              ariaLabel={t("realtime.waveformAriaLabel", "Live microphone waveform")}
+              ariaLabel={t(
+                "realtime.waveformAriaLabel",
+                "Live microphone waveform",
+              )}
               mode={realtimeState}
               elapsedSeconds={realtimeElapsedSeconds}
               runningLabel={t("realtime.waveformRunning", "Mic live")}
               pausedLabel={t("realtime.waveformPaused", "Preview paused")}
               idleStatusLabel={t("realtime.waveformIdleShort", "Mic idle")}
-              idleLabel={t("realtime.waveformIdle", "Start live mode to preview microphone activity.")}
-              connectingLabel={t("realtime.waveformConnecting", "Connecting to the microphone...")}
-              blockedLabel={t("realtime.waveformBlocked", "Microphone preview is blocked. Check microphone permissions.")}
-              unavailableLabel={t("realtime.waveformUnavailable", "Microphone preview is unavailable on this device.")}
+              idleLabel={t(
+                "realtime.waveformIdle",
+                "Start live mode to preview microphone activity.",
+              )}
+              connectingLabel={t(
+                "realtime.waveformConnecting",
+                "Connecting to the microphone...",
+              )}
+              blockedLabel={t(
+                "realtime.waveformBlocked",
+                "Microphone preview is blocked. Check microphone permissions.",
+              )}
+              unavailableLabel={t(
+                "realtime.waveformUnavailable",
+                "Microphone preview is unavailable on this device.",
+              )}
             />
 
             <div className="live-transcript-panel">
@@ -9032,7 +10882,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                 {combinedText || realtimePreviewText ? (
                   <>
                     {combinedText ? <pre>{combinedText}</pre> : null}
-                    {realtimePreviewText ? <p className="preview-line">{realtimePreviewText}</p> : null}
+                    {realtimePreviewText ? (
+                      <p className="preview-line">{realtimePreviewText}</p>
+                    ) : null}
                   </>
                 ) : (
                   <div className="center-empty compact">
@@ -9050,7 +10902,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
   function renderSettingsGeneral(): JSX.Element {
     if (!settings) {
-      return <div className="settings-placeholder">{t("settings.unavailable")}</div>;
+      return (
+        <div className="settings-placeholder">{t("settings.unavailable")}</div>
+      );
     }
 
     return (
@@ -9063,7 +10917,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
           <div className="settings-row">
             <div>
-              <strong>{t("settings.general.autoUpdate", "Enable auto update checks")}</strong>
+              <strong>
+                {t("settings.general.autoUpdate", "Enable auto update checks")}
+              </strong>
               <small>{t("settings.general.autoUpdateDesc")}</small>
             </div>
             <input
@@ -9083,8 +10939,15 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
           <div className="settings-row settings-row-block">
             <div>
-              <strong>{t("settings.general.appearanceMode", "Appearance")}</strong>
-              <small>{t("settings.general.appearanceDesc", "Choose app theme behavior.")}</small>
+              <strong>
+                {t("settings.general.appearanceMode", "Appearance")}
+              </strong>
+              <small>
+                {t(
+                  "settings.general.appearanceDesc",
+                  "Choose app theme behavior.",
+                )}
+              </small>
             </div>
             <select
               value={settings.general.appearance_mode ?? "system"}
@@ -9099,16 +10962,27 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                 }));
               }}
             >
-              <option value="system">{t("settings.general.system", "System")}</option>
-              <option value="light">{t("settings.general.light", "Light")}</option>
+              <option value="system">
+                {t("settings.general.system", "System")}
+              </option>
+              <option value="light">
+                {t("settings.general.light", "Light")}
+              </option>
               <option value="dark">{t("settings.general.dark", "Dark")}</option>
             </select>
           </div>
 
           <div className="settings-row settings-row-block">
             <div>
-              <strong>{t("settings.general.appLanguage", "App Language")}</strong>
-              <small>{t("settings.general.appLanguageDesc", "Choose the application language.")}</small>
+              <strong>
+                {t("settings.general.appLanguage", "App Language")}
+              </strong>
+              <small>
+                {t(
+                  "settings.general.appLanguageDesc",
+                  "Choose the application language.",
+                )}
+              </small>
             </div>
             <select
               value={settings.general.app_language ?? "en"}
@@ -9133,37 +11007,68 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           </div>
 
           <div className="settings-actions-row">
-            <button className="secondary-button" onClick={() => void onRefreshUpdates()} disabled={checkingUpdates}>
-              {checkingUpdates ? t("settings.general.checking", "Checking...") : t("settings.general.checkUpdates", "Check Updates")}
+            <button
+              className="secondary-button"
+              onClick={() => void onRefreshUpdates()}
+              disabled={checkingUpdates}
+            >
+              {checkingUpdates
+                ? t("settings.general.checking", "Checking...")
+                : t("settings.general.checkUpdates", "Check Updates")}
             </button>
             {updateInfo ? (
               <small>
                 {updateInfo.has_update
                   ? updateSource === "native"
-                    ? t("settings.general.updateAvailableInApp", "Update {version} available (in-app install)", {
-                      version: updateInfo.latest_version ?? "",
-                    })
-                    : t("settings.general.updateAvailable", "Update {version} available", {
-                      version: updateInfo.latest_version ?? "",
-                    })
+                    ? t(
+                        "settings.general.updateAvailableInApp",
+                        "Update {version} available (in-app install)",
+                        {
+                          version: updateInfo.latest_version ?? "",
+                        },
+                      )
+                    : t(
+                        "settings.general.updateAvailable",
+                        "Update {version} available",
+                        {
+                          version: updateInfo.latest_version ?? "",
+                        },
+                      )
                   : t("settings.general.upToDate", "Up to date ({version})", {
-                    version: updateInfo.current_version,
-                  })}
+                      version: updateInfo.current_version,
+                    })}
               </small>
             ) : null}
           </div>
           {updateInfo?.has_update && nativeUpdate ? (
-            <button className="cta-link-button" onClick={() => void onInstallUpdate()} disabled={installingUpdate}>
+            <button
+              className="cta-link-button"
+              onClick={() => void onInstallUpdate()}
+              disabled={installingUpdate}
+            >
               {installingUpdate
                 ? t("settings.general.installing", "Installing{suffix}", {
-                  suffix: updateDownloadPercent !== null ? ` (${updateDownloadPercent}%)` : "...",
-                })
-                : t("settings.general.downloadAndInstall", "Download & Install")}
+                    suffix:
+                      updateDownloadPercent !== null
+                        ? ` (${updateDownloadPercent}%)`
+                        : "...",
+                  })
+                : t(
+                    "settings.general.downloadAndInstall",
+                    "Download & Install",
+                  )}
             </button>
           ) : null}
           {updateInfo?.has_update && updateInfo.download_url ? (
-            <a className="cta-link-button" href={updateInfo.download_url} target="_blank" rel="noreferrer">
-              {nativeUpdate ? t("settings.general.manualDownload", "Manual Download") : t("settings.general.downloadUpdate", "Download Update")}
+            <a
+              className="cta-link-button"
+              href={updateInfo.download_url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {nativeUpdate
+                ? t("settings.general.manualDownload", "Manual Download")
+                : t("settings.general.downloadUpdate", "Download Update")}
             </a>
           ) : null}
           {updateStatusMessage ? <small>{updateStatusMessage}</small> : null}
@@ -9174,31 +11079,50 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
   function renderSettingsTranscription(): JSX.Element {
     if (!settings) {
-      return <div className="settings-placeholder">{t("settings.unavailable")}</div>;
+      return (
+        <div className="settings-placeholder">{t("settings.unavailable")}</div>
+      );
     }
 
     const speakerDiarization =
-      settings.transcription.speaker_diarization ?? getDefaultSpeakerDiarizationSettings();
+      settings.transcription.speaker_diarization ??
+      getDefaultSpeakerDiarizationSettings();
     const pyannoteHealth = runtimeHealth?.pyannote ?? null;
 
     return (
       <div className="settings-stack">
         <section className="settings-panel">
           <header>
-            <h3>{t("settings.transcription.title", "Transcription Defaults")}</h3>
-            <p>{t("settings.transcription.desc", "Used for every new transcription job.")}</p>
+            <h3>
+              {t("settings.transcription.title", "Transcription Defaults")}
+            </h3>
+            <p>
+              {t(
+                "settings.transcription.desc",
+                "Used for every new transcription job.",
+              )}
+            </p>
           </header>
 
           <div className="settings-row settings-row-block">
             <div>
-              <strong>{t("settings.transcription.engine", "Transcription engine")}</strong>
-              <small>{t("settings.transcription.engineDesc", "This app uses Whisper.cpp for local transcription.")}</small>
+              <strong>
+                {t("settings.transcription.engine", "Transcription engine")}
+              </strong>
+              <small>
+                {t(
+                  "settings.transcription.engineDesc",
+                  "This app uses Whisper.cpp for local transcription.",
+                )}
+              </small>
             </div>
             <select
               value={settings.transcription.engine}
               disabled={transcriptionEngineOptions.length <= 1}
               onChange={(event) => {
-                void onChangeTranscriptionEngine(event.target.value as TranscriptionEngine);
+                void onChangeTranscriptionEngine(
+                  event.target.value as TranscriptionEngine,
+                );
               }}
             >
               {transcriptionEngineOptions.map((option) => (
@@ -9211,7 +11135,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
           <div className="settings-row settings-row-block">
             <div>
-              <strong>{t("settings.transcription.model", "Default model")}</strong>
+              <strong>
+                {t("settings.transcription.model", "Default model")}
+              </strong>
             </div>
             <select
               value={settings.transcription.model}
@@ -9229,7 +11155,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
           <div className="settings-row settings-row-block">
             <div>
-              <strong>{t("settings.transcription.language", "Default language")}</strong>
+              <strong>
+                {t("settings.transcription.language", "Default language")}
+              </strong>
             </div>
             <select
               value={settings.transcription.language}
@@ -9247,8 +11175,18 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
           <div className="settings-row">
             <div>
-              <strong>{t("settings.transcription.speakerDiarization", "Enable speaker diarization")}</strong>
-              <small>{t("settings.transcription.speakerDiarizationDesc", "After transcription completes, the app will run its managed offline pyannote diarization runtime and assign speakers into the timeline when the pyannote assets are installed from Local Models.")}</small>
+              <strong>
+                {t(
+                  "settings.transcription.speakerDiarization",
+                  "Enable speaker diarization",
+                )}
+              </strong>
+              <small>
+                {t(
+                  "settings.transcription.speakerDiarizationDesc",
+                  "After transcription completes, the app will run its managed offline pyannote diarization runtime and assign speakers into the timeline when the pyannote assets are installed from Local Models.",
+                )}
+              </small>
               {pyannoteHealth ? (
                 <small className="muted">
                   {formatPyannoteHealthMessage(pyannoteHealth)}
@@ -9257,17 +11195,34 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             </div>
             <div className="settings-toggle-stack">
               {pyannoteHealth ? (
-                <span className={pyannoteHealth.ready ? "kind-chip" : "missing-chip"}>
-                  {pyannoteHealth.ready ? t("status.ready", "Ready") : t("status.setupRequired", "Setup required")}
+                <span
+                  className={
+                    pyannoteHealth.ready ? "kind-chip" : "missing-chip"
+                  }
+                >
+                  {pyannoteHealth.ready
+                    ? t("status.ready", "Ready")
+                    : t("status.setupRequired", "Setup required")}
                 </span>
-              ) : <span className="settings-status-chip-placeholder" aria-hidden="true" />}
+              ) : (
+                <span
+                  className="settings-status-chip-placeholder"
+                  aria-hidden="true"
+                />
+              )}
               <button
                 type="button"
                 className={`settings-switch ${speakerDiarization.enabled ? "is-on" : "is-off"}`}
                 role="switch"
                 aria-checked={speakerDiarization.enabled}
-                aria-label={t("settings.transcription.speakerDiarization", "Enable speaker diarization")}
-                title={t("settings.transcription.speakerDiarization", "Enable speaker diarization")}
+                aria-label={t(
+                  "settings.transcription.speakerDiarization",
+                  "Enable speaker diarization",
+                )}
+                title={t(
+                  "settings.transcription.speakerDiarization",
+                  "Enable speaker diarization",
+                )}
                 onClick={() => {
                   void onPatchSpeakerDiarizationSettings((current) => ({
                     ...current,
@@ -9284,21 +11239,33 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
           <div className="settings-row settings-row-block">
             <div>
-              <strong>{t("settings.transcription.pyannoteDevice", "Pyannote device")}</strong>
-              <small>{t("settings.transcription.pyannoteDeviceDesc", "Use CPU by default for best Intel/Apple Silicon compatibility. `auto` will try MPS when available in the managed local runtime.")}</small>
+              <strong>
+                {t("settings.transcription.pyannoteDevice", "Pyannote device")}
+              </strong>
+              <small>
+                {t(
+                  "settings.transcription.pyannoteDeviceDesc",
+                  "Use CPU by default for best Intel/Apple Silicon compatibility. `auto` will try MPS when available in the managed local runtime.",
+                )}
+              </small>
             </div>
             <select
               value={speakerDiarization.device}
               onChange={(event) => {
                 void onPatchSpeakerDiarizationSettings((current) => ({
                   ...current,
-                  device: event.target.value as SpeakerDiarizationSettings["device"],
+                  device: event.target
+                    .value as SpeakerDiarizationSettings["device"],
                 }));
               }}
             >
-              <option value="cpu">{t("settings.transcription.deviceCpu", "CPU")}</option>
+              <option value="cpu">
+                {t("settings.transcription.deviceCpu", "CPU")}
+              </option>
               <option value="auto">{t("lang.auto", "Auto Detect")}</option>
-              <option value="mps">{t("settings.transcription.deviceMps", "MPS")}</option>
+              <option value="mps">
+                {t("settings.transcription.deviceMps", "MPS")}
+              </option>
             </select>
           </div>
         </section>
@@ -9308,23 +11275,42 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
   function renderSettingsWhisperCpp(): JSX.Element {
     if (!settings) {
-      return <div className="settings-placeholder">{t("settings.unavailable")}</div>;
+      return (
+        <div className="settings-placeholder">{t("settings.unavailable")}</div>
+      );
     }
 
-    const whisperOptions = settings.transcription.whisper_options ?? getDefaultWhisperOptions(platformIsAppleSilicon);
+    const whisperOptions =
+      settings.transcription.whisper_options ??
+      getDefaultWhisperOptions(platformIsAppleSilicon);
 
     return (
       <div className="settings-stack">
         <section className="settings-panel">
           <header>
             <h3>{t("settings.whisper.title", "Whisper C++")}</h3>
-            <p>{t("settings.whisper.desc", "Decoding controls used by `whisper-cli` (whisper.cpp).")}</p>
+            <p>
+              {t(
+                "settings.whisper.desc",
+                "Decoding controls used by `whisper-cli` (whisper.cpp).",
+              )}
+            </p>
           </header>
 
           <div className="settings-row">
             <div>
-              <strong>{t("settings.whisper.translateToEnglish", "Translate transcript to English")}</strong>
-              <small>{t("settings.whisper.translateDesc", "Equivalent to `--translate`.")}</small>
+              <strong>
+                {t(
+                  "settings.whisper.translateToEnglish",
+                  "Translate transcript to English",
+                )}
+              </strong>
+              <small>
+                {t(
+                  "settings.whisper.translateDesc",
+                  "Equivalent to `--translate`.",
+                )}
+              </small>
             </div>
             <input
               type="checkbox"
@@ -9340,8 +11326,15 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
           <div className="settings-row">
             <div>
-              <strong>{t("settings.whisper.noContext", "No context between windows")}</strong>
-              <small>{t("settings.whisper.noContextDesc", "Equivalent to `--max-context 0`.")}</small>
+              <strong>
+                {t("settings.whisper.noContext", "No context between windows")}
+              </strong>
+              <small>
+                {t(
+                  "settings.whisper.noContextDesc",
+                  "Equivalent to `--max-context 0`.",
+                )}
+              </small>
             </div>
             <input
               type="checkbox"
@@ -9357,8 +11350,15 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
           <div className="settings-row">
             <div>
-              <strong>{t("settings.whisper.splitOnWord", "Split on word")}</strong>
-              <small>{t("settings.whisper.splitOnWordDesc", "Use word boundaries when producing segments (`--split-on-word`).")}</small>
+              <strong>
+                {t("settings.whisper.splitOnWord", "Split on word")}
+              </strong>
+              <small>
+                {t(
+                  "settings.whisper.splitOnWordDesc",
+                  "Use word boundaries when producing segments (`--split-on-word`).",
+                )}
+              </small>
             </div>
             <input
               type="checkbox"
@@ -9374,8 +11374,18 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
           <div className="settings-row">
             <div>
-              <strong>{t("settings.whisper.tinydiarize", "Speaker diarization (tinydiarize)")}</strong>
-              <small>{t("settings.whisper.tinydiarizeDesc", "Enable whisper.cpp tiny diarization (`-tdrz`) to infer speaker turns.")}</small>
+              <strong>
+                {t(
+                  "settings.whisper.tinydiarize",
+                  "Speaker diarization (tinydiarize)",
+                )}
+              </strong>
+              <small>
+                {t(
+                  "settings.whisper.tinydiarizeDesc",
+                  "Enable whisper.cpp tiny diarization (`-tdrz`) to infer speaker turns.",
+                )}
+              </small>
             </div>
             <input
               type="checkbox"
@@ -9391,8 +11401,15 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
           <div className="settings-row">
             <div>
-              <strong>{t("settings.whisper.stereodiarize", "Stereo diarization")}</strong>
-              <small>{t("settings.whisper.stereodiarizeDesc", "Enable whisper.cpp stereo diarization (`-di`) for stereo channel separation.")}</small>
+              <strong>
+                {t("settings.whisper.stereodiarize", "Stereo diarization")}
+              </strong>
+              <small>
+                {t(
+                  "settings.whisper.stereodiarizeDesc",
+                  "Enable whisper.cpp stereo diarization (`-di`) for stereo channel separation.",
+                )}
+              </small>
             </div>
             <input
               type="checkbox"
@@ -9447,7 +11464,12 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           <div className="settings-row settings-row-block">
             <div>
               <strong>{t("settings.whisper.beamSize", "Beam size")}</strong>
-              <small>{t("settings.whisper.beamSizeDesc", "`--beam-size` (when > 1, best-of is ignored).")}</small>
+              <small>
+                {t(
+                  "settings.whisper.beamSizeDesc",
+                  "`--beam-size` (when > 1, best-of is ignored).",
+                )}
+              </small>
             </div>
             <input
               type="number"
@@ -9466,7 +11488,12 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           <div className="settings-row settings-row-block">
             <div>
               <strong>{t("settings.whisper.bestOf")}</strong>
-              <small>{t("settings.whisper.bestOfDesc", "`--best-of` (used when beam size is 1).")}</small>
+              <small>
+                {t(
+                  "settings.whisper.bestOfDesc",
+                  "`--best-of` (used when beam size is 1).",
+                )}
+              </small>
             </div>
             <input
               type="number"
@@ -9569,10 +11596,14 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
   function renderSettingsWhisperKit(): JSX.Element {
     if (!settings) {
-      return <div className="settings-placeholder">{t("settings.unavailable")}</div>;
+      return (
+        <div className="settings-placeholder">{t("settings.unavailable")}</div>
+      );
     }
 
-    const whisperOptions = settings.transcription.whisper_options ?? getDefaultWhisperOptions(platformIsAppleSilicon);
+    const whisperOptions =
+      settings.transcription.whisper_options ??
+      getDefaultWhisperOptions(platformIsAppleSilicon);
 
     return (
       <div className="settings-stack">
@@ -9591,13 +11622,17 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
               onChange={(event) => {
                 void onPatchWhisperOptions((current) => ({
                   ...current,
-                  chunking_strategy: event.target.value as WhisperOptions["chunking_strategy"],
+                  chunking_strategy: event.target
+                    .value as WhisperOptions["chunking_strategy"],
                 }));
               }}
             >
               {chunkingOptions.map((option) => (
                 <option key={option.value} value={option.value}>
-                  {t(`settings.whisperkit.chunking.${option.value}`, option.label)}
+                  {t(
+                    `settings.whisperkit.chunking.${option.value}`,
+                    option.label,
+                  )}
                 </option>
               ))}
             </select>
@@ -9640,7 +11675,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
               >
                 {computeUnitOptions.map((option) => (
                   <option key={option.value} value={option.value}>
-                    {t(`settings.whisperkit.compute.${option.value}`, option.label)}
+                    {t(
+                      `settings.whisperkit.compute.${option.value}`,
+                      option.label,
+                    )}
                   </option>
                 ))}
               </select>
@@ -9665,7 +11703,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
               >
                 {computeUnitOptions.map((option) => (
                   <option key={option.value} value={option.value}>
-                    {t(`settings.whisperkit.compute.${option.value}`, option.label)}
+                    {t(
+                      `settings.whisperkit.compute.${option.value}`,
+                      option.label,
+                    )}
                   </option>
                 ))}
               </select>
@@ -9750,7 +11791,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                   prompt: event.target.value,
                 }));
               }}
-              placeholder={t("settings.whisperkit.promptPlaceholder", "Optional decoder prompt")}
+              placeholder={t(
+                "settings.whisperkit.promptPlaceholder",
+                "Optional decoder prompt",
+              )}
             />
           </div>
         </section>
@@ -9760,29 +11804,43 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
   function renderSettingsLocalModels(): JSX.Element {
     if (!settings) {
-      return <div className="settings-placeholder">{t("settings.unavailable")}</div>;
+      return (
+        <div className="settings-placeholder">{t("settings.unavailable")}</div>
+      );
     }
     const pyannoteHealth = runtimeHealth?.pyannote ?? provisioning.pyannote;
-    const runtimeBusy = provisioning.running && provisioning.progress?.asset_kind === "speech_runtime";
-    const pyannoteBusy = provisioning.running
-      && (provisioning.progress?.asset_kind === "pyannote_runtime"
-        || provisioning.progress?.asset_kind === "pyannote_model");
+    const runtimeBusy =
+      provisioning.running &&
+      provisioning.progress?.asset_kind === "speech_runtime";
+    const pyannoteBusy =
+      provisioning.running &&
+      (provisioning.progress?.asset_kind === "pyannote_runtime" ||
+        provisioning.progress?.asset_kind === "pyannote_model");
 
     return (
       <div className="settings-stack">
         <section className="settings-panel">
           <div className="settings-card-head">
             <h3>{t("settings.localModels.title")}</h3>
-            <button className="secondary-button" onClick={() => void refreshProvisioningModels()}>
+            <button
+              className="secondary-button"
+              onClick={() => void refreshProvisioningModels()}
+            >
               {t("action.refresh", "Refresh")}
             </button>
           </div>
 
           <p className="muted">
-            {t("settings.localModels.modelsDownloaded", "Models are downloaded in background and used by local transcription.")}
+            {t(
+              "settings.localModels.modelsDownloaded",
+              "Models are downloaded in background and used by local transcription.",
+            )}
           </p>
           <p className="muted">
-            {t("settings.localModels.directory", "Directory:")} <code>{provisioning.modelsDir || settings.transcription.models_dir}</code>
+            {t("settings.localModels.directory", "Directory:")}{" "}
+            <code>
+              {provisioning.modelsDir || settings.transcription.models_dir}
+            </code>
           </p>
 
           {runtimeHealth ? (
@@ -9790,94 +11848,168 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
               <h4>{t("settings.localModels.runtimeHealth")}</h4>
               <div className="settings-health-rows">
                 <div className="settings-health-row">
-                  <span className="settings-health-label">{t("settings.localModels.platform")}</span>
+                  <span className="settings-health-label">
+                    {t("settings.localModels.platform")}
+                  </span>
                   <span className="settings-health-value-inline">
                     <code>{runtimeHealth.host_os}</code>
                     <code>{runtimeHealth.host_arch}</code>
                   </span>
                 </div>
                 <div className="settings-health-row">
-                  <span className="settings-health-label">{t("settings.localModels.enginePolicy")}</span>
+                  <span className="settings-health-label">
+                    {t("settings.localModels.enginePolicy")}
+                  </span>
                   <span className="settings-health-value-inline">
                     <code>{runtimeHealth.preferred_engine}</code>
-                    {runtimeHealth.configured_engine === runtimeHealth.preferred_engine ? (
-                      <span className="kind-chip">{t("settings.localModels.aligned")}</span>
+                    {runtimeHealth.configured_engine ===
+                    runtimeHealth.preferred_engine ? (
+                      <span className="kind-chip">
+                        {t("settings.localModels.aligned")}
+                      </span>
                     ) : (
-                      <span className="missing-chip">{t("settings.localModels.willAutoFix")}</span>
+                      <span className="missing-chip">
+                        {t("settings.localModels.willAutoFix")}
+                      </span>
                     )}
                   </span>
                 </div>
                 <div className="settings-health-row">
-                  <span className="settings-health-label">{t("settings.localModels.runtimeSource", "Runtime source")}</span>
+                  <span className="settings-health-label">
+                    {t("settings.localModels.runtimeSource", "Runtime source")}
+                  </span>
                   <span className="settings-health-value-inline">
                     <code>{runtimeHealth.runtime_source || "unknown"}</code>
                     {runtimeHealth.managed_runtime_required ? (
-                      <span className="kind-chip">{t("settings.localModels.managedOnly", "Managed only")}</span>
+                      <span className="kind-chip">
+                        {t("settings.localModels.managedOnly", "Managed only")}
+                      </span>
                     ) : (
-                      <span className="missing-chip">{t("settings.localModels.devFallbacksAllowed", "Fallbacks allowed")}</span>
+                      <span className="missing-chip">
+                        {t(
+                          "settings.localModels.devFallbacksAllowed",
+                          "Fallbacks allowed",
+                        )}
+                      </span>
                     )}
                   </span>
                 </div>
                 <div className="settings-health-row">
-                  <span className="settings-health-label">{t("settings.advanced.ffmpegPath", "FFmpeg path")}</span>
+                  <span className="settings-health-label">
+                    {t("settings.advanced.ffmpegPath", "FFmpeg path")}
+                  </span>
                   <span className="settings-health-value-inline settings-health-value-stack">
-                    <code className="settings-health-value">{runtimeHealth.ffmpeg_resolved || runtimeHealth.ffmpeg_path}</code>
+                    <code className="settings-health-value">
+                      {runtimeHealth.ffmpeg_resolved ||
+                        runtimeHealth.ffmpeg_path}
+                    </code>
                     {runtimeHealth.ffmpeg_available ? (
-                      <span className="kind-chip">{t("settings.localModels.runnable")}</span>
+                      <span className="kind-chip">
+                        {t("settings.localModels.runnable")}
+                      </span>
                     ) : (
-                      <span className="missing-chip">{t("settings.localModels.unavailable")}</span>
+                      <span className="missing-chip">
+                        {t("settings.localModels.unavailable")}
+                      </span>
                     )}
-                    {!runtimeHealth.ffmpeg_available && runtimeHealth.managed_runtime?.ffmpeg.failure_message ? (
-                      <span className="settings-health-detail">{runtimeHealth.managed_runtime.ffmpeg.failure_message}</span>
+                    {!runtimeHealth.ffmpeg_available &&
+                    runtimeHealth.managed_runtime?.ffmpeg.failure_message ? (
+                      <span className="settings-health-detail">
+                        {runtimeHealth.managed_runtime.ffmpeg.failure_message}
+                      </span>
                     ) : null}
                   </span>
                 </div>
                 <div className="settings-health-row">
-                  <span className="settings-health-label">{t("settings.localModels.whisperCli")}</span>
+                  <span className="settings-health-label">
+                    {t("settings.localModels.whisperCli")}
+                  </span>
                   <span className="settings-health-value-inline settings-health-value-stack">
-                    <code className="settings-health-value">{runtimeHealth.whisper_cli_resolved || runtimeHealth.whisper_cli_path}</code>
+                    <code className="settings-health-value">
+                      {runtimeHealth.whisper_cli_resolved ||
+                        runtimeHealth.whisper_cli_path}
+                    </code>
                     {runtimeHealth.whisper_cli_available ? (
-                      <span className="kind-chip">{t("settings.localModels.runnable")}</span>
+                      <span className="kind-chip">
+                        {t("settings.localModels.runnable")}
+                      </span>
                     ) : (
-                      <span className="missing-chip">{t("settings.localModels.unavailable")}</span>
+                      <span className="missing-chip">
+                        {t("settings.localModels.unavailable")}
+                      </span>
                     )}
-                    {!runtimeHealth.whisper_cli_available && runtimeHealth.managed_runtime?.whisper_cli.failure_message ? (
-                      <span className="settings-health-detail">{runtimeHealth.managed_runtime.whisper_cli.failure_message}</span>
+                    {!runtimeHealth.whisper_cli_available &&
+                    runtimeHealth.managed_runtime?.whisper_cli
+                      .failure_message ? (
+                      <span className="settings-health-detail">
+                        {
+                          runtimeHealth.managed_runtime.whisper_cli
+                            .failure_message
+                        }
+                      </span>
                     ) : null}
                   </span>
                 </div>
                 <div className="settings-health-row">
-                  <span className="settings-health-label">{t("settings.localModels.whisperStream")}</span>
+                  <span className="settings-health-label">
+                    {t("settings.localModels.whisperStream")}
+                  </span>
                   <span className="settings-health-value-inline settings-health-value-stack">
-                    <code className="settings-health-value">{runtimeHealth.whisper_stream_resolved || runtimeHealth.whisper_stream_path}</code>
+                    <code className="settings-health-value">
+                      {runtimeHealth.whisper_stream_resolved ||
+                        runtimeHealth.whisper_stream_path}
+                    </code>
                     {runtimeHealth.whisper_stream_available ? (
-                      <span className="kind-chip">{t("settings.localModels.runnable")}</span>
+                      <span className="kind-chip">
+                        {t("settings.localModels.runnable")}
+                      </span>
                     ) : (
-                      <span className="missing-chip">{t("settings.localModels.unavailable")}</span>
+                      <span className="missing-chip">
+                        {t("settings.localModels.unavailable")}
+                      </span>
                     )}
-                    {!runtimeHealth.whisper_stream_available && runtimeHealth.managed_runtime?.whisper_stream.failure_message ? (
-                      <span className="settings-health-detail">{runtimeHealth.managed_runtime.whisper_stream.failure_message}</span>
+                    {!runtimeHealth.whisper_stream_available &&
+                    runtimeHealth.managed_runtime?.whisper_stream
+                      .failure_message ? (
+                      <span className="settings-health-detail">
+                        {
+                          runtimeHealth.managed_runtime.whisper_stream
+                            .failure_message
+                        }
+                      </span>
                     ) : null}
                   </span>
                 </div>
                 <div className="settings-health-row">
-                  <span className="settings-health-label">{t("settings.localModels.activeModel")}</span>
+                  <span className="settings-health-label">
+                    {t("settings.localModels.activeModel")}
+                  </span>
                   <span className="settings-health-value-inline">
                     <code>{runtimeHealth.model_filename}</code>
                     {runtimeHealth.model_present ? (
-                      <span className="kind-chip">{t("settings.localModels.installed")}</span>
+                      <span className="kind-chip">
+                        {t("settings.localModels.installed")}
+                      </span>
                     ) : (
-                      <span className="missing-chip">{t("settings.localModels.missing")}</span>
+                      <span className="missing-chip">
+                        {t("settings.localModels.missing")}
+                      </span>
                     )}
                   </span>
                 </div>
                 {platformIsAppleSilicon && (
                   <div className="settings-health-row">
-                    <span className="settings-health-label">{t("settings.localModels.coremlEncoder")}</span>
+                    <span className="settings-health-label">
+                      {t("settings.localModels.coremlEncoder")}
+                    </span>
                     {runtimeHealth.coreml_encoder_present ? (
-                      <span className="kind-chip">{t("settings.localModels.installed")}</span>
+                      <span className="kind-chip">
+                        {t("settings.localModels.installed")}
+                      </span>
                     ) : (
-                      <span className="missing-chip">{t("settings.localModels.missing")}</span>
+                      <span className="missing-chip">
+                        {t("settings.localModels.missing")}
+                      </span>
                     )}
                   </div>
                 )}
@@ -9889,24 +12021,44 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             {modelCatalog.map((model) => (
               <div key={model.key} className="model-row">
                 <div className="model-row-main">
-                  <strong>{formatSpeechModelLabel(model.key, model.label)}</strong>
+                  <strong>
+                    {formatSpeechModelLabel(model.key, model.label)}
+                  </strong>
                   <small>{model.model_file}</small>
                 </div>
                 <div className="model-row-actions">
-                  <span className={model.installed ? "kind-chip" : "missing-chip"}>
-                    {model.installed ? t("status.installed", "Installed") : t("status.missing", "Missing")}
+                  <span
+                    className={model.installed ? "kind-chip" : "missing-chip"}
+                  >
+                    {model.installed
+                      ? t("status.installed", "Installed")
+                      : t("status.missing", "Missing")}
                   </span>
                   {platformIsAppleSilicon && (
-                    <span className={model.coreml_installed ? "kind-chip" : "missing-chip"}>
-                      {model.coreml_installed ? t("settings.localModels.coremlReady", "CoreML Ready") : t("settings.localModels.coremlMissing", "CoreML Missing")}
+                    <span
+                      className={
+                        model.coreml_installed ? "kind-chip" : "missing-chip"
+                      }
+                    >
+                      {model.coreml_installed
+                        ? t("settings.localModels.coremlReady", "CoreML Ready")
+                        : t(
+                            "settings.localModels.coremlMissing",
+                            "CoreML Missing",
+                          )}
                     </span>
                   )}
                   <button
                     className="secondary-button"
-                    disabled={provisioning.running || (model.installed && (!platformIsAppleSilicon || model.coreml_installed))}
+                    disabled={
+                      provisioning.running ||
+                      (model.installed &&
+                        (!platformIsAppleSilicon || model.coreml_installed))
+                    }
                     onClick={() => void onDownloadModel(model.key)}
                   >
-                    {model.installed && (!platformIsAppleSilicon || model.coreml_installed)
+                    {model.installed &&
+                    (!platformIsAppleSilicon || model.coreml_installed)
                       ? t("status.installed", "Installed")
                       : t("settings.localModels.download", "Download")}
                   </button>
@@ -9921,7 +12073,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
               onClick={() => void onInstallRuntime(false)}
               disabled={provisioning.running || runtimeToolchainReady}
             >
-              {t("settings.localModels.installRuntime", "Install Local Runtime")}
+              {t(
+                "settings.localModels.installRuntime",
+                "Install Local Runtime",
+              )}
             </button>
             <button
               className="secondary-button"
@@ -9930,10 +12085,21 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             >
               {t("settings.localModels.repairRuntime", "Repair Runtime")}
             </button>
-            <button className="primary-button" onClick={() => void onProvisionModels()} disabled={provisioning.running}>
-              {t("settings.localModels.downloadMissing", "Download Missing Models")}
+            <button
+              className="primary-button"
+              onClick={() => void onProvisionModels()}
+              disabled={provisioning.running}
+            >
+              {t(
+                "settings.localModels.downloadMissing",
+                "Download Missing Models",
+              )}
             </button>
-            <button className="secondary-button" onClick={() => void onCancelProvisioning()} disabled={!provisioning.running}>
+            <button
+              className="secondary-button"
+              onClick={() => void onCancelProvisioning()}
+              disabled={!provisioning.running}
+            >
               {t("action.cancel", "Cancel")}
             </button>
           </div>
@@ -9943,15 +12109,20 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
               <div style={{ width: `${provisioning.progress.percentage}%` }} />
             </div>
           ) : null}
-          {(runtimeBusy || provisioning.progress?.asset_kind !== "speech_runtime") && provisioning.statusMessage
-            ? <small className="muted">{provisioning.statusMessage}</small>
-            : null}
+          {(runtimeBusy ||
+            provisioning.progress?.asset_kind !== "speech_runtime") &&
+          provisioning.statusMessage ? (
+            <small className="muted">{provisioning.statusMessage}</small>
+          ) : null}
         </section>
 
         <section className="settings-panel">
           <div className="settings-card-head">
             <h3>{t("settings.pyannote.title", "Speaker Diarization")}</h3>
-            <button className="secondary-button" onClick={() => void refreshRuntimeHealth()}>
+            <button
+              className="secondary-button"
+              onClick={() => void refreshRuntimeHealth()}
+            >
               {t("action.refresh", "Refresh")}
             </button>
           </div>
@@ -9963,43 +12134,82 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             )}
           </p>
           <p className="muted">
-            {t("settings.localModels.directory", "Directory:")} <code>{provisioning.modelsDir ? `${provisioning.modelsDir}/../runtime/pyannote` : "runtime/pyannote"}</code>
+            {t("settings.localModels.directory", "Directory:")}{" "}
+            <code>
+              {provisioning.modelsDir
+                ? `${provisioning.modelsDir}/../runtime/pyannote`
+                : "runtime/pyannote"}
+            </code>
           </p>
 
           {pyannoteHealth ? (
             <div className="settings-health-block">
               <div className="settings-health-rows">
                 <div className="settings-health-row">
-                  <span className="settings-health-label">{t("settings.pyannote.arch", "Architecture")}</span>
+                  <span className="settings-health-label">
+                    {t("settings.pyannote.arch", "Architecture")}
+                  </span>
                   <span className="settings-health-value-inline">
                     <code>{pyannoteHealth.arch}</code>
-                    <span className={pyannoteHealth.ready ? "kind-chip" : "missing-chip"}>
-                      {pyannoteHealth.ready ? t("settings.pyannote.ready", "Ready") : t("settings.pyannote.missing", "Missing")}
+                    <span
+                      className={
+                        pyannoteHealth.ready ? "kind-chip" : "missing-chip"
+                      }
+                    >
+                      {pyannoteHealth.ready
+                        ? t("settings.pyannote.ready", "Ready")
+                        : t("settings.pyannote.missing", "Missing")}
                     </span>
                   </span>
                 </div>
                 <div className="settings-health-row">
-                  <span className="settings-health-label">{t("settings.pyannote.runtime", "Runtime")}</span>
-                  <span className={pyannoteHealth.runtime_installed ? "kind-chip" : "missing-chip"}>
-                    {pyannoteHealth.runtime_installed ? t("status.installed", "Installed") : t("status.missing", "Missing")}
+                  <span className="settings-health-label">
+                    {t("settings.pyannote.runtime", "Runtime")}
+                  </span>
+                  <span
+                    className={
+                      pyannoteHealth.runtime_installed
+                        ? "kind-chip"
+                        : "missing-chip"
+                    }
+                  >
+                    {pyannoteHealth.runtime_installed
+                      ? t("status.installed", "Installed")
+                      : t("status.missing", "Missing")}
                   </span>
                 </div>
                 <div className="settings-health-row">
-                  <span className="settings-health-label">{t("settings.pyannote.model", "Model")}</span>
-                  <span className={pyannoteHealth.model_installed ? "kind-chip" : "missing-chip"}>
-                    {pyannoteHealth.model_installed ? t("status.installed", "Installed") : t("status.missing", "Missing")}
+                  <span className="settings-health-label">
+                    {t("settings.pyannote.model", "Model")}
+                  </span>
+                  <span
+                    className={
+                      pyannoteHealth.model_installed
+                        ? "kind-chip"
+                        : "missing-chip"
+                    }
+                  >
+                    {pyannoteHealth.model_installed
+                      ? t("status.installed", "Installed")
+                      : t("status.missing", "Missing")}
                   </span>
                 </div>
                 <div className="settings-health-row">
-                  <span className="settings-health-label">{t("settings.pyannote.device", "Configured device")}</span>
+                  <span className="settings-health-label">
+                    {t("settings.pyannote.device", "Configured device")}
+                  </span>
                   <code>{pyannoteHealth.device || "cpu"}</code>
                 </div>
                 <div className="settings-health-row">
-                  <span className="settings-health-label">{t("settings.pyannote.source", "Source")}</span>
+                  <span className="settings-health-label">
+                    {t("settings.pyannote.source", "Source")}
+                  </span>
                   <code>{pyannoteHealth.source}</code>
                 </div>
               </div>
-              <small className="muted">{formatPyannoteHealthMessage(pyannoteHealth)}</small>
+              <small className="muted">
+                {formatPyannoteHealthMessage(pyannoteHealth)}
+              </small>
             </div>
           ) : null}
 
@@ -10018,7 +12228,11 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             >
               {t("settings.pyannote.repair", "Repair")}
             </button>
-            <button className="secondary-button" onClick={() => void onCancelProvisioning()} disabled={!provisioning.running}>
+            <button
+              className="secondary-button"
+              onClick={() => void onCancelProvisioning()}
+              disabled={!provisioning.running}
+            >
               {t("action.cancel", "Cancel")}
             </button>
           </div>
@@ -10038,29 +12252,37 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
   function renderSettingsAiServices(): JSX.Element {
     if (!settings) {
-      return <div className="settings-placeholder">{t("settings.unavailable")}</div>;
+      return (
+        <div className="settings-placeholder">{t("settings.unavailable")}</div>
+      );
     }
 
     const foundationAvailable = platformIsAppleSilicon;
     const foundationEnabled = settings.ai.providers.foundation_apple.enabled;
     const foundationActive = settings.ai.active_provider === "foundation_apple";
     const geminiActive =
-      settings.ai.active_provider === "gemini"
-      && Boolean(settings.ai.active_remote_service_id)
-      && settings.ai.remote_services.some(
+      settings.ai.active_provider === "gemini" &&
+      Boolean(settings.ai.active_remote_service_id) &&
+      settings.ai.remote_services.some(
         (service) =>
-          service.id === settings.ai.active_remote_service_id
-          && service.kind === "google",
+          service.id === settings.ai.active_remote_service_id &&
+          service.kind === "google",
       );
     const geminiConfigured = Boolean(settings.ai.providers.gemini.has_api_key);
     const remoteServices = settings.ai.remote_services ?? [];
-    const googleService = remoteServices.find((service) => service.kind === "google");
+    const googleService = remoteServices.find(
+      (service) => service.kind === "google",
+    );
     const hasGoogleService = Boolean(googleService);
     const showGeminiService = hasGoogleService;
     const showGeminiConfig = aiServiceConfigOpen === googleService?.id;
-    const configuredKinds = new Set(remoteServices.map((service) => service.kind));
+    const configuredKinds = new Set(
+      remoteServices.map((service) => service.kind),
+    );
 
-    const createRemoteServiceEntry = (kind: RemoteServiceKind): RemoteServiceConfig | null => {
+    const createRemoteServiceEntry = (
+      kind: RemoteServiceKind,
+    ): RemoteServiceConfig | null => {
       const catalog = serviceCatalog.find((item) => item.kind === kind);
       if (!catalog) return null;
       return {
@@ -10069,8 +12291,12 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         label: formatProviderLabel(kind),
         enabled: true,
         api_key: null,
-        has_api_key: kind === "google" ? settings.ai.providers.gemini.has_api_key : false,
-        model: kind === "google" ? settings.ai.providers.gemini.model : catalog.defaultModel,
+        has_api_key:
+          kind === "google" ? settings.ai.providers.gemini.has_api_key : false,
+        model:
+          kind === "google"
+            ? settings.ai.providers.gemini.model
+            : catalog.defaultModel,
         base_url: catalog.defaultBaseUrl,
       };
     };
@@ -10105,7 +12331,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       const entry = createRemoteServiceEntry(kind);
       if (!entry) return;
       if (configuredKinds.has(kind)) {
-        const existing = remoteServices.find((service) => service.kind === kind);
+        const existing = remoteServices.find(
+          (service) => service.kind === kind,
+        );
         if (existing) {
           setAiServiceConfigOpen(existing.id);
         }
@@ -10121,8 +12349,12 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
     const removeRemoteService = (id: string): void => {
       void patchAiSettings((current) => {
-        const target = (current.remote_services ?? []).find((service) => service.id === id);
-        const nextServices = (current.remote_services ?? []).filter((service) => service.id !== id);
+        const target = (current.remote_services ?? []).find(
+          (service) => service.id === id,
+        );
+        const nextServices = (current.remote_services ?? []).filter(
+          (service) => service.id !== id,
+        );
         const removingActiveRemote = current.active_remote_service_id === id;
         const shouldDeactivateGemini =
           target?.kind === "google" && current.active_provider === "gemini";
@@ -10130,11 +12362,14 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         return {
           ...current,
           active_provider: shouldDeactivateGemini
-            ? current.providers.foundation_apple.enabled && platformIsAppleSilicon
+            ? current.providers.foundation_apple.enabled &&
+              platformIsAppleSilicon
               ? "foundation_apple"
               : "none"
             : current.active_provider,
-          active_remote_service_id: removingActiveRemote ? null : current.active_remote_service_id,
+          active_remote_service_id: removingActiveRemote
+            ? null
+            : current.active_remote_service_id,
           remote_services: nextServices,
         };
       });
@@ -10170,22 +12405,42 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
           <div className="ai-services-notice">
             <p>
-              {t("settings.ai.privacyNotice", "When you use remote AI services, your transcript will be sent to the service's servers and won't stay only on your Mac.")}
+              {t(
+                "settings.ai.privacyNotice",
+                "When you use remote AI services, your transcript will be sent to the service's servers and won't stay only on your Mac.",
+              )}
             </p>
             <button
-              className={aiServicesAcknowledged ? "secondary-button ai-notice-button acknowledged" : "secondary-button ai-notice-button"}
+              className={
+                aiServicesAcknowledged
+                  ? "secondary-button ai-notice-button acknowledged"
+                  : "secondary-button ai-notice-button"
+              }
               onClick={() => setAiServicesAcknowledged(true)}
             >
-              {aiServicesAcknowledged ? t("settings.ai.understood", "Understood") : t("settings.ai.iUnderstand", "I Understand")}
+              {aiServicesAcknowledged
+                ? t("settings.ai.understood", "Understood")
+                : t("settings.ai.iUnderstand", "I Understand")}
             </button>
           </div>
 
-          <article className={foundationActive ? "ai-service-card active" : "ai-service-card"}>
+          <article
+            className={
+              foundationActive ? "ai-service-card active" : "ai-service-card"
+            }
+          >
             <div className="ai-service-row">
               <span className="ai-service-icon foundation"></span>
               <div className="ai-service-title">
                 <strong>{t("settings.ai.foundationModel")}</strong>
-                <small>{foundationAvailable ? t("settings.ai.apple", "Apple") : t("settings.ai.requiresAppleSilicon", "Requires Apple Silicon")}</small>
+                <small>
+                  {foundationAvailable
+                    ? t("settings.ai.apple", "Apple")
+                    : t(
+                        "settings.ai.requiresAppleSilicon",
+                        "Requires Apple Silicon",
+                      )}
+                </small>
               </div>
               <div className="ai-service-actions">
                 <label className="toggle-row compact">
@@ -10199,7 +12454,8 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                       void patchAiSettings((current) => ({
                         ...current,
                         active_provider:
-                          !enabled && current.active_provider === "foundation_apple"
+                          !enabled &&
+                          current.active_provider === "foundation_apple"
                             ? current.providers.gemini.has_api_key
                               ? "gemini"
                               : "none"
@@ -10217,312 +12473,393 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                 </label>
                 <button
                   className="secondary-button"
-                  disabled={!foundationAvailable || !foundationEnabled || foundationActive}
+                  disabled={
+                    !foundationAvailable ||
+                    !foundationEnabled ||
+                    foundationActive
+                  }
                   onClick={activateFoundation}
                 >
-                  {foundationActive ? t("settings.ai.active", "Active") : t("settings.ai.use", "Use")}
+                  {foundationActive
+                    ? t("settings.ai.active", "Active")
+                    : t("settings.ai.use", "Use")}
                 </button>
               </div>
             </div>
           </article>
 
           {showGeminiService ? (
-            <article className={geminiActive ? "ai-service-card active" : "ai-service-card"}>
-            <div className="ai-service-row">
-              <span className="ai-service-icon gemini">
-                <Sparkles size={13} />
-              </span>
-              <div className="ai-service-title">
-                <strong>{settings.ai.providers.gemini.model}</strong>
-                <small>{geminiConfigured ? t("settings.ai.configuredToUse", "Configured to use") : t("settings.ai.configureToUse", "Configure to use")}</small>
+            <article
+              className={
+                geminiActive ? "ai-service-card active" : "ai-service-card"
+              }
+            >
+              <div className="ai-service-row">
+                <span className="ai-service-icon gemini">
+                  <Sparkles size={13} />
+                </span>
+                <div className="ai-service-title">
+                  <strong>{settings.ai.providers.gemini.model}</strong>
+                  <small>
+                    {geminiConfigured
+                      ? t("settings.ai.configuredToUse", "Configured to use")
+                      : t("settings.ai.configureToUse", "Configure to use")}
+                  </small>
+                </div>
+                <div className="ai-service-actions">
+                  <button
+                    className="secondary-button"
+                    onClick={() =>
+                      setAiServiceConfigOpen(
+                        showGeminiConfig ? null : (googleService?.id ?? null),
+                      )
+                    }
+                  >
+                    {showGeminiConfig
+                      ? t("settings.ai.done", "Done")
+                      : t("settings.ai.configure", "Configure")}
+                  </button>
+                  <button
+                    className="secondary-button"
+                    disabled={!geminiConfigured || geminiActive}
+                    onClick={activateGemini}
+                  >
+                    {geminiActive
+                      ? t("settings.ai.active", "Active")
+                      : t("settings.ai.use", "Use")}
+                  </button>
+                </div>
               </div>
-              <div className="ai-service-actions">
-                <button
-                  className="secondary-button"
-                  onClick={() => setAiServiceConfigOpen(showGeminiConfig ? null : googleService?.id ?? null)}
-                >
-                  {showGeminiConfig ? t("settings.ai.done", "Done") : t("settings.ai.configure", "Configure")}
-                </button>
-                <button
-                  className="secondary-button"
-                  disabled={!geminiConfigured || geminiActive}
-                  onClick={activateGemini}
-                >
-                  {geminiActive ? t("settings.ai.active", "Active") : t("settings.ai.use", "Use")}
-                </button>
-              </div>
-            </div>
 
-            {showGeminiConfig ? (
-              <div className="ai-service-config">
-                <label>
-                  {t("settings.ai.apiKey", "API Key")}
-                  <input
-                    type="password"
-                    placeholder={t("settings.ai.apiKeyPlaceholder", "Enter API Key...")}
-                    value={geminiApiKeyDraft}
-                    onChange={(event) => {
-                      const value = event.target.value.trim();
-                      setGeminiApiKeyDraft(event.target.value);
-                      void patchAiSettings((current) => ({
-                        ...current,
-                        providers: {
-                          ...current.providers,
-                          gemini: {
-                            ...current.providers.gemini,
-                            api_key: value.length > 0 ? event.target.value : null,
-                            has_api_key: value.length > 0,
-                          },
-                        },
-                        remote_services: (current.remote_services ?? []).map((service) => (
-                          service.kind === "google"
-                            ? {
-                                ...service,
-                                api_key: value.length > 0 ? event.target.value : null,
-                                has_api_key: value.length > 0,
-                              }
-                            : service
-                        )),
-                      }));
-                    }}
-                  />
-                </label>
-
-                <div className="ai-service-config-row">
+              {showGeminiConfig ? (
+                <div className="ai-service-config">
                   <label>
-                    {t("settings.ai.geminiModel", "Gemini Model")}
-                    <select
-                      value={settings.ai.providers.gemini.model}
+                    {t("settings.ai.apiKey", "API Key")}
+                    <input
+                      type="password"
+                      placeholder={t(
+                        "settings.ai.apiKeyPlaceholder",
+                        "Enter API Key...",
+                      )}
+                      value={geminiApiKeyDraft}
                       onChange={(event) => {
+                        const value = event.target.value.trim();
+                        setGeminiApiKeyDraft(event.target.value);
                         void patchAiSettings((current) => ({
                           ...current,
                           providers: {
                             ...current.providers,
                             gemini: {
                               ...current.providers.gemini,
-                              model: event.target.value,
+                              api_key:
+                                value.length > 0 ? event.target.value : null,
+                              has_api_key: value.length > 0,
                             },
                           },
-                          remote_services: (current.remote_services ?? []).map((service) => (
-                            service.kind === "google"
-                              ? {
-                                  ...service,
-                                  model: event.target.value,
-                                }
-                              : service
-                          )),
+                          remote_services: (current.remote_services ?? []).map(
+                            (service) =>
+                              service.kind === "google"
+                                ? {
+                                    ...service,
+                                    api_key:
+                                      value.length > 0
+                                        ? event.target.value
+                                        : null,
+                                    has_api_key: value.length > 0,
+                                  }
+                                : service,
+                          ),
                         }));
                       }}
-                    >
-                      {geminiModelChoices.map((model) => (
-                        <option key={model} value={model}>
-                          {model}
-                        </option>
-                      ))}
-                    </select>
+                    />
                   </label>
-                  <div className="ai-service-config-links">
+
+                  <div className="ai-service-config-row">
+                    <label>
+                      {t("settings.ai.geminiModel", "Gemini Model")}
+                      <select
+                        value={settings.ai.providers.gemini.model}
+                        onChange={(event) => {
+                          void patchAiSettings((current) => ({
+                            ...current,
+                            providers: {
+                              ...current.providers,
+                              gemini: {
+                                ...current.providers.gemini,
+                                model: event.target.value,
+                              },
+                            },
+                            remote_services: (
+                              current.remote_services ?? []
+                            ).map((service) =>
+                              service.kind === "google"
+                                ? {
+                                    ...service,
+                                    model: event.target.value,
+                                  }
+                                : service,
+                            ),
+                          }));
+                        }}
+                      >
+                        {geminiModelChoices.map((model) => (
+                          <option key={model} value={model}>
+                            {model}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="ai-service-config-links">
+                      <button
+                        className="secondary-button"
+                        disabled={loadingGeminiModels}
+                        onClick={() =>
+                          setGeminiModelFetchNonce((value) => value + 1)
+                        }
+                      >
+                        {loadingGeminiModels
+                          ? t("settings.ai.loadingModels", "Loading models...")
+                          : t("settings.ai.refreshModels", "Refresh models")}
+                      </button>
+                      <a
+                        className="cta-link-button ai-service-link"
+                        href="https://aistudio.google.com/apikey"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {t(
+                          "settings.ai.createGoogleKey",
+                          "Create a Google API Key",
+                        )}
+                      </a>
+                    </div>
+                  </div>
+
+                  <div className="ai-service-config-actions">
                     <button
                       className="secondary-button"
-                      disabled={loadingGeminiModels}
-                      onClick={() => setGeminiModelFetchNonce((value) => value + 1)}
+                      onClick={() => {
+                        void patchAiSettings((current) => {
+                          const nextProvider =
+                            current.active_provider === "gemini"
+                              ? current.providers.foundation_apple.enabled &&
+                                platformIsAppleSilicon
+                                ? "foundation_apple"
+                                : "none"
+                              : current.active_provider;
+
+                          return {
+                            ...current,
+                            active_provider: nextProvider,
+                            active_remote_service_id:
+                              current.active_remote_service_id ===
+                              googleService?.id
+                                ? null
+                                : current.active_remote_service_id,
+                            providers: {
+                              ...current.providers,
+                              gemini: {
+                                ...current.providers.gemini,
+                                api_key: null,
+                                has_api_key: false,
+                              },
+                            },
+                            remote_services: (
+                              current.remote_services ?? []
+                            ).filter((service) => service.kind !== "google"),
+                          };
+                        });
+                        setGeminiApiKeyDraft("");
+                        setAiServiceConfigOpen(null);
+                      }}
                     >
-                      {loadingGeminiModels ? t("settings.ai.loadingModels", "Loading models...") : t("settings.ai.refreshModels", "Refresh models")}
+                      {t("action.delete", "Delete")}
                     </button>
-                    <a
-                      className="cta-link-button ai-service-link"
-                      href="https://aistudio.google.com/apikey"
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      {t("settings.ai.createGoogleKey", "Create a Google API Key")}
-                    </a>
                   </div>
                 </div>
-
-                <div className="ai-service-config-actions">
-                  <button
-                    className="secondary-button"
-                    onClick={() => {
-                      void patchAiSettings((current) => {
-                        const nextProvider =
-                          current.active_provider === "gemini"
-                            ? current.providers.foundation_apple.enabled && platformIsAppleSilicon
-                              ? "foundation_apple"
-                              : "none"
-                            : current.active_provider;
-
-                        return {
-                          ...current,
-                          active_provider: nextProvider,
-                          active_remote_service_id:
-                            current.active_remote_service_id === googleService?.id
-                              ? null
-                              : current.active_remote_service_id,
-                          providers: {
-                            ...current.providers,
-                            gemini: {
-                              ...current.providers.gemini,
-                              api_key: null,
-                              has_api_key: false,
-                            },
-                          },
-                          remote_services: (current.remote_services ?? []).filter(
-                            (service) => service.kind !== "google",
-                          ),
-                        };
-                      });
-                      setGeminiApiKeyDraft("");
-                      setAiServiceConfigOpen(null);
-                    }}
-                  >
-                    {t("action.delete", "Delete")}
-                  </button>
-                </div>
-              </div>
-            ) : null}
+              ) : null}
             </article>
           ) : null}
 
           {remoteServices
             .filter((service) => service.kind !== "google")
             .map((service) => {
-            const catalog = serviceCatalog.find((item) => item.kind === service.kind);
-            const ServiceIcon = catalog?.icon ?? Settings2;
-            const isOpen = aiServiceConfigOpen === service.id;
-            const isActiveRemote =
-              settings.ai.active_remote_service_id === service.id
-              && settings.ai.active_provider !== "foundation_apple";
+              const catalog = serviceCatalog.find(
+                (item) => item.kind === service.kind,
+              );
+              const ServiceIcon = catalog?.icon ?? Settings2;
+              const isOpen = aiServiceConfigOpen === service.id;
+              const isActiveRemote =
+                settings.ai.active_remote_service_id === service.id &&
+                settings.ai.active_provider !== "foundation_apple";
 
-            return (
-              <article
-                key={service.id}
-                className={isActiveRemote ? "ai-service-card active" : "ai-service-card"}
-              >
-                <div className="ai-service-row">
-                  <span className={`ai-service-icon ${catalog?.tone ?? "custom"}`}>
-                    <ServiceIcon size={13} />
-                  </span>
-                  <div className="ai-service-title">
-                    <strong>{formatRemoteServiceLabel(service, settings)}</strong>
-                    <small>{service.enabled ? t("settings.ai.configuredToUse", "Configured") : t("settings.ai.disabled", "Disabled")}</small>
-                  </div>
-                  <div className="ai-service-actions">
-                    <label className="toggle-row compact">
-                      <span>{t("settings.ai.enabled")}</span>
-                      <input
-                        type="checkbox"
-                        checked={service.enabled}
-                        onChange={(event) => {
-                          const enabled = event.target.checked;
-                          void patchAiSettings((current) => {
-                            const nextServices = (current.remote_services ?? []).map((entry) => (
-                              entry.id === service.id
-                                ? {
-                                    ...entry,
-                                    enabled,
-                                  }
-                                : entry
-                            ));
-                            const disablingActive = !enabled && current.active_remote_service_id === service.id;
-                            const nextProvider = disablingActive
-                              ? current.providers.foundation_apple.enabled && platformIsAppleSilicon
-                                ? "foundation_apple"
-                                : "none"
-                              : current.active_provider;
-
-                            return {
-                              ...current,
-                              active_provider: nextProvider,
-                              active_remote_service_id: disablingActive ? null : current.active_remote_service_id,
-                              remote_services: nextServices,
-                            };
-                          });
-                        }}
-                      />
-                    </label>
-                    <button
-                      className="secondary-button"
-                      onClick={() => setAiServiceConfigOpen(isOpen ? null : service.id)}
+              return (
+                <article
+                  key={service.id}
+                  className={
+                    isActiveRemote
+                      ? "ai-service-card active"
+                      : "ai-service-card"
+                  }
+                >
+                  <div className="ai-service-row">
+                    <span
+                      className={`ai-service-icon ${catalog?.tone ?? "custom"}`}
                     >
-                      {isOpen ? t("settings.ai.done", "Done") : t("settings.ai.configure", "Configure")}
-                    </button>
-                    <button
-                      className="secondary-button"
-                      disabled={!service.enabled || isActiveRemote}
-                      onClick={() => {
-                        void patchAiSettings((current) => ({
-                          ...current,
-                          active_provider: service.kind === "google" ? "gemini" : "none",
-                          active_remote_service_id: service.id,
-                        }));
-                      }}
-                    >
-                      {isActiveRemote ? t("settings.ai.active", "Active") : t("settings.ai.use", "Use")}
-                    </button>
-                  </div>
-                </div>
+                      <ServiceIcon size={13} />
+                    </span>
+                    <div className="ai-service-title">
+                      <strong>
+                        {formatRemoteServiceLabel(service, settings)}
+                      </strong>
+                      <small>
+                        {service.enabled
+                          ? t("settings.ai.configuredToUse", "Configured")
+                          : t("settings.ai.disabled", "Disabled")}
+                      </small>
+                    </div>
+                    <div className="ai-service-actions">
+                      <label className="toggle-row compact">
+                        <span>{t("settings.ai.enabled")}</span>
+                        <input
+                          type="checkbox"
+                          checked={service.enabled}
+                          onChange={(event) => {
+                            const enabled = event.target.checked;
+                            void patchAiSettings((current) => {
+                              const nextServices = (
+                                current.remote_services ?? []
+                              ).map((entry) =>
+                                entry.id === service.id
+                                  ? {
+                                      ...entry,
+                                      enabled,
+                                    }
+                                  : entry,
+                              );
+                              const disablingActive =
+                                !enabled &&
+                                current.active_remote_service_id === service.id;
+                              const nextProvider = disablingActive
+                                ? current.providers.foundation_apple.enabled &&
+                                  platformIsAppleSilicon
+                                  ? "foundation_apple"
+                                  : "none"
+                                : current.active_provider;
 
-                {isOpen ? (
-                  <div className="ai-service-config">
-                    <label>
-                      {t("settings.ai.apiKey", "API Key")}
-                      <input
-                        type="password"
-                        value={remoteServiceApiKeyDrafts[service.id] ?? ""}
-                        onChange={(event) => {
-                          const nextValue = event.target.value;
-                          setRemoteServiceApiKeyDrafts((current) => ({
-                            ...current,
-                            [service.id]: nextValue,
-                          }));
-                          patchRemoteService(service.id, (current) => ({
-                            ...current,
-                            api_key: nextValue.trim().length > 0 ? nextValue : null,
-                            has_api_key: nextValue.trim().length > 0,
-                          }));
-                        }}
-                      />
-                    </label>
-                    <label>
-                      {t("settings.ai.model", "Model")}
-                      <input
-                        value={service.model ?? ""}
-                        placeholder={t("settings.ai.modelPlaceholder", "Optional model name")}
-                        onChange={(event) =>
-                          patchRemoteService(service.id, (current) => ({
-                            ...current,
-                            model: event.target.value.trim().length > 0 ? event.target.value : null,
-                          }))
-                        }
-                      />
-                    </label>
-                    <label>
-                      {t("settings.ai.baseUrl", "Base URL")}
-                      <input
-                        value={service.base_url ?? ""}
-                        placeholder={t("settings.ai.baseUrlPlaceholder", "Optional API endpoint")}
-                        onChange={(event) =>
-                          patchRemoteService(service.id, (current) => ({
-                            ...current,
-                            base_url:
-                              event.target.value.trim().length > 0 ? event.target.value : null,
-                          }))
-                        }
-                      />
-                    </label>
-                    <div className="ai-service-config-actions">
+                              return {
+                                ...current,
+                                active_provider: nextProvider,
+                                active_remote_service_id: disablingActive
+                                  ? null
+                                  : current.active_remote_service_id,
+                                remote_services: nextServices,
+                              };
+                            });
+                          }}
+                        />
+                      </label>
                       <button
                         className="secondary-button"
-                        onClick={() => removeRemoteService(service.id)}
+                        onClick={() =>
+                          setAiServiceConfigOpen(isOpen ? null : service.id)
+                        }
                       >
-                        {t("action.delete", "Delete")}
+                        {isOpen
+                          ? t("settings.ai.done", "Done")
+                          : t("settings.ai.configure", "Configure")}
+                      </button>
+                      <button
+                        className="secondary-button"
+                        disabled={!service.enabled || isActiveRemote}
+                        onClick={() => {
+                          void patchAiSettings((current) => ({
+                            ...current,
+                            active_provider:
+                              service.kind === "google" ? "gemini" : "none",
+                            active_remote_service_id: service.id,
+                          }));
+                        }}
+                      >
+                        {isActiveRemote
+                          ? t("settings.ai.active", "Active")
+                          : t("settings.ai.use", "Use")}
                       </button>
                     </div>
                   </div>
-                ) : null}
-              </article>
-            );
+
+                  {isOpen ? (
+                    <div className="ai-service-config">
+                      <label>
+                        {t("settings.ai.apiKey", "API Key")}
+                        <input
+                          type="password"
+                          value={remoteServiceApiKeyDrafts[service.id] ?? ""}
+                          onChange={(event) => {
+                            const nextValue = event.target.value;
+                            setRemoteServiceApiKeyDrafts((current) => ({
+                              ...current,
+                              [service.id]: nextValue,
+                            }));
+                            patchRemoteService(service.id, (current) => ({
+                              ...current,
+                              api_key:
+                                nextValue.trim().length > 0 ? nextValue : null,
+                              has_api_key: nextValue.trim().length > 0,
+                            }));
+                          }}
+                        />
+                      </label>
+                      <label>
+                        {t("settings.ai.model", "Model")}
+                        <input
+                          value={service.model ?? ""}
+                          placeholder={t(
+                            "settings.ai.modelPlaceholder",
+                            "Optional model name",
+                          )}
+                          onChange={(event) =>
+                            patchRemoteService(service.id, (current) => ({
+                              ...current,
+                              model:
+                                event.target.value.trim().length > 0
+                                  ? event.target.value
+                                  : null,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label>
+                        {t("settings.ai.baseUrl", "Base URL")}
+                        <input
+                          value={service.base_url ?? ""}
+                          placeholder={t(
+                            "settings.ai.baseUrlPlaceholder",
+                            "Optional API endpoint",
+                          )}
+                          onChange={(event) =>
+                            patchRemoteService(service.id, (current) => ({
+                              ...current,
+                              base_url:
+                                event.target.value.trim().length > 0
+                                  ? event.target.value
+                                  : null,
+                            }))
+                          }
+                        />
+                      </label>
+                      <div className="ai-service-config-actions">
+                        <button
+                          className="secondary-button"
+                          onClick={() => removeRemoteService(service.id)}
+                        >
+                          {t("action.delete", "Delete")}
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </article>
+              );
             })}
 
           <div className="ai-service-library">
@@ -10531,7 +12868,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
               {serviceCatalog.map((service) => {
                 const ServiceIcon = service.icon;
                 const isGoogle = service.kind === "google";
-                const alreadyAdded = isGoogle ? hasGoogleService : configuredKinds.has(service.kind);
+                const alreadyAdded = isGoogle
+                  ? hasGoogleService
+                  : configuredKinds.has(service.kind);
                 return (
                   <button
                     key={service.kind}
@@ -10540,7 +12879,11 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                   >
                     <span className="ai-service-chip-main">
                       <ServiceIcon size={13} />
-                      <span>{service.kind === "custom" ? t("settings.ai.customService", "Custom") : service.label}</span>
+                      <span>
+                        {service.kind === "custom"
+                          ? t("settings.ai.customService", "Custom")
+                          : service.label}
+                      </span>
                     </span>
                     {alreadyAdded ? <Check size={14} /> : <Plus size={14} />}
                   </button>
@@ -10555,7 +12898,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
   function renderSettingsPrompts(): JSX.Element {
     if (!settings) {
-      return <div className="settings-placeholder">{t("settings.unavailable")}</div>;
+      return (
+        <div className="settings-placeholder">{t("settings.unavailable")}</div>
+      );
     }
 
     return (
@@ -10563,7 +12908,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
         <aside className="prompt-sidebar">
           <div className="settings-card-head">
             <h3>{t("settings.prompts.templates")}</h3>
-            <button className="secondary-button" onClick={() => void onResetPrompts()}>
+            <button
+              className="secondary-button"
+              onClick={() => void onResetPrompts()}
+            >
               {t("action.reset", "Reset")}
             </button>
           </div>
@@ -10572,11 +12920,19 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             {settings.prompts.templates.map((template) => (
               <button
                 key={template.id}
-                className={template.id === activePromptId ? "prompt-template-row active" : "prompt-template-row"}
+                className={
+                  template.id === activePromptId
+                    ? "prompt-template-row active"
+                    : "prompt-template-row"
+                }
                 onClick={() => setActivePromptId(template.id)}
               >
                 <span>{template.name}</span>
-                {template.builtin ? <small>{t("settings.prompts.builtIn")}</small> : <small>{t("settings.prompts.custom")}</small>}
+                {template.builtin ? (
+                  <small>{t("settings.prompts.builtIn")}</small>
+                ) : (
+                  <small>{t("settings.prompts.custom")}</small>
+                )}
               </button>
             ))}
           </div>
@@ -10688,12 +13044,17 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
         <section className="settings-card-block prompt-editor-pane">
           {!promptDraft ? (
-            <div className="settings-placeholder">{t("settings.prompts.selectTemplate")}</div>
+            <div className="settings-placeholder">
+              {t("settings.prompts.selectTemplate")}
+            </div>
           ) : (
             <>
               <div className="settings-card-head">
                 <h3>{t("settings.prompts.editPrompt")}</h3>
-                <button className="primary-button" onClick={() => void onSavePromptTemplate()}>
+                <button
+                  className="primary-button"
+                  onClick={() => void onSavePromptTemplate()}
+                >
                   <Save size={14} />
                   {t("settings.prompts.savePrompt", "Save Prompt")}
                 </button>
@@ -10703,7 +13064,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                 {t("settings.prompts.promptTitle", "Title")}
                 <input
                   value={promptDraft.name}
-                  onChange={(event) => setPromptDraft((current) => current ? { ...current, name: event.target.value } : current)}
+                  onChange={(event) =>
+                    setPromptDraft((current) =>
+                      current
+                        ? { ...current, name: event.target.value }
+                        : current,
+                    )
+                  }
                 />
               </label>
 
@@ -10712,7 +13079,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                 <textarea
                   className="settings-textarea"
                   value={promptDraft.body}
-                  onChange={(event) => setPromptDraft((current) => current ? { ...current, body: event.target.value } : current)}
+                  onChange={(event) =>
+                    setPromptDraft((current) =>
+                      current
+                        ? { ...current, body: event.target.value }
+                        : current,
+                    )
+                  }
                 />
               </label>
 
@@ -10721,7 +13094,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                   {t("settings.prompts.testTask", "Test task")}
                   <select
                     value={promptBindingTask}
-                    onChange={(event) => setPromptBindingTask(event.target.value as PromptTask)}
+                    onChange={(event) =>
+                      setPromptBindingTask(event.target.value as PromptTask)
+                    }
                   >
                     {promptTaskOptions.map((task) => (
                       <option key={task.value} value={task.value}>
@@ -10730,8 +13105,14 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                     ))}
                   </select>
                 </label>
-                <button className="secondary-button" onClick={() => void onRunPromptTest()} disabled={promptTest.running}>
-                  {promptTest.running ? t("settings.prompts.testing", "Testing...") : t("settings.prompts.runTest", "Run Test")}
+                <button
+                  className="secondary-button"
+                  onClick={() => void onRunPromptTest()}
+                  disabled={promptTest.running}
+                >
+                  {promptTest.running
+                    ? t("settings.prompts.testing", "Testing...")
+                    : t("settings.prompts.runTest", "Run Test")}
                 </button>
               </div>
 
@@ -10740,7 +13121,12 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                 <textarea
                   className="settings-textarea small"
                   value={promptTest.input}
-                  onChange={(event) => setPromptTest((current) => ({ ...current, input: event.target.value }))}
+                  onChange={(event) =>
+                    setPromptTest((current) => ({
+                      ...current,
+                      input: event.target.value,
+                    }))
+                  }
                 />
               </label>
 
@@ -10761,7 +13147,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
   function renderSettingsAdvanced(): JSX.Element {
     if (!settings) {
-      return <div className="settings-placeholder">{t("settings.unavailable")}</div>;
+      return (
+        <div className="settings-placeholder">{t("settings.unavailable")}</div>
+      );
     }
 
     return (
@@ -10834,7 +13222,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
           </label>
 
           <div className="notice-actions">
-            <button className="secondary-button" onClick={() => void refreshSettingsFromDisk()}>
+            <button
+              className="secondary-button"
+              onClick={() => void refreshSettingsFromDisk()}
+            >
               {t("settings.advanced.reloadFromDisk", "Reload from disk")}
             </button>
           </div>
@@ -10881,7 +13272,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     if (pane === "general") return renderSettingsGeneral();
     if (pane === "ai_services") return renderSettingsAiServices();
     if (pane === "prompts") return renderSettingsPrompts();
-    return <div className="settings-placeholder">{t("settings.unavailable")}</div>;
+    return (
+      <div className="settings-placeholder">{t("settings.unavailable")}</div>
+    );
   }
 
   function renderSettings(): JSX.Element {
@@ -10914,7 +13307,11 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                     return (
                       <button
                         key={pane.key}
-                        className={settingsPane === pane.key ? "settings-nav-item active" : "settings-nav-item"}
+                        className={
+                          settingsPane === pane.key
+                            ? "settings-nav-item active"
+                            : "settings-nav-item"
+                        }
                         onClick={() => setSettingsPane(pane.key)}
                       >
                         <span className="settings-nav-item-main">
@@ -10957,35 +13354,51 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
       ? `${formatProvisioningAssetLabel(provisioning.progress)} (${provisioning.progress.current}/${provisioning.progress.total})`
       : provisioning.statusMessage;
     const startupStatusDetail = initialSetupStepDetail ?? bootstrapMessage;
-    const blockingError = startupRequirementsError ?? initialSetupError ?? (!settings ? error : null);
+    const blockingError =
+      startupRequirementsError ??
+      initialSetupError ??
+      (!settings ? error : null);
     const loadingSettings = !settings && !blockingError;
-    const requiresPrivacyAcceptance = Boolean(settings) && !privacyPolicyAccepted;
-    const loadingDiagnostics = settings && privacyPolicyAccepted && !startupRequirementsLoaded && !blockingError;
-    const setupPending = settings && privacyPolicyAccepted && startupRequirementsLoaded && !initialSetupReady;
-    const startupKicker = loadingSettings || loadingDiagnostics
-      ? t("startup.loading.kicker", "Starting up")
-      : t("setup.firstLaunch.kicker", "First launch setup");
+    const requiresPrivacyAcceptance =
+      Boolean(settings) && !privacyPolicyAccepted;
+    const loadingDiagnostics =
+      settings &&
+      privacyPolicyAccepted &&
+      !startupRequirementsLoaded &&
+      !blockingError;
+    const setupPending =
+      settings &&
+      privacyPolicyAccepted &&
+      startupRequirementsLoaded &&
+      !initialSetupReady;
+    const startupKicker =
+      loadingSettings || loadingDiagnostics
+        ? t("startup.loading.kicker", "Starting up")
+        : t("setup.firstLaunch.kicker", "First launch setup");
     const startupTitle = loadingSettings
       ? t("startup.loading.title", "Loading Sbobino")
       : loadingDiagnostics
         ? t("startup.loading.runtimeTitle", "Sbobino is checking your Mac")
         : t("setup.firstLaunch.title", "Sbobino is preparing your Mac");
     const startupIntro = loadingSettings
-      ? t("setup.firstLaunch.loadingSettingsDesc", "Preparing your local workspace and saved settings.")
+      ? t(
+          "setup.firstLaunch.loadingSettingsDesc",
+          "Preparing your local workspace and saved settings.",
+        )
       : requiresPrivacyAcceptance
         ? t(
-          "setup.firstLaunch.privacyIntro",
-          "Review and accept the privacy terms before using the app.",
-        )
+            "setup.firstLaunch.privacyIntro",
+            "Review and accept the privacy terms before using the app.",
+          )
         : loadingDiagnostics
           ? t(
-            "startup.loading.runtimeIntro",
-            "Checking local runtime and required components before opening the app.",
-          )
+              "startup.loading.runtimeIntro",
+              "Checking local runtime and required components before opening the app.",
+            )
           : t(
-            "setup.firstLaunch.runtimeIntro",
-            "Sbobino is finishing the local setup required to run completely on your Mac.",
-          );
+              "setup.firstLaunch.runtimeIntro",
+              "Sbobino is finishing the local setup required to run completely on your Mac.",
+            );
 
     return (
       <main className="startup-shell">
@@ -11000,9 +13413,13 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             <>
               <div className="startup-policy-panel">
                 <div className="startup-policy-version">
-                  {t("setup.firstLaunch.policyVersion", "Policy version {version}", {
-                    version: PRIVACY_POLICY_VERSION,
-                  })}
+                  {t(
+                    "setup.firstLaunch.policyVersion",
+                    "Policy version {version}",
+                    {
+                      version: PRIVACY_POLICY_VERSION,
+                    },
+                  )}
                 </div>
                 <ul className="startup-policy-list">
                   {PRIVACY_POLICY_SUMMARY.map((item) => (
@@ -11028,8 +13445,15 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             <div className="startup-status-card">
               <LoadingAnimation />
               <div>
-                <strong>{t("setup.firstLaunch.loadingSettings", "Loading Sbobino...")}</strong>
-                <p>{t("setup.firstLaunch.loadingSettingsDesc", "Preparing your local workspace and saved settings.")}</p>
+                <strong>
+                  {t("setup.firstLaunch.loadingSettings", "Loading Sbobino...")}
+                </strong>
+                <p>
+                  {t(
+                    "setup.firstLaunch.loadingSettingsDesc",
+                    "Preparing your local workspace and saved settings.",
+                  )}
+                </p>
               </div>
             </div>
           ) : null}
@@ -11038,8 +13462,18 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             <div className="startup-status-card">
               <LoadingAnimation />
               <div>
-                <strong>{t("setup.firstLaunch.inspecting", "Inspecting local runtime...")}</strong>
-                <p>{t("setup.firstLaunch.inspectingDesc", "Checking local tools and prerequisites.")}</p>
+                <strong>
+                  {t(
+                    "setup.firstLaunch.inspecting",
+                    "Inspecting local runtime...",
+                  )}
+                </strong>
+                <p>
+                  {t(
+                    "setup.firstLaunch.inspectingDesc",
+                    "Checking local tools and prerequisites.",
+                  )}
+                </p>
               </div>
             </div>
           ) : null}
@@ -11048,18 +13482,35 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
             <div className="startup-status-card">
               <SetupMatrixIndicator
                 progress={provisioning.progress?.percentage ?? 8}
-                ariaLabel={t("setup.firstLaunch.progressIndicator", "Local setup progress")}
+                ariaLabel={t(
+                  "setup.firstLaunch.progressIndicator",
+                  "Local setup progress",
+                )}
               />
               <div>
-                <strong>{initialSetupStepLabel ?? t("setup.firstLaunch.downloading", "Downloading local models...")}</strong>
-                <p>{startupStatusDetail || t("setup.firstLaunch.downloadingDesc", "This can take a few minutes the first time.")}</p>
+                <strong>
+                  {initialSetupStepLabel ??
+                    t(
+                      "setup.firstLaunch.downloading",
+                      "Downloading local models...",
+                    )}
+                </strong>
+                <p>
+                  {startupStatusDetail ||
+                    t(
+                      "setup.firstLaunch.downloadingDesc",
+                      "This can take a few minutes the first time.",
+                    )}
+                </p>
               </div>
             </div>
           ) : null}
 
           {blockingError ? (
             <div className="startup-error-card">
-              <strong>{t("setup.firstLaunch.setupError", "Setup could not finish")}</strong>
+              <strong>
+                {t("setup.firstLaunch.setupError", "Setup could not finish")}
+              </strong>
               <p>{blockingError}</p>
             </div>
           ) : null}
@@ -11093,7 +13544,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
               </button>
               <button
                 className="secondary-button"
-                onClick={() => void onOpenStandaloneSettingsWindow("local_models")}
+                onClick={() =>
+                  void onOpenStandaloneSettingsWindow("local_models")
+                }
                 disabled={initialSetupRunning}
               >
                 {t("action.openLocalModels", "Open Local Models")}
@@ -11117,12 +13570,18 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
               {shouldOfferLocalModelsCta(error) ? (
                 <button
                   className="secondary-button error-action-button"
-                  onClick={() => void onOpenStandaloneSettingsWindow("local_models")}
+                  onClick={() =>
+                    void onOpenStandaloneSettingsWindow("local_models")
+                  }
                 >
                   {t("action.openLocalModels", "Open Local Models")}
                 </button>
               ) : null}
-              <button className="error-close" onClick={() => setError(null)} title={t("action.dismiss", "Dismiss")}>
+              <button
+                className="error-close"
+                onClick={() => setError(null)}
+                title={t("action.dismiss", "Dismiss")}
+              >
                 <X size={14} />
               </button>
             </div>
@@ -11147,9 +13606,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
   }
 
   const shouldBlockMainUi =
-    !settings
-    || !privacyPolicyAccepted
-    || (!warmStartEligible && (!startupRequirementsLoaded || !initialSetupReady));
+    !settings ||
+    !privacyPolicyAccepted ||
+    (!warmStartEligible && (!startupRequirementsLoaded || !initialSetupReady));
 
   if (shouldBlockMainUi) {
     return renderStartupGate();
@@ -11159,100 +13618,139 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
     <main className="app-shell">
       <section
         ref={windowFrameRef}
-        className={leftSidebarOpen ? "window-frame" : "window-frame left-collapsed"}
+        className={
+          leftSidebarOpen ? "window-frame" : "window-frame left-collapsed"
+        }
         style={windowFrameStyle}
       >
         <aside
           ref={leftSidebarRef}
           className={`left-sidebar ${leftSidebarOpen ? "" : "collapsed"}`}
         >
-            <div className="sidebar-drag-cap" data-tauri-drag-region aria-hidden="true" />
+          <div
+            className="sidebar-drag-cap"
+            data-tauri-drag-region
+            aria-hidden="true"
+          />
 
+          <div className="sidebar-section">
+            <button
+              className={
+                section === "home" ? "sidebar-item active" : "sidebar-item"
+              }
+              onClick={() => setSection("home")}
+            >
+              <House size={16} />
+              {t("sidebar.home", "Home")}
+            </button>
+            <button
+              className={
+                section === "queue" ? "sidebar-item active" : "sidebar-item"
+              }
+              onClick={() => setSection("queue")}
+            >
+              <ListChecks size={16} />
+              {t("sidebar.queue", "Queue")}
+            </button>
+            <button
+              className={
+                section === "history" ? "sidebar-item active" : "sidebar-item"
+              }
+              onClick={() => setSection("history")}
+            >
+              <HistoryIcon size={16} />
+              {t("sidebar.history", "History")}
+            </button>
+          </div>
+
+          {openArtifacts.length > 0 ? (
             <div className="sidebar-section">
-              <button className={section === "home" ? "sidebar-item active" : "sidebar-item"} onClick={() => setSection("home")}>
-                <House size={16} />
-                {t("sidebar.home", "Home")}
-              </button>
-              <button className={section === "queue" ? "sidebar-item active" : "sidebar-item"} onClick={() => setSection("queue")}>
-                <ListChecks size={16} />
-                {t("sidebar.queue", "Queue")}
-              </button>
-              <button className={section === "history" ? "sidebar-item active" : "sidebar-item"} onClick={() => setSection("history")}>
-                <HistoryIcon size={16} />
-                {t("sidebar.history", "History")}
-              </button>
-            </div>
-
-            {openArtifacts.length > 0 ? (
-              <div className="sidebar-section">
-                <h4>{t("sidebar.open")}</h4>
-                {openArtifacts.map((artifact) => (
-                  <div
-                    key={artifact.id}
-                    className={
-                      activeArtifactId === artifact.id
-                        ? "sidebar-item sidebar-open-row active"
-                        : "sidebar-item sidebar-open-row"
-                    }
-                    title={artifact.title}
-                    onClick={() => {
-                      hydrateDetail(artifact);
-                      setSection("detail");
-                    }}
-                    role="button"
-                    tabIndex={0}
-                  >
-                    <div className="sidebar-open-item">
-                      <FileAudio size={16} />
-                      <span className="sidebar-item-label">{artifact.title}</span>
-                    </div>
-                    <button
-                      className="sidebar-open-close"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setOpenArtifacts((prev) => prev.filter((a) => a.id !== artifact.id));
-                        if (activeArtifactId === artifact.id) {
-                            setActiveArtifactId(null);
-                            setActiveDetailContext(null);
-                            setSection("home");
-                        }
-                      }}
-                      title={t("sidebar.closeTranscription", "Close opened transcription")}
-                      aria-label={t("sidebar.closeTranscription", "Close opened transcription")}
-                    >
-                      <X size={12} />
-                    </button>
+              <h4>{t("sidebar.open")}</h4>
+              {openArtifacts.map((artifact) => (
+                <div
+                  key={artifact.id}
+                  className={
+                    activeArtifactId === artifact.id
+                      ? "sidebar-item sidebar-open-row active"
+                      : "sidebar-item sidebar-open-row"
+                  }
+                  title={artifact.title}
+                  onClick={() => {
+                    hydrateDetail(artifact);
+                    setSection("detail");
+                  }}
+                  role="button"
+                  tabIndex={0}
+                >
+                  <div className="sidebar-open-item">
+                    <FileAudio size={16} />
+                    <span className="sidebar-item-label">{artifact.title}</span>
                   </div>
-                ))}
-              </div>
-            ) : null}
-
-            <div className="sidebar-section">
-              <button
-                className={section === "deleted_history" ? "sidebar-item active" : "sidebar-item"}
-                onClick={() => setSection("deleted_history")}
-              >
-                <Trash2 size={16} />
-                {t("sidebar.recentlyDeleted", "Recently Deleted")}
-              </button>
+                  <button
+                    className="sidebar-open-close"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setOpenArtifacts((prev) =>
+                        prev.filter((a) => a.id !== artifact.id),
+                      );
+                      if (activeArtifactId === artifact.id) {
+                        setActiveArtifactId(null);
+                        setActiveDetailContext(null);
+                        setSection("home");
+                      }
+                    }}
+                    title={t(
+                      "sidebar.closeTranscription",
+                      "Close opened transcription",
+                    )}
+                    aria-label={t(
+                      "sidebar.closeTranscription",
+                      "Close opened transcription",
+                    )}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
             </div>
+          ) : null}
 
-            <div className="sidebar-footer">
-              <button className="sidebar-item" onClick={() => void onOpenStandaloneSettingsWindow("general")}>
-                <Settings2 size={16} />
-                {t("sidebar.settings", "Settings")}
-              </button>
-            </div>
-            {leftSidebarOpen ? (
-              <div
-                className="sidebar-resize-handle sidebar-resize-handle-left"
-                role="separator"
-                aria-orientation="vertical"
-                aria-label={t("sidebar.resizeNavigation", "Resize navigation sidebar")}
-                onMouseDown={(event) => onStartSidebarResize("left", event)}
-              />
-            ) : null}
-          </aside>
+          <div className="sidebar-section">
+            <button
+              className={
+                section === "deleted_history"
+                  ? "sidebar-item active"
+                  : "sidebar-item"
+              }
+              onClick={() => setSection("deleted_history")}
+            >
+              <Trash2 size={16} />
+              {t("sidebar.recentlyDeleted", "Recently Deleted")}
+            </button>
+          </div>
+
+          <div className="sidebar-footer">
+            <button
+              className="sidebar-item"
+              onClick={() => void onOpenStandaloneSettingsWindow("general")}
+            >
+              <Settings2 size={16} />
+              {t("sidebar.settings", "Settings")}
+            </button>
+          </div>
+          {leftSidebarOpen ? (
+            <div
+              className="sidebar-resize-handle sidebar-resize-handle-left"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label={t(
+                "sidebar.resizeNavigation",
+                "Resize navigation sidebar",
+              )}
+              onMouseDown={(event) => onStartSidebarResize("left", event)}
+            />
+          ) : null}
+        </aside>
 
         <section ref={mainAreaRef} className="main-area">
           {section !== "detail" ? (
@@ -11261,7 +13759,11 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                 <button
                   className={`icon-button sidebar-toggle-btn sidebar-toggle-left ${leftSidebarOpen ? "is-open" : ""}`}
                   onClick={() => setLeftSidebarOpen(!leftSidebarOpen)}
-                  title={leftSidebarOpen ? t("topbar.hideSidebar", "Hide sidebar") : t("topbar.showSidebar", "Show sidebar")}
+                  title={
+                    leftSidebarOpen
+                      ? t("topbar.hideSidebar", "Hide sidebar")
+                      : t("topbar.showSidebar", "Show sidebar")
+                  }
                 >
                   <PanelLeftClose className="icon-close" size={16} />
                   <PanelLeftOpen className="icon-open" size={16} />
@@ -11273,14 +13775,20 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                       : section === "realtime"
                         ? t("topbar.live", "Live")
                         : section === "deleted_history"
-                            ? t("topbar.recentlyDeleted", "Recently Deleted")
-                            : t("topbar.transcriptions", "Transcriptions")}
+                          ? t("topbar.recentlyDeleted", "Recently Deleted")
+                          : t("topbar.transcriptions", "Transcriptions")}
                   </h1>
                 )}
-                <div className="topbar-drag-spacer" data-tauri-drag-region aria-hidden="true" />
+                <div
+                  className="topbar-drag-spacer"
+                  data-tauri-drag-region
+                  aria-hidden="true"
+                />
               </div>
 
-              {section === "home" || section === "queue" || section === "realtime" ? (
+              {section === "home" ||
+              section === "queue" ||
+              section === "realtime" ? (
                 <div className="topbar-controls">
                   <label className="select-chip">
                     <span className="chip-label">
@@ -11288,7 +13796,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                     </span>
                     <select
                       value={settings?.transcription.model ?? "base"}
-                      onChange={(event) => void onChangeModel(event.target.value as SpeechModel)}
+                      onChange={(event) =>
+                        void onChangeModel(event.target.value as SpeechModel)
+                      }
                     >
                       {modelOptions.map((option) => (
                         <option key={option.value} value={option.value}>
@@ -11304,10 +13814,16 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                     </span>
                     <select
                       value={settings?.transcription.language ?? "auto"}
-                      onChange={(event) => void onChangeLanguage(event.target.value as LanguageCode)}
+                      onChange={(event) =>
+                        void onChangeLanguage(
+                          event.target.value as LanguageCode,
+                        )
+                      }
                     >
                       {languageOptions.map((option) => (
-                        <option key={option.value} value={option.value}>{t(`lang.${option.value}`, option.label)}</option>
+                        <option key={option.value} value={option.value}>
+                          {t(`lang.${option.value}`, option.label)}
+                        </option>
                       ))}
                     </select>
                   </label>
@@ -11320,7 +13836,11 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                     <ListFilter size={13} />
                     <select
                       value={historyKind}
-                      onChange={(event) => setHistoryKind(event.target.value as "all" | ArtifactKind)}
+                      onChange={(event) =>
+                        setHistoryKind(
+                          event.target.value as "all" | ArtifactKind,
+                        )
+                      }
                     >
                       <option value="all">{t("history.all")}</option>
                       <option value="file">{t("history.files")}</option>
@@ -11340,7 +13860,10 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
 
               {section === "deleted_history" ? (
                 <div className="topbar-controls deleted-topbar-controls">
-                  <button className="secondary-button history-action-button" onClick={() => void onEmptyTrash()}>
+                  <button
+                    className="secondary-button history-action-button"
+                    onClick={() => void onEmptyTrash()}
+                  >
                     <Trash2 size={14} />
                     {t("deleted.emptyTrash", "Empty Trash")}
                   </button>
@@ -11365,12 +13888,18 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
               {shouldOfferLocalModelsCta(error) ? (
                 <button
                   className="secondary-button error-action-button"
-                  onClick={() => void onOpenStandaloneSettingsWindow("local_models")}
+                  onClick={() =>
+                    void onOpenStandaloneSettingsWindow("local_models")
+                  }
                 >
                   {t("action.openLocalModels", "Open Local Models")}
                 </button>
               ) : null}
-              <button className="error-close" onClick={() => setError(null)} title={t("action.dismiss", "Dismiss")}>
+              <button
+                className="error-close"
+                onClick={() => setError(null)}
+                title={t("action.dismiss", "Dismiss")}
+              >
                 <X size={14} />
               </button>
             </div>
@@ -11407,7 +13936,11 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
               placeholder={t("rename.placeholder", "Transcription title")}
             />
             <div className="rename-sheet-actions">
-            <button className="secondary-button" onClick={closeRenameDialog} disabled={isRenamingArtifact}>
+              <button
+                className="secondary-button"
+                onClick={closeRenameDialog}
+                disabled={isRenamingArtifact}
+              >
                 {t("rename.cancel", "Cancel")}
               </button>
               <button
@@ -11415,7 +13948,9 @@ export function App({ standaloneSettingsWindow = false, initialBootstrap }: AppP
                 onClick={() => void confirmRenameArtifact()}
                 disabled={isRenamingArtifact || renameDraft.trim().length === 0}
               >
-                {isRenamingArtifact ? t("rename.saving", "Saving...") : t("rename.save", "Save")}
+                {isRenamingArtifact
+                  ? t("rename.saving", "Saving...")
+                  : t("rename.save", "Save")}
               </button>
             </div>
           </section>
