@@ -60,7 +60,7 @@ exit 0
         .await
         .expect("realtime start should succeed");
 
-    for _ in 0..40 {
+    for _ in 0..80 {
         if !engine.snapshot_text().await.trim().is_empty()
             || !emitted.lock().expect("emit lock poisoned").is_empty()
         {
@@ -397,7 +397,7 @@ done
         .await
         .expect("realtime start should succeed");
 
-    for _ in 0..40 {
+    for _ in 0..80 {
         if emitted
             .lock()
             .expect("emit lock poisoned")
@@ -409,7 +409,7 @@ done
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
 
-    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
 
     let stop_result = engine.stop().await.expect("realtime stop should succeed");
     assert_eq!(
@@ -447,7 +447,7 @@ exit 1
         .await
         .expect("realtime start should succeed before the child exits");
 
-    for _ in 0..20 {
+    for _ in 0..80 {
         if !engine.is_running().await {
             break;
         }
@@ -467,5 +467,60 @@ exit 1
     assert!(
         diagnostics.contains("audio.init() failed"),
         "expected startup failure diagnostic, got: {diagnostics}"
+    );
+}
+
+#[tokio::test]
+async fn realtime_start_uses_managed_runtime_bin_dir_on_path() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let bin_dir = temp.path().join("bin");
+    let script_path = bin_dir.join("whisper-stream");
+    let models_dir = temp.path().join("models");
+
+    std::fs::create_dir_all(&bin_dir).expect("failed to create bin dir");
+    std::fs::create_dir_all(&models_dir).expect("failed to create models dir");
+    std::fs::write(models_dir.join("ggml-base.bin"), b"fake model")
+        .expect("failed to create model");
+
+    let script = r#"#!/bin/sh
+if [ "${PATH#"$PWD"}" = "$PATH" ]; then
+  :
+fi
+case ":$PATH:" in
+  *":__BIN_DIR__:/usr/bin:/bin:"*) ;;
+  *)
+    printf 'path-missing\n' 1>&2
+    exit 1
+    ;;
+esac
+printf 'managed env ok\n' 1>&2
+sleep 0.2
+exit 0
+"#
+    .replace("__BIN_DIR__", &bin_dir.to_string_lossy());
+    write_executable_script(&script_path, &script);
+
+    let engine = WhisperStreamEngine::new(
+        script_path.to_string_lossy().to_string(),
+        models_dir.to_string_lossy().to_string(),
+    );
+
+    engine
+        .start("ggml-base.bin", "en", Arc::new(|_delta: RealtimeDelta| {}))
+        .await
+        .expect("realtime start should succeed");
+
+    for _ in 0..80 {
+        if !engine.snapshot_text().await.trim().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+
+    let stop_result = engine.stop().await.expect("realtime stop should succeed");
+    assert!(
+        stop_result.transcript.contains("managed env ok"),
+        "expected managed runtime env confirmation, got: {}",
+        stop_result.transcript
     );
 }

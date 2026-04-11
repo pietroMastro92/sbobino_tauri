@@ -61,6 +61,27 @@ need_cmd rsync
 need_cmd install_name_tool
 need_cmd codesign
 need_cmd otool
+need_cmd curl
+need_cmd shasum
+
+TORCHCODEC_FFMPEG_BASE_URL="https://pytorch.s3.amazonaws.com/torchcodec/ffmpeg/2025-03-14/macos_arm64"
+TORCHCODEC_FFMPEG_VERSION="8.0"
+TORCHCODEC_FFMPEG_SHA256="beb936b76f25d2621228a12cdb67c9ae3d1eff7aa713ef8d1167ebf0c25bd5ec"
+TORCHCODEC_FFMPEG_LIB_PATTERNS=(
+  "libavutil*.dylib"
+  "libavcodec*.dylib"
+  "libavformat*.dylib"
+  "libavdevice*.dylib"
+  "libavfilter*.dylib"
+  "libswscale*.dylib"
+  "libswresample*.dylib"
+)
+
+download_source_archive() {
+  local url=$1
+  local output=$2
+  curl --fail --location --silent --show-error "$url" --output "$output"
+}
 
 python_matches_version() {
   local python_bin=$1
@@ -81,6 +102,18 @@ import csv
 import encodings
 print("ok")
 PY
+}
+
+python_supports_venv_creation() {
+  local python_bin=$1
+  local probe_dir
+  probe_dir=$(mktemp -d)
+  if "$python_bin" -m venv --copies "$probe_dir/venv" >/dev/null 2>&1; then
+    rm -rf "$probe_dir"
+    return 0
+  fi
+  rm -rf "$probe_dir"
+  return 1
 }
 
 rewrite_embedded_python_app_launcher() {
@@ -129,35 +162,150 @@ verify_no_external_python_framework_refs() {
   done
 }
 
+verify_sha256() {
+  local file_path=$1
+  local expected=$2
+  local actual
+  actual=$(shasum -a 256 "$file_path" | awk '{print $1}')
+  if [[ "$actual" != "$expected" ]]; then
+    echo "SHA256 mismatch for '$file_path': expected $expected, got $actual" >&2
+    exit 1
+  fi
+}
+
+bundle_torchcodec_ffmpeg_runtime() {
+  local runtime_dir=$1
+  local version_dir_name=$2
+  local site_packages_dir="$runtime_dir/lib/$version_dir_name/site-packages"
+  local torchcodec_dir="$site_packages_dir/torchcodec"
+
+  if [[ ! -d "$torchcodec_dir" ]]; then
+    return 0
+  fi
+
+  local archive="$STAGE_DIR/torchcodec-ffmpeg-${TORCHCODEC_FFMPEG_VERSION}.tar.gz"
+  local extract_root="$STAGE_DIR/torchcodec-ffmpeg-${TORCHCODEC_FFMPEG_VERSION}"
+  local ffmpeg_lib_dir="$extract_root/ffmpeg/lib"
+  local embedded_lib_dir="$torchcodec_dir/.dylibs"
+
+  rm -rf "$extract_root"
+  mkdir -p "$extract_root" "$embedded_lib_dir"
+
+  download_source_archive \
+    "${TORCHCODEC_FFMPEG_BASE_URL}/${TORCHCODEC_FFMPEG_VERSION}.tar.gz" \
+    "$archive"
+  verify_sha256 "$archive" "$TORCHCODEC_FFMPEG_SHA256"
+  tar -xzf "$archive" -C "$extract_root"
+
+  local pattern
+  for pattern in "${TORCHCODEC_FFMPEG_LIB_PATTERNS[@]}"; do
+    rsync -a "$ffmpeg_lib_dir"/$pattern "$embedded_lib_dir"/
+  done
+
+  local binary
+  while IFS= read -r binary; do
+    install_name_tool -delete_rpath "/opt/homebrew/opt/ffmpeg/lib" "$binary" 2>/dev/null || true
+    install_name_tool -delete_rpath "/usr/local/opt/ffmpeg/lib" "$binary" 2>/dev/null || true
+    install_name_tool -add_rpath "@loader_path/.dylibs" "$binary" 2>/dev/null || true
+    codesign --force --sign - "$binary" >/dev/null 2>&1 || true
+  done < <(
+    find "$torchcodec_dir" -maxdepth 1 -type f \
+      \( -name 'libtorchcodec_core*.dylib' -o -name 'libtorchcodec_custom_ops*.dylib' -o -name 'libtorchcodec_pybind_ops*.so' \) \
+      | sort
+  )
+
+  local dylib
+  while IFS= read -r dylib; do
+    codesign --force --sign - "$dylib" >/dev/null 2>&1 || true
+  done < <(find "$embedded_lib_dir" -maxdepth 1 \( -type f -o -type l \) | sort)
+}
+
+assert_torchcodec_runtime_is_portable() {
+  local runtime_dir=$1
+  local version_dir_name=$2
+  local torchcodec_dir="$runtime_dir/lib/$version_dir_name/site-packages/torchcodec"
+
+  if [[ ! -d "$torchcodec_dir" ]]; then
+    return 0
+  fi
+
+  local binary
+  while IFS= read -r binary; do
+    local host_refs
+    host_refs=$(otool -L "$binary" | tail -n +2 | awk '{print $1}' | grep -E '^(/opt/homebrew|/usr/local)' || true)
+    if [[ -n "$host_refs" ]]; then
+      echo "Torchcodec binary still links against host paths: $binary" >&2
+      printf ' - %s\n' $host_refs >&2
+      exit 1
+    fi
+
+    local host_rpaths
+    host_rpaths=$(otool -l "$binary" | awk '
+      /LC_RPATH/ { flag=1; next }
+      flag && /path / { print $2; flag=0 }
+    ' | grep -E '^(/opt/homebrew|/usr/local)' || true)
+    if [[ -n "$host_rpaths" ]]; then
+      echo "Torchcodec binary still exposes host rpaths: $binary" >&2
+      printf ' - %s\n' $host_rpaths >&2
+      exit 1
+    fi
+  done < <(
+    find "$torchcodec_dir" -maxdepth 1 -type f \
+      \( -name 'libtorchcodec_core*.dylib' -o -name 'libtorchcodec_custom_ops*.dylib' -o -name 'libtorchcodec_pybind_ops*.so' \) \
+      | sort
+  )
+
+  local required
+  for required in libavutil.60.dylib libavcodec.62.dylib libavformat.62.dylib libavdevice.62.dylib libavfilter.11.dylib libswscale.9.dylib libswresample.6.dylib; do
+    if [[ ! -e "$torchcodec_dir/.dylibs/$required" ]]; then
+      echo "Torchcodec runtime is missing bundled FFmpeg library: $torchcodec_dir/.dylibs/$required" >&2
+      exit 1
+    fi
+  done
+}
+
 resolve_python_executable() {
   local requested=$1
   local candidates=()
+  local candidate_path
 
   if [[ -x "$requested" ]]; then
     candidates+=("$requested")
   fi
 
-  if command -v "python$requested" >/dev/null 2>&1; then
-    candidates+=("$(command -v "python$requested")")
-  fi
+  while IFS= read -r candidate_path; do
+    [[ -n "$candidate_path" ]] && candidates+=("$candidate_path")
+  done < <(which -a "python$requested" 2>/dev/null || true)
 
-  if command -v python3 >/dev/null 2>&1; then
-    candidates+=("$(command -v python3)")
-  fi
+  while IFS= read -r candidate_path; do
+    [[ -n "$candidate_path" ]] && candidates+=("$candidate_path")
+  done < <(which -a python3 2>/dev/null || true)
 
   if [[ -x "$HOME/miniconda3/bin/python3" ]]; then
     candidates+=("$HOME/miniconda3/bin/python3")
   fi
 
+  local deduped=()
+  local seen_candidates=""
   local candidate
   for candidate in "${candidates[@]}"; do
-    if python_matches_version "$candidate" "$requested" && python_is_healthy "$candidate"; then
+    [[ -n "$candidate" ]] || continue
+    if [[ "$seen_candidates" != *$'\n'"$candidate"$'\n'* ]]; then
+      deduped+=("$candidate")
+      seen_candidates+=$'\n'"$candidate"$'\n'
+    fi
+  done
+
+  for candidate in "${deduped[@]}"; do
+    if python_matches_version "$candidate" "$requested" \
+      && python_is_healthy "$candidate" \
+      && python_supports_venv_creation "$candidate"; then
       printf '%s\n' "$candidate"
       return 0
     fi
   done
 
-  echo "Could not find a healthy Python $requested interpreter on this machine." >&2
+  echo "Could not find a healthy Python $requested interpreter on this machine that can also create a relocatable venv." >&2
   echo "Install one first, then rerun this script. Example: brew install python@$requested" >&2
   exit 1
 }
@@ -341,8 +489,17 @@ if cfg_path.exists():
     cfg_path.unlink()
 PY
 
+echo "Bundling TorchCodec FFmpeg runtime"
+bundle_torchcodec_ffmpeg_runtime "$STAGE_RUNTIME_DIR" "$VERSION_DIR_NAME"
+assert_torchcodec_runtime_is_portable "$STAGE_RUNTIME_DIR" "$VERSION_DIR_NAME"
+
 echo "Verifying bundled pyannote runtime"
-PYTHONHOME="$STAGE_RUNTIME_DIR" "$STAGE_RUNTIME_DIR/bin/python3" - <<PY
+env -i \
+  PATH="/usr/bin:/bin" \
+  PYTHONHOME="$STAGE_RUNTIME_DIR" \
+  PYTHONPATH="$STAGE_RUNTIME_DIR/lib/$VERSION_DIR_NAME:$STAGE_RUNTIME_DIR/lib/$VERSION_DIR_NAME/lib-dynload:$STAGE_RUNTIME_DIR/lib/$VERSION_DIR_NAME/site-packages" \
+  PYTHONNOUSERSITE="1" \
+  "$STAGE_RUNTIME_DIR/bin/python3" - <<PY
 import ctypes
 import csv
 import encodings

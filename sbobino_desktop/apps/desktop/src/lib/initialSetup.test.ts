@@ -5,6 +5,7 @@ import {
   canWarmStartFromSetupReport,
   getInitialSetupMissingModels,
   isInitialSetupComplete,
+  shouldBlockMainUiDuringStartup,
   shouldRepairPyannoteRuntime,
 } from "./initialSetup";
 
@@ -187,5 +188,27 @@ describe("initialSetup helpers", () => {
         trusted_for_fast_start: true,
       }),
     ).toBe(false);
+  });
+
+  it("does not block the main UI for trusted warm starts while diagnostics load in background", () => {
+    expect(
+      shouldBlockMainUiDuringStartup({
+        hasSettings: true,
+        privacyAccepted: true,
+        warmStartEligible: true,
+        startupRequirementsLoaded: false,
+        initialSetupReady: false,
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldBlockMainUiDuringStartup({
+        hasSettings: true,
+        privacyAccepted: true,
+        warmStartEligible: false,
+        startupRequirementsLoaded: false,
+        initialSetupReady: false,
+      }),
+    ).toBe(true);
   });
 });

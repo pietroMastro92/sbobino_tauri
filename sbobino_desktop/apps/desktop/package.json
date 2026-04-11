@@ -11,7 +11,9 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "SBOBINO_RELEASE_PROFILE=${SBOBINO_RELEASE_PROFILE:-standalone-dev} tauri build",
+    "tauri:build:public": "SBOBINO_RELEASE_PROFILE=public tauri build",
+    "tauri:build:standalone-dev": "SBOBINO_RELEASE_PROFILE=standalone-dev tauri build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.3.0",

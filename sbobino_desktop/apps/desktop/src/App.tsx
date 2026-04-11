@@ -73,6 +73,7 @@ import {
   exportAppBackup,
   exportArtifact,
   fetchAiCapabilityStatus,
+  fetchRealtimeStartReadiness,
   fetchTranscriptionStartPreflight,
   fetchRuntimeHealth,
   fetchSettingsSnapshot,
@@ -109,6 +110,7 @@ import {
   subscribeProvisioningProgress,
   subscribeProvisioningStatus,
   subscribeRealtimeDelta,
+  subscribeRealtimeInputLevel,
   subscribeRealtimeSaved,
   subscribeRealtimeStatus,
   subscribeSettingsNavigate,
@@ -133,6 +135,7 @@ import {
   isInitialSetupComplete,
   isRuntimeToolchainReady,
   isProvisionedModelReady,
+  shouldBlockMainUiDuringStartup,
 } from "./lib/initialSetup";
 import {
   getArtifactDiarizationUiState,
@@ -180,6 +183,7 @@ import type {
   ProvisioningModelCatalogEntry,
   ProvisioningStatus,
   RealtimeDelta,
+  RealtimeInputLevelEvent,
   RemoteServiceConfig,
   RemoteServiceKind,
   RuntimeHealth,
@@ -2599,6 +2603,10 @@ export function App({
   );
   const [realtimeFinalLines, setRealtimeFinalLines] = useState<string[]>([]);
   const [realtimePreview, setRealtimePreview] = useState("");
+  const [realtimeInputLevels, setRealtimeInputLevels] = useState<number[]>([]);
+  const [realtimePreviewState, setRealtimePreviewState] = useState<
+    "idle" | "connecting" | "running" | "paused" | "blocked" | "unavailable"
+  >("idle");
   const [realtimeSessionOpen, setRealtimeSessionOpen] = useState(false);
   const [realtimeStartedAtMs, setRealtimeStartedAtMs] = useState<number | null>(
     null,
@@ -2623,11 +2631,6 @@ export function App({
   const [startupRequirementsError, setStartupRequirementsError] = useState<
     string | null
   >(null);
-  const [startupGateBypass, setStartupGateBypass] = useState(
-    () =>
-      !standaloneSettingsWindow &&
-      Boolean(initialBootstrap?.setupReport?.trusted_for_fast_start),
-  );
   const [initialSetupRunning, setInitialSetupRunning] = useState(false);
   const [initialSetupError, setInitialSetupError] = useState<string | null>(
     null,
@@ -2755,7 +2758,7 @@ export function App({
   const privacyPolicyAccepted = hasAcceptedCurrentPrivacyPolicy(settings);
   const warmStartEligible = canWarmStartFromSetupReport(
     privacyPolicyAccepted,
-    startupGateBypass ? initialBootstrap?.setupReport : null,
+    initialBootstrap?.setupReport ?? null,
   );
   const runtimeToolchainReady = isRuntimeToolchainReady(runtimeHealth);
   const initialSetupReady = isInitialSetupComplete(
@@ -3258,7 +3261,6 @@ export function App({
           setModelCatalog(initialModelCatalogResult.value);
         }
         if (warmStartEligible) {
-          setStartupGateBypass(true);
           setStartupRequirementsLoaded(true);
           setStartupRequirementsError(null);
         } else if (
@@ -3268,7 +3270,6 @@ export function App({
           initialProvisioningResult.status === "fulfilled" &&
           initialModelCatalogResult.status === "fulfilled"
         ) {
-          setStartupGateBypass(false);
           setStartupRequirementsLoaded(true);
           setStartupRequirementsError(null);
         }
@@ -3546,17 +3547,17 @@ export function App({
       return;
     }
 
+    if (warmStartEligible) {
+      setStartupRequirementsLoaded(true);
+      setStartupRequirementsError(null);
+      return;
+    }
+
     let cancelled = false;
-    let deferredDiagnosticsTimer: number | null = null;
     const runDiagnostics = () =>
       void (async () => {
         try {
-          const snapshot = await loadStartupRequirements();
-          if (!cancelled) {
-            setStartupGateBypass((current) =>
-              snapshot.runtimeHealth.setup_complete ? current : false,
-            );
-          }
+          await loadStartupRequirements();
         } catch (startupError) {
           if (!cancelled) {
             const formatted = formatUiError(
@@ -3564,27 +3565,16 @@ export function App({
               "Could not prepare local runtime requirements",
               startupError,
             );
-            if (warmStartEligible) {
-              setError(formatted);
-            } else {
-              setStartupRequirementsLoaded(false);
-              setStartupRequirementsError(formatted);
-            }
+            setStartupRequirementsLoaded(false);
+            setStartupRequirementsError(formatted);
           }
         }
       })();
 
-    if (warmStartEligible) {
-      deferredDiagnosticsTimer = window.setTimeout(runDiagnostics, 900);
-    } else {
-      runDiagnostics();
-    }
+    runDiagnostics();
 
     return () => {
       cancelled = true;
-      if (deferredDiagnosticsTimer !== null) {
-        window.clearTimeout(deferredDiagnosticsTimer);
-      }
     };
   }, [setError, settings, standaloneSettingsWindow, warmStartEligible]);
 
@@ -3703,6 +3693,7 @@ export function App({
     let unsubFailed: (() => void) | undefined;
     let unsubTranscriptionDelta: (() => void) | undefined;
     let unsubRealtimeDelta: (() => void) | undefined;
+    let unsubRealtimeInput: (() => void) | undefined;
     let unsubRealtimeStatus: (() => void) | undefined;
     let unsubRealtimeSaved: (() => void) | undefined;
     let unsubProvisioningProgress: (() => void) | undefined;
@@ -3926,14 +3917,53 @@ export function App({
         unsubRealtimeDelta = uRealtimeDelta;
       }
 
+      const uRealtimeInput = await subscribeRealtimeInputLevel(
+        (event: RealtimeInputLevelEvent) => {
+          if (event.state === "running") {
+            setRealtimePreviewState("running");
+            setRealtimeInputLevels((previous) => {
+              const next = [...previous, Math.max(0, Math.min(1, event.level ?? 0))];
+              return next.length > 160 ? next.slice(next.length - 160) : next;
+            });
+            return;
+          }
+
+          if (event.state === "paused") {
+            setRealtimePreviewState("paused");
+            return;
+          }
+
+          if (event.state === "connecting") {
+            setRealtimePreviewState("connecting");
+            return;
+          }
+
+          if (event.state === "blocked" || event.state === "unavailable") {
+            setRealtimePreviewState(event.state);
+            setRealtimeInputLevels([]);
+            return;
+          }
+
+          setRealtimePreviewState("idle");
+          setRealtimeInputLevels([]);
+        },
+      );
+      if (unmounted) {
+        uRealtimeInput();
+      } else {
+        unsubRealtimeInput = uRealtimeInput;
+      }
+
       const uRealtimeStatus = await subscribeRealtimeStatus((event) => {
         setRealtimeMessage(formatRealtimeStatusMessage(event.state));
         if (event.state === "running") {
           setRealtimeState("running");
         } else if (event.state === "paused") {
           setRealtimeState("paused");
+          setRealtimePreviewState("paused");
         } else {
           setRealtimeState("idle");
+          setRealtimePreviewState("idle");
         }
       });
       if (unmounted) {
@@ -4020,6 +4050,7 @@ export function App({
       unsubFailed?.();
       unsubTranscriptionDelta?.();
       unsubRealtimeDelta?.();
+      unsubRealtimeInput?.();
       unsubRealtimeStatus?.();
       unsubRealtimeSaved?.();
       unsubProvisioningProgress?.();
@@ -7453,6 +7484,23 @@ export function App({
     if (!settings) return;
 
     try {
+      setRealtimePreviewState("connecting");
+      setRealtimeInputLevels([]);
+
+      const readiness = await withTimeout(
+        fetchRealtimeStartReadiness({
+          model: settings.transcription.model,
+        }),
+        8_000,
+        t("error.preflightTimedOut", "Preflight timed out."),
+      );
+      if (!readiness.allowed) {
+        setError(
+          readiness.message || formatRuntimeNotReadyMessage(runtimeHealth),
+        );
+        return;
+      }
+
       const sessionTitle = buildLiveSessionTitle();
       setRealtimeFinalLines([]);
       setRealtimePreview("");
@@ -7485,6 +7533,8 @@ export function App({
     } catch (startError) {
       setRealtimeSessionOpen(false);
       setRealtimeStartedAtMs(null);
+      setRealtimePreviewState("idle");
+      setRealtimeInputLevels([]);
       setError(
         formatUiError(
           "error.realtimeStartFailed",
@@ -10688,6 +10738,8 @@ export function App({
                     "Live microphone waveform",
                   )}
                   mode={realtimeState}
+                  previewState={realtimePreviewState}
+                  levels={realtimeInputLevels}
                   elapsedSeconds={realtimeElapsedSeconds}
                   runningLabel={t("realtime.waveformRunning", "Mic live")}
                   pausedLabel={t("realtime.waveformPaused", "Preview paused")}
@@ -10851,6 +10903,8 @@ export function App({
                 "Live microphone waveform",
               )}
               mode={realtimeState}
+              previewState={realtimePreviewState}
+              levels={realtimeInputLevels}
               elapsedSeconds={realtimeElapsedSeconds}
               runningLabel={t("realtime.waveformRunning", "Mic live")}
               pausedLabel={t("realtime.waveformPaused", "Preview paused")}
@@ -13605,10 +13659,13 @@ export function App({
     );
   }
 
-  const shouldBlockMainUi =
-    !settings ||
-    !privacyPolicyAccepted ||
-    (!warmStartEligible && (!startupRequirementsLoaded || !initialSetupReady));
+  const shouldBlockMainUi = shouldBlockMainUiDuringStartup({
+    hasSettings: Boolean(settings),
+    privacyAccepted: privacyPolicyAccepted,
+    warmStartEligible,
+    startupRequirementsLoaded,
+    initialSetupReady,
+  });
 
   if (shouldBlockMainUi) {
     return renderStartupGate();

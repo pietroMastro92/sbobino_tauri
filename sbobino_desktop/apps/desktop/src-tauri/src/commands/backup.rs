@@ -350,7 +350,8 @@ async fn ensure_backup_idle(state: &AppState) -> Result<(), CommandError> {
                 .to_string(),
         )));
     }
-    if state.realtime.engine.is_running().await {
+    let realtime_engine = state.realtime.engine.lock().await.clone();
+    if realtime_engine.is_running().await {
         return Err(CommandError::from(ApplicationError::Validation(
             "stop the realtime recorder before exporting or importing a backup".to_string(),
         )));

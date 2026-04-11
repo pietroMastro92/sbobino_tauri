@@ -7,6 +7,7 @@ use tracing::warn;
 use sbobino_domain::{SpeechModel, TranscriptionEngine};
 use sbobino_infrastructure::{ManagedRuntimeHealth, PyannoteRuntimeHealth};
 
+use crate::realtime_audio::probe_input_device_name;
 use crate::{error::CommandError, state::AppState};
 
 #[derive(Debug, Clone, Serialize)]
@@ -55,6 +56,19 @@ pub struct StartPreflightResponse {
     pub whisper_cli_resolved: String,
     pub whisper_stream_resolved: String,
     pub pyannote: PyannoteRuntimeHealth,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RealtimeStartReadinessResponse {
+    pub allowed: bool,
+    pub reason_code: String,
+    pub message: String,
+    pub engine: String,
+    pub model_filename: String,
+    pub model_path: String,
+    pub ffmpeg_resolved: String,
+    pub whisper_stream_resolved: String,
+    pub input_device_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -167,27 +181,9 @@ fn runtime_toolchain_message(
     message
 }
 
-#[tauri::command]
-pub async fn ensure_transcription_runtime(
-    state: State<'_, AppState>,
-) -> Result<EnsureRuntimeResponse, CommandError> {
-    let health = state
-        .runtime_factory
-        .runtime_health()
-        .map_err(|e| CommandError::new("runtime_health", e))?;
-
-    if runtime_toolchain_ready(&health) {
-        return Ok(EnsureRuntimeResponse {
-            ready: true,
-            engine: "whisper_cpp".to_string(),
-            did_setup: false,
-            message: "Whisper.cpp runtime available.".to_string(),
-            ffmpeg_resolved: health.ffmpeg_resolved,
-            whisper_cli_resolved: health.whisper_cli_resolved,
-            whisper_stream_resolved: health.whisper_stream_resolved,
-        });
-    }
-
+async fn normalize_runtime_settings_for_whisper_cpp(
+    state: &AppState,
+) -> (bool, Option<String>) {
     let mut did_setup = false;
     let mut setup_note = None::<String>;
 
@@ -250,6 +246,32 @@ pub async fn ensure_transcription_runtime(
         }
     }
 
+    (did_setup, setup_note)
+}
+
+#[tauri::command]
+pub async fn ensure_transcription_runtime(
+    state: State<'_, AppState>,
+) -> Result<EnsureRuntimeResponse, CommandError> {
+    let health = state
+        .runtime_factory
+        .runtime_health()
+        .map_err(|e| CommandError::new("runtime_health", e))?;
+
+    if runtime_toolchain_ready(&health) {
+        return Ok(EnsureRuntimeResponse {
+            ready: true,
+            engine: "whisper_cpp".to_string(),
+            did_setup: false,
+            message: "Whisper.cpp runtime available.".to_string(),
+            ffmpeg_resolved: health.ffmpeg_resolved,
+            whisper_cli_resolved: health.whisper_cli_resolved,
+            whisper_stream_resolved: health.whisper_stream_resolved,
+        });
+    }
+
+    let (did_setup, setup_note) = normalize_runtime_settings_for_whisper_cpp(&state).await;
+
     let refreshed = state
         .runtime_factory
         .runtime_health()
@@ -275,6 +297,109 @@ pub async fn ensure_transcription_runtime(
         whisper_cli_resolved: refreshed.whisper_cli_resolved,
         whisper_stream_resolved: refreshed.whisper_stream_resolved,
     })
+}
+
+#[tauri::command]
+pub async fn get_realtime_start_readiness(
+    state: State<'_, AppState>,
+    payload: Option<StartPreflightPayload>,
+) -> Result<RealtimeStartReadinessResponse, CommandError> {
+    let _ = normalize_runtime_settings_for_whisper_cpp(&state).await;
+
+    let settings = state
+        .runtime_factory
+        .load_settings()
+        .map_err(|e| CommandError::new("settings", e))?;
+    let selected_model = payload
+        .as_ref()
+        .map(|value| value.model.clone())
+        .unwrap_or_else(|| settings.transcription.model.clone());
+    let live_health = state
+        .runtime_factory
+        .live_start_health(selected_model.clone())
+        .map_err(|e| CommandError::new("runtime_health", e))?;
+
+    let model_filename = selected_model.ggml_filename().to_string();
+    let model_path = PathBuf::from(&live_health.models_dir_resolved)
+    .join(&model_filename)
+    .to_string_lossy()
+    .to_string();
+
+    if !live_health.ffmpeg_available {
+        return Ok(RealtimeStartReadinessResponse {
+            allowed: false,
+            reason_code: "ffmpeg_missing".to_string(),
+            message: format!(
+                "FFmpeg is not runnable at '{}'. Repair the local runtime from Settings > Local Models.",
+                live_health.ffmpeg_resolved
+            ),
+            engine: "whisper_cpp".to_string(),
+            model_filename,
+            model_path,
+            ffmpeg_resolved: live_health.ffmpeg_resolved,
+            whisper_stream_resolved: live_health.whisper_stream_resolved,
+            input_device_name: None,
+        });
+    }
+
+    if !live_health.whisper_stream_available {
+        return Ok(RealtimeStartReadinessResponse {
+            allowed: false,
+            reason_code: "whisper_stream_missing".to_string(),
+            message: format!(
+                "Whisper Stream is not runnable at '{}'. Repair the local runtime from Settings > Local Models.",
+                live_health.whisper_stream_resolved
+            ),
+            engine: "whisper_cpp".to_string(),
+            model_filename,
+            model_path,
+            ffmpeg_resolved: live_health.ffmpeg_resolved,
+            whisper_stream_resolved: live_health.whisper_stream_resolved,
+            input_device_name: None,
+        });
+    }
+
+    if !live_health.model_present {
+        return Ok(RealtimeStartReadinessResponse {
+            allowed: false,
+            reason_code: "model_missing".to_string(),
+            message: format!(
+                "Model file '{}' was not found in '{}'. Download models from Settings > Local Models.",
+                model_filename, live_health.models_dir_resolved
+            ),
+            engine: "whisper_cpp".to_string(),
+            model_filename,
+            model_path,
+            ffmpeg_resolved: live_health.ffmpeg_resolved,
+            whisper_stream_resolved: live_health.whisper_stream_resolved,
+            input_device_name: None,
+        });
+    }
+
+    match probe_input_device_name() {
+        Ok(device_name) => Ok(RealtimeStartReadinessResponse {
+            allowed: true,
+            reason_code: "ok".to_string(),
+            message: "Realtime start readiness passed.".to_string(),
+            engine: "whisper_cpp".to_string(),
+            model_filename,
+            model_path,
+            ffmpeg_resolved: live_health.ffmpeg_resolved,
+            whisper_stream_resolved: live_health.whisper_stream_resolved,
+            input_device_name: Some(device_name),
+        }),
+        Err(error) => Ok(RealtimeStartReadinessResponse {
+            allowed: false,
+            reason_code: error.reason_code,
+            message: error.message,
+            engine: "whisper_cpp".to_string(),
+            model_filename,
+            model_path,
+            ffmpeg_resolved: live_health.ffmpeg_resolved,
+            whisper_stream_resolved: live_health.whisper_stream_resolved,
+            input_device_name: None,
+        }),
+    }
 }
 
 #[tauri::command]

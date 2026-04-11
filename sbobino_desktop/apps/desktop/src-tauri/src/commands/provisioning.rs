@@ -786,6 +786,7 @@ pub async fn read_setup_report(
         )
     })?;
     report.trusted_for_fast_start = report.build_version.trim() == env!("CARGO_PKG_VERSION")
+        && report.privacy_accepted
         && report.setup_complete
         && report
             .final_error

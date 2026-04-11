@@ -396,6 +396,12 @@ export type RealtimeStatusEvent = {
   message: string;
 };
 
+export type RealtimeInputLevelEvent = {
+  state: string;
+  level: number;
+  message: string;
+};
+
 export type ProvisioningStatus = {
   ready: boolean;
   models_dir: string;
@@ -480,6 +486,18 @@ export type TranscriptionStartPreflight = {
   whisper_cli_resolved: string;
   whisper_stream_resolved: string;
   pyannote: PyannoteRuntimeHealth;
+};
+
+export type RealtimeStartReadiness = {
+  allowed: boolean;
+  reason_code: string;
+  message: string;
+  engine: TranscriptionEngine;
+  model_filename: string;
+  model_path: string;
+  ffmpeg_resolved: string;
+  whisper_stream_resolved: string;
+  input_device_name: string | null;
 };
 
 export type PyannoteRuntimeHealth = {

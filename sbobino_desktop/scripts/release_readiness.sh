@@ -284,6 +284,60 @@ if pyvenv_cfg.exists():
                 f"Pyannote runtime asset still contains machine-specific pyvenv.cfg paths ({forbidden})."
             )
 
+torchcodec_dir = stdlib_dirs[0] / "site-packages" / "torchcodec"
+if torchcodec_dir.is_dir():
+    binaries = sorted(
+        list(torchcodec_dir.glob("libtorchcodec_core*.dylib"))
+        + list(torchcodec_dir.glob("libtorchcodec_custom_ops*.dylib"))
+        + list(torchcodec_dir.glob("libtorchcodec_pybind_ops*.so"))
+    )
+    for binary in binaries:
+        deps = subprocess.run(
+            ["/usr/bin/otool", "-L", str(binary)],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        ).stdout
+        for line in deps.splitlines()[1:]:
+            dep = line.strip().split(" ", 1)[0]
+            if dep.startswith("/opt/homebrew") or dep.startswith("/usr/local"):
+                raise SystemExit(
+                    f"Pyannote runtime asset still links torchcodec against a host path: {binary} -> {dep}"
+                )
+
+        rpath_output = subprocess.run(
+            ["/usr/bin/otool", "-l", str(binary)],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        ).stdout
+        previous = ""
+        for line in rpath_output.splitlines():
+            stripped = line.strip()
+            if previous == "cmd LC_RPATH" and stripped.startswith("path "):
+                rpath = stripped.split("path ", 1)[1].split(" (offset ", 1)[0]
+                if rpath.startswith("/opt/homebrew") or rpath.startswith("/usr/local"):
+                    raise SystemExit(
+                        f"Pyannote runtime asset still exposes a host LC_RPATH: {binary} -> {rpath}"
+                    )
+            previous = stripped
+
+    for name in (
+        "libavutil.60.dylib",
+        "libavcodec.62.dylib",
+        "libavformat.62.dylib",
+        "libavdevice.62.dylib",
+        "libavfilter.11.dylib",
+        "libswscale.9.dylib",
+        "libswresample.6.dylib",
+    ):
+        if not (torchcodec_dir / ".dylibs" / name).exists():
+            raise SystemExit(
+                f"Pyannote runtime asset is missing bundled TorchCodec FFmpeg library: {torchcodec_dir / '.dylibs' / name}"
+            )
+
 env = {
     "PATH": "/usr/bin:/bin",
     "PYTHONHOME": str(root),
@@ -408,6 +462,7 @@ cargo test -p sbobino-infrastructure managed_runtime_accepts_slow_whisper_cli_co
 cargo test -p sbobino-infrastructure managed_runtime_accepts_slow_whisper_stream_cold_start
 cargo test -p sbobino-infrastructure public_runtime_health_requires_managed_runtime_binaries
 cargo test -p sbobino-infrastructure public_runtime_health_ignores_configured_host_binaries
+cargo test -p sbobino-infrastructure runtime_health_trusts_cached_ready_pyannote_status_on_warm_start
 cargo test -p sbobino-desktop install_pyannote_archive_extracts_expected_root
 cargo test -p sbobino-desktop verify_file_sha256_rejects_wrong_checksum
 cargo test -p sbobino-desktop validate_setup_manifest_rejects_mismatched_release_tag
@@ -424,6 +479,11 @@ if [[ -n "$APP_PATH" ]]; then
   APP_EXEC="$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME"
   if [[ ! -x "$APP_EXEC" ]]; then
     echo "App executable missing at '$APP_EXEC'." >&2
+    exit 1
+  fi
+
+  if ! /usr/libexec/PlistBuddy -c "Print :NSMicrophoneUsageDescription" "$APP_PATH/Contents/Info.plist" >/dev/null 2>&1; then
+    echo "Bundled app is missing NSMicrophoneUsageDescription in Info.plist." >&2
     exit 1
   fi
 

@@ -30,6 +30,24 @@ need_cmd python3
 need_cmd shasum
 need_cmd ditto
 
+RELEASE_API_URL="https://api.github.com/repos/$REPO_SLUG/releases/tags/$TAG"
+
+python3 - "$RELEASE_API_URL" <<'PY'
+import json
+import sys
+import urllib.request
+
+url = sys.argv[1]
+request = urllib.request.Request(url, headers={"User-Agent": "sbobino-distribution-readiness"})
+with urllib.request.urlopen(request) as response:
+    release = json.load(response)
+
+if not release.get("prerelease", False):
+    raise SystemExit(
+        "distribution_readiness.sh only validates candidate prereleases. Promote to stable only after this gate passes on a prerelease."
+    )
+PY
+
 ASSETS=(
   "Sbobino_${VERSION}_aarch64.dmg"
   "Sbobino.app.tar.gz"
@@ -213,10 +231,70 @@ mkdir -p "$PYANNOTE_SMOKE_DIR"
 /usr/bin/ditto -x -k "$TEMP_DIR/pyannote-runtime-macos-aarch64.zip" "$PYANNOTE_SMOKE_DIR"
 
 PATH="/usr/bin:/bin" \
+PYANNOTE_RUNTIME_ROOT="$PYANNOTE_SMOKE_DIR/python" \
 PYTHONHOME="$PYANNOTE_SMOKE_DIR/python" \
 PYTHONPATH="$PYANNOTE_SMOKE_DIR/python/lib/python3.11:$PYANNOTE_SMOKE_DIR/python/lib/python3.11/lib-dynload:$PYANNOTE_SMOKE_DIR/python/lib/python3.11/site-packages" \
 PYTHONNOUSERSITE="1" \
 "$PYANNOTE_SMOKE_DIR/python/bin/python3" - <<'PY'
+import os
+import pathlib
+import subprocess
+
+root = pathlib.Path(os.environ["PYANNOTE_RUNTIME_ROOT"])
+torchcodec_dir = root / "lib" / "python3.11" / "site-packages" / "torchcodec"
+if torchcodec_dir.is_dir():
+    binaries = sorted(
+        list(torchcodec_dir.glob("libtorchcodec_core*.dylib"))
+        + list(torchcodec_dir.glob("libtorchcodec_custom_ops*.dylib"))
+        + list(torchcodec_dir.glob("libtorchcodec_pybind_ops*.so"))
+    )
+    for binary in binaries:
+        deps = subprocess.run(
+            ["/usr/bin/otool", "-L", str(binary)],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        ).stdout
+        for line in deps.splitlines()[1:]:
+            dep = line.strip().split(" ", 1)[0]
+            if dep.startswith("/opt/homebrew") or dep.startswith("/usr/local"):
+                raise SystemExit(
+                    f"Remote pyannote runtime still links torchcodec against a host path: {binary} -> {dep}"
+                )
+
+        rpath_output = subprocess.run(
+            ["/usr/bin/otool", "-l", str(binary)],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        ).stdout
+        previous = ""
+        for line in rpath_output.splitlines():
+            stripped = line.strip()
+            if previous == "cmd LC_RPATH" and stripped.startswith("path "):
+                rpath = stripped.split("path ", 1)[1].split(" (offset ", 1)[0]
+                if rpath.startswith("/opt/homebrew") or rpath.startswith("/usr/local"):
+                    raise SystemExit(
+                        f"Remote pyannote runtime still exposes a host LC_RPATH: {binary} -> {rpath}"
+                    )
+            previous = stripped
+
+    for name in (
+        "libavutil.60.dylib",
+        "libavcodec.62.dylib",
+        "libavformat.62.dylib",
+        "libavdevice.62.dylib",
+        "libavfilter.11.dylib",
+        "libswscale.9.dylib",
+        "libswresample.6.dylib",
+    ):
+        if not (torchcodec_dir / ".dylibs" / name).exists():
+            raise SystemExit(
+                f"Remote pyannote runtime is missing bundled TorchCodec FFmpeg library: {torchcodec_dir / '.dylibs' / name}"
+            )
+
 import collections.abc
 import ctypes
 import csv

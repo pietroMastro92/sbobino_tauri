@@ -90,6 +90,21 @@ impl WhisperStreamEngine {
         candidates.pop()
     }
 
+    async fn await_saved_audio_path(session_dir: Option<&Path>) -> Option<PathBuf> {
+        let session_dir = session_dir?;
+
+        for attempt in 0..10 {
+            if let Some(path) = Self::find_saved_audio_path(session_dir) {
+                return Some(path);
+            }
+            if attempt < 9 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+
+        None
+    }
+
     fn process_is_alive(pid: u32) -> bool {
         std::process::Command::new("kill")
             .arg("-0")
@@ -103,8 +118,16 @@ impl WhisperStreamEngine {
         Path::new(&self.models_dir).join(model_filename)
     }
 
-    fn shell_quote(value: &str) -> String {
-        format!("'{}'", value.replace('\'', r"'\''"))
+    fn runtime_bin_dir(&self) -> Option<PathBuf> {
+        PathBuf::from(&self.binary_path).parent().map(PathBuf::from)
+    }
+
+    fn runtime_lib_dir(&self) -> Option<PathBuf> {
+        let bin_dir = self.runtime_bin_dir()?;
+        if bin_dir.file_name().and_then(|name| name.to_str()) != Some("bin") {
+            return None;
+        }
+        bin_dir.parent().map(|parent| parent.join("lib"))
     }
 
     fn clean_line(line: &str) -> String {
@@ -313,33 +336,35 @@ impl WhisperStreamEngine {
         }
 
         let session_dir = Self::create_session_dir()?;
-        let mut args = vec![
-            Self::shell_quote(&self.binary_path),
-            "-m".to_string(),
-            Self::shell_quote(&model_path.to_string_lossy()),
-            "-t".to_string(),
-            "8".to_string(),
-            "--step".to_string(),
-            "500".to_string(),
-            "--length".to_string(),
-            "5000".to_string(),
-            "--save-audio".to_string(),
-        ];
-
-        if language_code != "auto" {
-            args.push("-l".to_string());
-            args.push(Self::shell_quote(language_code));
-        }
-
-        let merged_command = format!("exec {} 2>&1", args.join(" "));
-
-        let mut command = Command::new("/bin/sh");
+        let mut command = Command::new(&self.binary_path);
         command
             .kill_on_drop(true)
-            .arg("-c")
-            .arg(merged_command)
+            .arg("-m")
+            .arg(&model_path)
+            .arg("-t")
+            .arg("8")
+            .arg("--step")
+            .arg("500")
+            .arg("--length")
+            .arg("5000")
+            .arg("--save-audio")
             .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
             .current_dir(&session_dir);
+
+        if language_code != "auto" {
+            command.arg("-l").arg(language_code);
+        }
+
+        if let Some(bin_dir) = self.runtime_bin_dir() {
+            command.env("PATH", format!("{}:/usr/bin:/bin", bin_dir.display()));
+        }
+
+        if let Some(lib_dir) = self.runtime_lib_dir().filter(|path| path.is_dir()) {
+            command
+                .env("DYLD_LIBRARY_PATH", &lib_dir)
+                .env("DYLD_FALLBACK_LIBRARY_PATH", &lib_dir);
+        }
 
         let mut child = command.spawn().map_err(|e| {
             ApplicationError::SpeechToText(format!(
@@ -351,19 +376,21 @@ impl WhisperStreamEngine {
         let stdout = child.stdout.take().ok_or_else(|| {
             ApplicationError::SpeechToText("missing realtime stdout pipe".to_string())
         })?;
+        let stderr = child.stderr.take().ok_or_else(|| {
+            ApplicationError::SpeechToText("missing realtime stderr pipe".to_string())
+        })?;
         state.child = Some(child);
         state.reader_tasks.clear();
-        state.active_readers = 1;
+        state.active_readers = 2;
         state.running = true;
         state.paused = false;
         state.session_dir = Some(session_dir);
         drop(state);
 
-        let reader_tasks = vec![Self::spawn_reader_task(
-            self.state.clone(),
-            stdout,
-            emit_delta,
-        )];
+        let reader_tasks = vec![
+            Self::spawn_reader_task(self.state.clone(), stdout, emit_delta.clone()),
+            Self::spawn_reader_task(self.state.clone(), stderr, emit_delta),
+        ];
 
         let mut state = self.state.lock().await;
         state.reader_tasks = reader_tasks;
@@ -428,7 +455,7 @@ impl WhisperStreamEngine {
         }
 
         for mut task in reader_tasks {
-            if timeout(Duration::from_millis(200), &mut task)
+            if timeout(Duration::from_millis(800), &mut task)
                 .await
                 .is_err()
             {
@@ -445,7 +472,8 @@ impl WhisperStreamEngine {
 
         let session_dir = state.session_dir.take();
         let consolidated = state.lines.join("\n");
-        let saved_audio_path = session_dir.as_deref().and_then(Self::find_saved_audio_path);
+        drop(state);
+        let saved_audio_path = Self::await_saved_audio_path(session_dir.as_deref()).await;
 
         Ok(WhisperStreamStopResult {
             transcript: consolidated,

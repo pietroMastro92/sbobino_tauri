@@ -12,7 +12,39 @@ use sbobino_domain::{
     ArtifactKind, ArtifactSourceOrigin, LanguageCode, SpeechModel, TranscriptArtifact,
 };
 
+use crate::realtime_audio::start_input_preview;
 use crate::{error::CommandError, state::AppState};
+
+fn resolve_realtime_engine(
+    state: &AppState,
+) -> Result<sbobino_infrastructure::adapters::whisper_stream::WhisperStreamEngine, CommandError> {
+    match state.runtime_factory.build_whisper_stream_engine() {
+        Ok(engine) => Ok(engine),
+        Err(error) => {
+            if state.runtime_factory.managed_runtime_required() {
+                return Err(CommandError::from(ApplicationError::SpeechToText(error)));
+            }
+
+            let settings = state
+                .runtime_factory
+                .load_settings()
+                .map_err(|load_error| CommandError::new("settings", load_error))?;
+            let whisper_stream_path = state.runtime_factory.resolve_binary_path(
+                &settings.transcription.whisperkit_cli_path,
+                "whisper-stream",
+            );
+            let models_dir = state
+                .runtime_factory
+                .resolve_models_dir(&settings.transcription.models_dir);
+            Ok(
+                sbobino_infrastructure::adapters::whisper_stream::WhisperStreamEngine::new(
+                    whisper_stream_path,
+                    models_dir,
+                ),
+            )
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct StartRealtimePayload {
@@ -45,6 +77,24 @@ pub struct RealtimeStatusEvent {
     pub message: String,
 }
 
+async fn stop_realtime_preview(app: &tauri::AppHandle, state: &AppState, final_state: &str, message: &str) {
+    if let Some(preview) = state.realtime.preview.lock().await.take() {
+        preview.stop(app, final_state, message);
+    }
+}
+
+async fn start_realtime_preview(
+    app: &tauri::AppHandle,
+    state: &AppState,
+) -> Result<(), CommandError> {
+    stop_realtime_preview(app, state, "idle", "Microphone preview reset.").await;
+    let preview = start_input_preview(app).map_err(|error| {
+        CommandError::from(ApplicationError::SpeechToText(error.message))
+    })?;
+    *state.realtime.preview.lock().await = Some(preview);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn start_realtime(
     app: tauri::AppHandle,
@@ -67,6 +117,14 @@ pub async fn start_realtime(
     let model = payload.model.unwrap_or(default_model);
     let language = payload.language.unwrap_or(default_language);
 
+    let engine = resolve_realtime_engine(&state)?;
+    {
+        let mut current_engine = state.realtime.engine.lock().await;
+        *current_engine = engine.clone();
+    }
+
+    start_realtime_preview(&app, &state).await?;
+
     if let Some(id) = &payload.resume_artifact_id {
         let artifact = state
             .artifact_service
@@ -75,14 +133,10 @@ pub async fn start_realtime(
             .map_err(CommandError::from)?
             .ok_or_else(|| CommandError::new("not_found", "realtime session not found"))?;
 
-        state
-            .realtime
-            .engine
-            .seed_buffer(&artifact.raw_transcript)
-            .await;
+        engine.seed_buffer(&artifact.raw_transcript).await;
         *state.realtime.session_name.lock().await = Some(artifact.title.clone());
     } else {
-        state.realtime.engine.reset().await;
+        engine.reset().await;
         *state.realtime.session_name.lock().await = None;
     }
 
@@ -94,20 +148,28 @@ pub async fn start_realtime(
         let _ = app_handle.emit("realtime://delta", delta);
     });
 
-    state
-        .realtime
-        .engine
+    if let Err(error) = engine
         .start(
             model.ggml_filename(),
             language.as_whisper_code(),
             emit_delta,
         )
         .await
-        .map_err(CommandError::from)?;
+    {
+        stop_realtime_preview(&app, &state, "idle", "Microphone preview stopped.").await;
+        return Err(CommandError::from(error));
+    }
 
     sleep(Duration::from_millis(350)).await;
-    if !state.realtime.engine.is_running().await {
-        let diagnostics = state.realtime.engine.snapshot_diagnostics().await;
+    if !engine.is_running().await {
+        stop_realtime_preview(
+            &app,
+            &state,
+            "idle",
+            "Microphone preview stopped.",
+        )
+        .await;
+        let diagnostics = engine.snapshot_diagnostics().await;
         let detail = if diagnostics.is_empty() {
             "Realtime transcription stopped immediately. Verify microphone access and that at least one audio input device is available.".to_string()
         } else {
@@ -132,12 +194,9 @@ pub async fn pause_realtime(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
-    state
-        .realtime
-        .engine
-        .pause()
-        .await
-        .map_err(CommandError::from)?;
+    let engine = state.realtime.engine.lock().await.clone();
+    engine.pause().await.map_err(CommandError::from)?;
+    stop_realtime_preview(&app, &state, "paused", "Microphone preview paused.").await;
 
     let _ = app.emit(
         "realtime://status",
@@ -155,12 +214,9 @@ pub async fn resume_realtime(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
-    state
-        .realtime
-        .engine
-        .resume()
-        .await
-        .map_err(CommandError::from)?;
+    let engine = state.realtime.engine.lock().await.clone();
+    start_realtime_preview(&app, &state).await?;
+    engine.resume().await.map_err(CommandError::from)?;
 
     let _ = app.emit(
         "realtime://status",
@@ -186,12 +242,9 @@ pub async fn stop_realtime(
     });
     let save = payload.save.unwrap_or(true);
 
-    let stop_result = state
-        .realtime
-        .engine
-        .stop()
-        .await
-        .map_err(CommandError::from)?;
+    let engine = state.realtime.engine.lock().await.clone();
+    let stop_result = engine.stop().await.map_err(CommandError::from)?;
+    stop_realtime_preview(&app, &state, "idle", "Microphone preview stopped.").await;
 
     let _ = app.emit(
         "realtime://status",
@@ -329,11 +382,8 @@ pub async fn load_realtime_session(
         .map_err(CommandError::from)?;
 
     if let Some(item) = &artifact {
-        state
-            .realtime
-            .engine
-            .seed_buffer(&item.raw_transcript)
-            .await;
+        let engine = state.realtime.engine.lock().await.clone();
+        engine.seed_buffer(&item.raw_transcript).await;
         *state.realtime.session_name.lock().await = Some(item.title.clone());
     }
 

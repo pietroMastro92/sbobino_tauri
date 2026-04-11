@@ -1,6 +1,7 @@
 mod ai_support;
 mod commands;
 mod error;
+mod realtime_audio;
 mod release_assets;
 mod state;
 
@@ -30,7 +31,7 @@ use crate::commands::realtime::{
     stop_realtime,
 };
 use crate::commands::runtime::{
-    ensure_transcription_runtime, get_transcription_runtime_health,
+    ensure_transcription_runtime, get_realtime_start_readiness, get_transcription_runtime_health,
     get_transcription_start_preflight,
 };
 use crate::commands::settings::{
@@ -109,7 +110,8 @@ pub fn run() {
                 runtime_factory: bundle.runtime_factory,
                 transcription_tasks: Arc::new(Mutex::new(HashMap::new())),
                 realtime: RealtimeRuntime {
-                    engine: realtime_engine,
+                    engine: Arc::new(Mutex::new(realtime_engine)),
+                    preview: Arc::new(Mutex::new(None)),
                     session_name: Arc::new(Mutex::new(None)),
                     model_filename: Arc::new(Mutex::new(None)),
                     language_code: Arc::new(Mutex::new("auto".to_string())),
@@ -174,6 +176,7 @@ pub fn run() {
             read_setup_report,
             write_setup_report,
             ensure_transcription_runtime,
+            get_realtime_start_readiness,
             get_transcription_runtime_health,
             get_transcription_start_preflight,
             check_updates,

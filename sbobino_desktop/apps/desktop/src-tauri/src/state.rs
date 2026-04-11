@@ -7,13 +7,16 @@ use sbobino_infrastructure::{
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
+use crate::realtime_audio::RealtimeInputPreviewHandle;
+
 pub struct TranscriptionTask {
     pub cancel_token: CancellationToken,
 }
 
 #[derive(Clone)]
 pub struct RealtimeRuntime {
-    pub engine: WhisperStreamEngine,
+    pub engine: Arc<Mutex<WhisperStreamEngine>>,
+    pub preview: Arc<Mutex<Option<RealtimeInputPreviewHandle>>>,
     pub session_name: Arc<Mutex<Option<String>>>,
     pub model_filename: Arc<Mutex<Option<String>>>,
     pub language_code: Arc<Mutex<String>>,

@@ -1,92 +1,96 @@
 # Sbobino Tauri
 
-Sbobino Tauri is a modern desktop transcription workspace built with **Tauri v2, Rust, React, and TypeScript**.
+Sbobino Tauri is a desktop workspace for turning lessons, meetings, interviews, and voice notes into structured, usable knowledge.
 
-It started as a full rewrite of the original Python-based Sbobino application and evolved into a cleaner, faster, and more maintainable desktop product focused on one goal: turning long audio into structured, useful knowledge with a polished native-style experience.
+Built with **Tauri v2, Rust, React, and TypeScript**, it combines **local-first transcription**, **speaker-aware processing**, and **AI-assisted post-processing** in a native-style desktop app designed for real study and work workflows.
 
-## Why This Project Exists
+## Who It Is For
+
+Sbobino is especially useful for:
+
+- **Students** who need to turn lectures, oral explanations, and recorded study sessions into clean notes, summaries, and exportable material
+- **Professionals** who want to capture meetings, interviews, calls, or brainstorming sessions and turn them into structured outputs, action-oriented summaries, and searchable knowledge
+- **Knowledge workers** who need a practical bridge between raw audio and documents they can actually reuse
+
+## Why It Matters
 
 Most transcription tools stop at raw text.
 
-Sbobino Tauri is designed to go further:
+Sbobino is built to go further:
 
-- transcribe audio locally
-- refine and optimize transcripts
-- generate summaries and FAQs
-- chat with the transcript
-- export content in multiple professional formats
-- manage recordings, trims, history, and speaker-aware segments from a single desktop app
+- capture audio and generate a transcript
+- improve and refine transcript quality
+- summarize long conversations into useful takeaways
+- ask questions directly on transcript content
+- manage speaker-aware segments
+- export professional outputs for study, reporting, or documentation
 
-The project combines **local-first transcription workflows** with **AI-assisted post-processing**, while keeping the architecture robust enough for long-term product development.
+The goal is simple: reduce the time between “I recorded something important” and “I now have material I can study, share, or work from.”
 
-## Highlights
+## Core Capabilities
 
-- **Native desktop experience**
-  Built with Tauri for a lightweight desktop shell and a polished, app-like interface.
+### Local-first transcription
 
-- **Fast local transcription**
-  Uses Whisper-based runtime adapters with strong Rust orchestration and progress tracking.
+- Transcribe local audio files in a desktop workflow
+- Track progress live while jobs are running
+- Manage active, queued, and completed transcriptions
+- Reopen and continue working on previous transcripts from history
 
-- **AI-assisted workflow**
-  Improve transcript quality, generate summaries, FAQs, and ask questions directly about the conversation.
+### Transcript improvement
 
-- **Trim and retranscribe**
-  Cut a specific part of an audio recording and generate a focused transcript from that region.
+- Refine transcript wording with AI-assisted post-processing
+- Switch between original and optimized transcript versions
+- Trim audio and generate focused child transcripts from specific regions
 
-- **Segment-aware transcript view**
-  Work with timestamped segments, optional speaker labels, and grouped transcript structures.
+### Study and work outputs
 
-- **Speaker diarization support**
-  Offline pyannote-based speaker assignment can enrich timeline metadata when the local assets are installed.
+- Generate structured summaries from long recordings
+- Produce FAQs and supporting transcript-derived artifacts
+- Chat with the transcript to extract facts, clarify points, or recover context
+- Keep output aligned with the prompt language and selected formatting behavior
 
-- **Professional export system**
-  Export transcript content, subtitles, or segments in formats such as `txt`, `docx`, `html`, `pdf`, `md`, `csv`, `json`, `srt`, and `vtt`, depending on the selected export mode.
+### Speaker-aware workflow
 
-- **Summary and AI chat controls**
-  Language, timestamps, speakers, sections, bullet points, action items, and prompt behavior are wired into the actual final result.
+- Browse timestamped segments
+- Assign and manage speaker labels
+- Use local pyannote diarization when runtime assets are installed
+- Keep transcript structure easier to review for lessons, meetings, and interviews
 
-- **History, queue, and artifact management**
-  Track active jobs, browse previous transcripts, rename artifacts, restore deleted items, and continue working without losing context.
+### Professional export
 
-## What The App Can Do
+- Export in formats such as `txt`, `docx`, `html`, `pdf`, `md`, `csv`, `json`, `srt`, and `vtt`
+- Export full transcripts, subtitles, or segment-oriented documents
+- Include summaries and FAQs in exported outputs when available
 
-### Transcription
+## Practical Use Cases
 
-- Start transcriptions from local audio files
-- See live progress while transcription is running
-- Cancel active jobs
-- Reopen previous transcripts from history
-- Manage a queue of in-progress and completed jobs
+### For students
 
-### Transcript Editing
+- Turn lectures into readable notes
+- Create study summaries after class
+- Recover key explanations from long recordings
+- Export clean material for revision and sharing
 
-- Rename a transcription
-- Improve transcript wording with AI
-- Switch between original and optimized transcript when an optimized version exists
-- Trim audio and create focused child transcripts
+### For work
 
-### AI Features
+- Turn meetings into structured notes
+- Capture interviews and conversations with better traceability
+- Generate summaries, FAQs, and working documents faster
+- Keep a searchable local archive of spoken knowledge
 
-- Generate structured summaries
-- Control summary language and formatting behavior
-- Generate FAQs from transcript content
-- Use AI chat against transcript context
-- Keep the response language aligned with the language of the user prompt
+## Product Principles
 
-### Segments and Speakers
+- **Local-first where it matters**
+  Runtime assets and transcription workflows are designed to run locally on the machine.
 
-- Browse transcript segments with timestamps
-- Assign speakers to timeline segments
-- Propagate speaker labels to adjacent unlabeled segments
-- Group unlabeled segments for easier reading
+- **Useful beyond transcription**
+  The app is meant to transform recordings into outputs that support studying, reporting, and decision-making.
 
-### Export
+- **Desktop-native experience**
+  Tauri keeps the app lightweight while Rust handles orchestration, runtime integration, and reliability-sensitive flows.
 
-- Export complete transcript documents
-- Export subtitle files
-- Export segment-oriented documents
-- Include transcript-derived assets like summaries and FAQs in the final exported document when available
-- Generate more informative exported document titles based on the transcription title and selected language
+- **Structured architecture**
+  The codebase is organized for maintainability, long-term iteration, and production-grade desktop evolution.
 
 ## Architecture
 
@@ -94,20 +98,14 @@ The project is organized as a Rust workspace with a clean layered structure:
 
 - `sbobino_desktop/crates/domain`
   Core business entities and rules
-
 - `sbobino_desktop/crates/application`
   Use cases, orchestration, and ports
-
 - `sbobino_desktop/crates/infrastructure`
   Adapters for transcription engines, AI providers, persistence, and runtime integration
-
 - `sbobino_desktop/apps/desktop`
   React + TypeScript frontend
-
 - `sbobino_desktop/apps/desktop/src-tauri`
   Tauri command layer and desktop runtime composition
-
-This separation keeps domain logic independent from UI and external services, making the codebase easier to test, evolve, and maintain.
 
 ## Repository Layout
 
@@ -134,7 +132,7 @@ This separation keeps domain logic independent from UI and external services, ma
 - npm
 - macOS recommended for the current desktop workflow
 
-### Run The App
+### Run the app
 
 ```bash
 cd sbobino_desktop/apps/desktop
@@ -142,15 +140,13 @@ npm ci
 npm run tauri:dev
 ```
 
-### Runtime Setup
+### Runtime setup
 
 From the `sbobino_desktop` workspace root:
 
 ```bash
 ./scripts/setup_runtime.sh
 ```
-
-This prepares the local transcription runtime for a first run.
 
 Optional:
 
@@ -182,25 +178,8 @@ Useful technical references live inside `sbobino_desktop/docs`:
 - [Architecture](./sbobino_desktop/docs/architecture.md)
 - [Release and migration notes](./sbobino_desktop/docs/release-and-migration.md)
 - [Feature migration matrix](./sbobino_desktop/docs/feature-migration-matrix.md)
-
-The more technical workspace README is available here:
-
 - [Workspace README](./sbobino_desktop/README.md)
-
-## Project Direction
-
-Sbobino Tauri is not just a straight port from an older application.
-
-It is a product-focused rewrite aimed at:
-
-- better UX
-- stronger desktop performance
-- cleaner architecture
-- local-first control over transcription workflows
-- richer AI-assisted output on top of raw transcripts
 
 ## Status
 
-The project already includes a substantial end-to-end desktop workflow covering transcription, trimming, export, AI summaries, AI chat, and speaker-aware segment handling.
-
-It is actively evolving as a serious desktop product rather than a prototype migration.
+Sbobino Tauri is evolving as a serious desktop product for people who need to turn spoken content into usable knowledge quickly, clearly, and with more control than a generic transcription tool.

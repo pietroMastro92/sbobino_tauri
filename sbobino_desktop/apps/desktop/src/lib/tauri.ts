@@ -18,6 +18,8 @@ import type {
   ProvisioningModelCatalogEntry,
   ProvisioningStatus,
   RealtimeDelta,
+  RealtimeInputLevelEvent,
+  RealtimeStartReadiness,
   RealtimeStatusEvent,
   RuntimeHealth,
   StartTranscriptionPayload,
@@ -336,6 +338,12 @@ export async function ensureTranscriptionRuntime(): Promise<EnsureRuntimeRespons
   return invoke<EnsureRuntimeResponse>("ensure_transcription_runtime");
 }
 
+export async function fetchRealtimeStartReadiness(payload: {
+  model: StartTranscriptionPayload["model"];
+}): Promise<RealtimeStartReadiness> {
+  return invoke<RealtimeStartReadiness>("get_realtime_start_readiness", { payload });
+}
+
 export async function fetchTranscriptionStartPreflight(payload: {
   model: StartTranscriptionPayload["model"];
 }): Promise<TranscriptionStartPreflight> {
@@ -445,6 +453,15 @@ export async function subscribeRealtimeStatus(
 ): Promise<() => void> {
   const unlisten = await listen<RealtimeStatusEvent>("realtime://status", (event) => {
     onStatus(event.payload);
+  });
+  return unlisten;
+}
+
+export async function subscribeRealtimeInputLevel(
+  onLevel: (payload: RealtimeInputLevelEvent) => void,
+): Promise<() => void> {
+  const unlisten = await listen<RealtimeInputLevelEvent>("realtime://input_level", (event) => {
+    onLevel(event.payload);
   });
   return unlisten;
 }

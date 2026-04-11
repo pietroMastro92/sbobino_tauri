@@ -130,9 +130,34 @@ export function canWarmStartFromSetupReport(
   return (
     report.setup_complete &&
     !report.final_error &&
-    report.final_reason_code === "setup_complete" &&
-    Boolean(report.runtime_health?.setup_complete)
+    report.final_reason_code === "setup_complete"
   );
+}
+
+export function shouldBlockMainUiDuringStartup(payload: {
+  hasSettings: boolean;
+  privacyAccepted: boolean;
+  warmStartEligible: boolean;
+  startupRequirementsLoaded: boolean;
+  initialSetupReady: boolean;
+}): boolean {
+  const {
+    hasSettings,
+    privacyAccepted,
+    warmStartEligible,
+    startupRequirementsLoaded,
+    initialSetupReady,
+  } = payload;
+
+  if (!hasSettings || !privacyAccepted) {
+    return true;
+  }
+
+  if (warmStartEligible) {
+    return false;
+  }
+
+  return !startupRequirementsLoaded || !initialSetupReady;
 }
 
 export function isRuntimeToolchainReady(

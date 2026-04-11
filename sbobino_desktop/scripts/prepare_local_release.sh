@@ -6,11 +6,17 @@ usage() {
 Usage: prepare_local_release.sh <version> [output-dir]
 
 Builds and validates a macOS Apple Silicon release entirely on the local machine.
-It does not create tags, push commits, or publish anything to GitHub.
+It produces a candidate release folder only. It does not create tags, push
+commits, or publish anything to GitHub.
 
 Optional environment variables:
   SBOBINO_RELEASE_PROFILE               Build profile: public (default) or standalone-dev.
   SBOBINO_UPDATER_KEY_DIR               Directory used for stable local updater keys.
+  SBOBINO_RELEASE_SUMMARY               Override the GitHub release summary paragraph.
+  SBOBINO_RELEASE_NOTES_SHORT           Override the concise updater note stored in latest.json.
+  SBOBINO_RELEASE_IMPROVEMENTS_MD       Override the Markdown bullet list for the Improvements section.
+  SBOBINO_RELEASE_FIXES_MD              Override the Markdown bullet list for the Fixes section.
+  SBOBINO_RELEASE_SETUP_MD              Override the Markdown bullet list for the Setup and compatibility section.
   TAURI_UPDATER_PUBLIC_KEY              Injected into tauri.conf.json only for this local build.
   TAURI_SIGNING_PRIVATE_KEY             If present, signs Sbobino.app.tar.gz for updater use.
   TAURI_SIGNING_PRIVATE_KEY_PATH        If present, signs Sbobino.app.tar.gz from a private key file.
@@ -45,6 +51,16 @@ LOCAL_UPDATER_KEY_DIR=${SBOBINO_UPDATER_KEY_DIR:-"${XDG_CONFIG_HOME:-$HOME/.conf
 LOCAL_UPDATER_PRIVATE_KEY_PATH="$LOCAL_UPDATER_KEY_DIR/tauri-updater.key"
 LOCAL_UPDATER_PUBLIC_KEY_PATH="$LOCAL_UPDATER_PRIVATE_KEY_PATH.pub"
 LOCAL_UPDATER_PASSWORD_PATH="$LOCAL_UPDATER_KEY_DIR/tauri-updater.password"
+DEFAULT_RELEASE_SUMMARY="Sbobino for Apple Silicon now resumes more smoothly after setup, keeps offline provisioning predictable, and improves prerelease validation before stable promotion."
+DEFAULT_RELEASE_NOTES_SHORT="Improved returning-user startup, first-launch reliability, and candidate release validation on Apple Silicon."
+DEFAULT_RELEASE_IMPROVEMENTS_MD=$'- Returning users can reopen the app without repeating blocking startup checks after a successful local setup.\n- Release artifacts and updater metadata stay aligned so the exact tested prerelease can later be promoted to stable without rebuilding.'
+DEFAULT_RELEASE_FIXES_MD=$'- Fixed regressions where first-launch validation and release asset consistency could interrupt an otherwise healthy setup.\n- Fixed the fallback update link so the app points to the correct Apple Silicon DMG instead of unrelated release assets.'
+DEFAULT_RELEASE_SETUP_MD=$'- First launch still provisions the managed offline transcription runtime and required models locally.\n- Apple-side signing and notarization remain disabled, so macOS may require one manual Gatekeeper confirmation on first open.'
+RELEASE_SUMMARY=${SBOBINO_RELEASE_SUMMARY:-$DEFAULT_RELEASE_SUMMARY}
+RELEASE_NOTES_SHORT=${SBOBINO_RELEASE_NOTES_SHORT:-$DEFAULT_RELEASE_NOTES_SHORT}
+RELEASE_IMPROVEMENTS_MD=${SBOBINO_RELEASE_IMPROVEMENTS_MD:-$DEFAULT_RELEASE_IMPROVEMENTS_MD}
+RELEASE_FIXES_MD=${SBOBINO_RELEASE_FIXES_MD:-$DEFAULT_RELEASE_FIXES_MD}
+RELEASE_SETUP_MD=${SBOBINO_RELEASE_SETUP_MD:-$DEFAULT_RELEASE_SETUP_MD}
 
 cleanup() {
   if [[ -f "$TAURI_CONF_BACKUP" ]]; then
@@ -53,6 +69,10 @@ cleanup() {
   rm -rf "$TEMP_DIR"
 }
 trap cleanup EXIT
+
+json_escape() {
+  python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"
+}
 
 configure_local_tauri_build() {
   python3 - "$TAURI_CONF" "${1:-}" "${2:-0}" "${3:-0}" "${4:-public}" <<'PY'
@@ -248,10 +268,11 @@ if [[ "$HAS_UPDATER_KEYS" -eq 1 ]]; then
 
   PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   SIGNATURE=$(tr -d '\n' < "$UPDATER_SIG")
+  RELEASE_NOTES_SHORT_JSON=$(json_escape "$RELEASE_NOTES_SHORT")
   cat >"$OUTPUT_DIR/latest.json" <<JSON
 {
   "version": "$VERSION",
-  "notes": "Manual local release build for Sbobino $VERSION.",
+  "notes": $RELEASE_NOTES_SHORT_JSON,
   "pub_date": "$PUB_DATE",
   "platforms": {
     "darwin-aarch64": {
@@ -321,24 +342,38 @@ fi
 cat >"$OUTPUT_DIR/release-notes.md" <<EOF
 ## Sbobino $VERSION
 
-Local release package for macOS Apple Silicon, prepared and verified on this machine.
-
-### Download and installation
-
-- Open \`Sbobino_${VERSION}_aarch64.dmg\`.
-- Drag **Sbobino** into **Applications**.
-- If macOS warns that the app is from an unidentified developer, Control-click **Sbobino** in Applications and choose **Open**, or use **System Settings > Privacy & Security > Open Anyway**.
-- On first launch, accept the privacy terms and let the app complete the guided local runtime setup.
-
-### Notes
-
-- This build stays unsigned on the Apple side and may require one manual Gatekeeper approval.
-- Native in-app updates are enabled through a stable local Tauri updater keypair.
-- Pyannote and the local speech runtime are delivered as release assets and installed during first launch.
+$RELEASE_SUMMARY
 EOF
 
+if [[ -n "${RELEASE_IMPROVEMENTS_MD// }" ]]; then
+  cat >>"$OUTPUT_DIR/release-notes.md" <<EOF
+
+### Improvements
+
+$RELEASE_IMPROVEMENTS_MD
+EOF
+fi
+
+if [[ -n "${RELEASE_FIXES_MD// }" ]]; then
+  cat >>"$OUTPUT_DIR/release-notes.md" <<EOF
+
+### Fixes
+
+$RELEASE_FIXES_MD
+EOF
+fi
+
+if [[ -n "${RELEASE_SETUP_MD// }" ]]; then
+  cat >>"$OUTPUT_DIR/release-notes.md" <<EOF
+
+### Setup and compatibility
+
+$RELEASE_SETUP_MD
+EOF
+fi
+
 cat >"$OUTPUT_DIR/UPLOAD_TO_GITHUB.md" <<EOF
-# Manual GitHub upload for v$VERSION
+# Candidate GitHub publish for v$VERSION
 
 Nothing in this folder has been published automatically.
 
@@ -346,7 +381,7 @@ Nothing in this folder has been published automatically.
 
 1. Create or reuse the Git tag locally: \`git tag -a v$VERSION -m "Sbobino v$VERSION"\`
 2. Push only when you are ready: \`git push origin v$VERSION\`
-3. Create a GitHub prerelease manually from the web UI or with \`gh release create --prerelease\`.
+3. Publish only as a GitHub prerelease candidate. Do not create or edit a stable release for this version.
 4. Upload these files from \`$OUTPUT_DIR\`:
    - \`Sbobino_${VERSION}_aarch64.dmg\`
    - \`Sbobino.app.tar.gz\`
@@ -358,33 +393,56 @@ Nothing in this folder has been published automatically.
    - \`pyannote-runtime-macos-aarch64.zip\`
    - \`pyannote-model-community-1.zip\`
    - \`pyannote-manifest.json\`
-   - \`release-notes.md\`
+   - \`release-notes.md\` (use this exact file as the GitHub release body)
 5. Run \`./scripts/distribution_readiness.sh "$VERSION"\` from \`sbobino_desktop/\`.
 6. Test the GitHub prerelease on a second Apple Silicon Mac before promoting it to stable.
+7. If the candidate fails on the second Mac, delete the prerelease and cut a new patch version. Do not overwrite a stable release in place.
 
 ## gh CLI example
 
 \`\`\`bash
-gh release create "v$VERSION" \
-  --repo "$REPO_SLUG" \
-  --prerelease \
-  --title "v$VERSION" \
-  --notes-file "$OUTPUT_DIR/release-notes.md"
-
-gh release upload "v$VERSION" \
-  "$OUTPUT_DIR/Sbobino_${VERSION}_aarch64.dmg" \
-  "$OUTPUT_DIR/Sbobino.app.tar.gz" \
-  "$OUTPUT_DIR/Sbobino.app.tar.gz.sig" \
-  "$OUTPUT_DIR/latest.json" \
-  "$OUTPUT_DIR/setup-manifest.json" \
-  "$OUTPUT_DIR/speech-runtime-macos-aarch64.zip" \
-  "$OUTPUT_DIR/runtime-manifest.json" \
-  "$OUTPUT_DIR/pyannote-runtime-macos-aarch64.zip" \
-  "$OUTPUT_DIR/pyannote-model-community-1.zip" \
-  "$OUTPUT_DIR/pyannote-manifest.json"
+./scripts/publish_candidate_release.sh "$VERSION"
 
 ./scripts/distribution_readiness.sh "$VERSION"
 \`\`\`
+EOF
+
+cat >"$OUTPUT_DIR/CLEAN_ROOM_VALIDATION.md" <<EOF
+# Clean-room validation for v$VERSION
+
+Run this checklist on a different Apple Silicon Mac that does not rely on
+Homebrew, host Python, or previously installed Sbobino runtime assets.
+
+## Before install
+
+1. Remove any previous Sbobino app copy from \`/Applications/Sbobino.app\`.
+2. Remove any prior app data:
+   - \`~/Library/Application Support/com.sbobino.desktop\`
+3. Confirm no user-installed dependencies are required for the test:
+   - Homebrew is not needed
+   - system Python, ffmpeg, whisper binaries, and pyannote must be treated as absent/irrelevant
+
+## Candidate validation
+
+1. Download \`Sbobino_${VERSION}_aarch64.dmg\` from the GitHub prerelease.
+2. Install the app into \`/Applications\`.
+3. Launch the app and complete first-launch setup.
+4. Confirm first launch:
+   - runtime downloads and validates successfully
+   - required whisper models download successfully
+   - pyannote runtime and model install successfully
+   - app enters the main UI without manual fixes
+5. Quit the app and launch it again.
+6. Confirm second launch:
+   - no first-launch setup screen appears
+   - no heavy startup checking blocks the UI
+   - Settings > Local Models opens without a new full runtime inspection on arrival
+   - runtime paths point to app-managed directories under Application Support
+
+## Decision rule
+
+- If every step passes, the prerelease can be promoted to stable.
+- If any step fails, delete the prerelease and cut a new patch version.
 EOF
 
 cat <<EOF

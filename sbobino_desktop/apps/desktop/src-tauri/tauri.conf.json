@@ -33,6 +33,9 @@
     "active": true,
     "createUpdaterArtifacts": true,
     "targets": "all",
+    "macOS": {
+      "infoPlist": "Info.plist"
+    },
     "resources": [
       "resources/pyannote"
     ],

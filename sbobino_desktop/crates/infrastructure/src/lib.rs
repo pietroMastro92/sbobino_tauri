@@ -21,7 +21,7 @@ use sbobino_application::{
 };
 use sbobino_domain::{
     AiProvider, AppSettings, PromptTask, RemoteServiceConfig, RemoteServiceKind,
-    TranscriptionEngine,
+    SpeechModel, TranscriptionEngine,
 };
 
 use adapters::{
@@ -151,6 +151,18 @@ pub struct RuntimeHealth {
     pub missing_encoders: Vec<String>,
     pub pyannote: PyannoteRuntimeHealth,
     pub setup_complete: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct LiveStartHealth {
+    pub managed_runtime_required: bool,
+    pub ffmpeg_resolved: String,
+    pub ffmpeg_available: bool,
+    pub whisper_stream_resolved: String,
+    pub whisper_stream_available: bool,
+    pub models_dir_resolved: String,
+    pub model_filename: String,
+    pub model_present: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1164,6 +1176,53 @@ impl RuntimeTranscriptionFactory {
         })
     }
 
+    pub fn live_start_health(&self, model: SpeechModel) -> Result<LiveStartHealth, String> {
+        let settings = self.load_settings()?;
+        let configured_models_dir = if settings.transcription.models_dir.trim().is_empty() {
+            settings.models_dir.clone()
+        } else {
+            settings.transcription.models_dir.clone()
+        };
+        let resolved_models_dir = self.resolve_models_dir(&configured_models_dir);
+
+        let whisper_cli_configured =
+            sanitize_whisper_cli_reference(&settings.transcription.whisper_cli_path);
+        let whisper_stream_configured = sanitize_whisper_stream_reference(
+            &settings.transcription.whisperkit_cli_path,
+            &whisper_cli_configured,
+        );
+        let managed_runtime = self.managed_runtime_health();
+        let whisper_stream_resolution =
+            self.resolve_transcription_binary_details(&whisper_stream_configured, "whisper-stream");
+        let ffmpeg_resolution = self
+            .resolve_transcription_binary_details(&settings.transcription.ffmpeg_path, "ffmpeg");
+        let ffmpeg_available = if self.managed_runtime_required() {
+            managed_runtime.ffmpeg.available
+        } else {
+            self.binary_path_is_runnable(&ffmpeg_resolution.resolved_path)
+        };
+        let whisper_stream_available = if self.managed_runtime_required() {
+            managed_runtime.whisper_stream.available
+        } else {
+            self.binary_path_is_runnable(&whisper_stream_resolution.resolved_path)
+        };
+        let model_filename = model.ggml_filename().to_string();
+        let model_present = PathBuf::from(&resolved_models_dir)
+            .join(&model_filename)
+            .exists();
+
+        Ok(LiveStartHealth {
+            managed_runtime_required: self.managed_runtime_required(),
+            ffmpeg_resolved: ffmpeg_resolution.resolved_path,
+            ffmpeg_available,
+            whisper_stream_resolved: whisper_stream_resolution.resolved_path,
+            whisper_stream_available,
+            models_dir_resolved: resolved_models_dir,
+            model_filename,
+            model_present,
+        })
+    }
+
     pub fn resolve_binary_path(&self, configured: &str, fallback: &str) -> String {
         self.resolve_transcription_binary_details(configured, fallback)
             .resolved_path
@@ -1486,12 +1545,8 @@ impl RuntimeTranscriptionFactory {
 
     fn pyannote_health(&self, settings: &AppSettings) -> PyannoteRuntimeHealth {
         let diarization = &settings.transcription.speaker_diarization;
+        let managed_python_root = self.managed_pyannote_python_dir();
         let runtime_installed = self.managed_pyannote_python_path().is_some();
-        let runtime_validation_error = if runtime_installed {
-            self.pyannote_runtime_validation_error()
-        } else {
-            None
-        };
         let model_installed = is_pyannote_model_dir(&self.managed_pyannote_model_dir());
         let manifest = self.read_managed_pyannote_manifest();
         let status = self.read_managed_pyannote_status();
@@ -1506,6 +1561,10 @@ impl RuntimeTranscriptionFactory {
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| "managed".to_string());
         let device = diarization.device.trim().to_string();
+        let status_reason_code = status
+            .as_ref()
+            .map(|value| value.reason_code.trim().to_string())
+            .unwrap_or_default();
 
         let status_override = status.as_ref().and_then(|value| {
             let code = value.reason_code.trim();
@@ -1520,6 +1579,32 @@ impl RuntimeTranscriptionFactory {
                 && (value.source == PYANNOTE_BUNDLED_OVERRIDE_SOURCE
                     || value.app_version.trim() == env!("CARGO_PKG_VERSION"))
         });
+        let cached_runtime_layout_ready = pyannote_python_home(&managed_python_root).is_some();
+        let should_trust_cached_ready_status = runtime_installed
+            && model_installed
+            && cached_runtime_layout_ready
+            && manifest_matches_host
+            && status_reason_code == "ok";
+        let runtime_validation_error = if runtime_installed && !should_trust_cached_ready_status {
+            self.pyannote_runtime_validation_error()
+        } else {
+            None
+        };
+
+        if should_trust_cached_ready_status {
+            return PyannoteRuntimeHealth {
+                enabled: diarization.enabled,
+                ready: true,
+                runtime_installed,
+                model_installed,
+                arch,
+                device,
+                source,
+                reason_code: "ok".to_string(),
+                message: "Pyannote diarization runtime is installed.".to_string(),
+            };
+        }
+
         if status_override.is_some()
             && runtime_installed
             && model_installed
@@ -2381,7 +2466,9 @@ fn detect_runtime_source_policy(allow_dev_resource_overrides: bool) -> RuntimeSo
     match option_env!("SBOBINO_RELEASE_PROFILE") {
         Some("public") => RuntimeSourcePolicy::PublicManagedOnly,
         Some("standalone-dev") => RuntimeSourcePolicy::DevFallbackAllowed,
-        _ if !cfg!(debug_assertions) => RuntimeSourcePolicy::PublicManagedOnly,
+        // Local release builds should stay self-contained unless the build explicitly
+        // opts into the public managed-only contract used by GitHub-distributed artifacts.
+        _ if !cfg!(debug_assertions) => RuntimeSourcePolicy::DevFallbackAllowed,
         _ => RuntimeSourcePolicy::DevFallbackAllowed,
     }
 }
@@ -2525,6 +2612,28 @@ fn copy_directory_recursive(source: &Path, destination: &Path) -> Result<(), std
 
         if entry_type.is_dir() {
             copy_directory_recursive(&entry.path(), &target_path)?;
+        } else if entry_type.is_symlink() {
+            if let Ok(existing) = std::fs::symlink_metadata(&target_path) {
+                if existing.file_type().is_dir() {
+                    std::fs::remove_dir_all(&target_path)?;
+                } else {
+                    std::fs::remove_file(&target_path)?;
+                }
+            }
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::symlink;
+
+                let link_target = std::fs::read_link(entry.path())?;
+                symlink(link_target, &target_path)?;
+            }
+
+            #[cfg(not(unix))]
+            {
+                let resolved_path = std::fs::canonicalize(entry.path())?;
+                std::fs::copy(resolved_path, &target_path)?;
+            }
         } else if entry_type.is_file() {
             std::fs::copy(entry.path(), target_path)?;
         }
@@ -2696,6 +2805,132 @@ fn pyannote_python_path_env(runtime_root: &Path) -> Option<std::ffi::OsString> {
     } else {
         std::env::join_paths(entries).ok()
     }
+}
+
+fn pyannote_torchcodec_dir(runtime_root: &Path) -> Option<PathBuf> {
+    let version_dir_name = pyannote_python_version_dir_name(runtime_root)?;
+    let candidate = runtime_root
+        .join("lib")
+        .join(version_dir_name)
+        .join("site-packages")
+        .join("torchcodec");
+    if candidate.is_dir() {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
+fn is_host_managed_reference(value: &str) -> bool {
+    value.starts_with("/opt/homebrew") || value.starts_with("/usr/local")
+}
+
+fn pyannote_torchcodec_binary_paths(runtime_root: &Path) -> Vec<PathBuf> {
+    let Some(torchcodec_dir) = pyannote_torchcodec_dir(runtime_root) else {
+        return Vec::new();
+    };
+
+    let mut binaries = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&torchcodec_dir) else {
+        return binaries;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if path.is_file()
+            && (name.starts_with("libtorchcodec_core") && name.ends_with(".dylib")
+                || name.starts_with("libtorchcodec_custom_ops") && name.ends_with(".dylib")
+                || name.starts_with("libtorchcodec_pybind_ops") && name.ends_with(".so"))
+        {
+            binaries.push(path);
+        }
+    }
+    binaries.sort();
+    binaries
+}
+
+fn validate_embedded_torchcodec_ffmpeg(runtime_root: &Path) -> Result<(), String> {
+    if !cfg!(target_os = "macos") {
+        return Ok(());
+    }
+
+    let Some(torchcodec_dir) = pyannote_torchcodec_dir(runtime_root) else {
+        return Ok(());
+    };
+
+    let required = [
+        "libavutil.60.dylib",
+        "libavcodec.62.dylib",
+        "libavformat.62.dylib",
+        "libavdevice.62.dylib",
+        "libavfilter.11.dylib",
+        "libswscale.9.dylib",
+        "libswresample.6.dylib",
+    ];
+    for name in required {
+        let candidate = torchcodec_dir.join(".dylibs").join(name);
+        if !candidate.exists() {
+            return Err(format!(
+                "Pyannote runtime is missing bundled TorchCodec FFmpeg library '{}'. Repair or reinstall it from Settings > Local Models.",
+                candidate.display()
+            ));
+        }
+    }
+
+    for binary in pyannote_torchcodec_binary_paths(runtime_root) {
+        let deps_output = std::process::Command::new("/usr/bin/otool")
+            .arg("-L")
+            .arg(&binary)
+            .output()
+            .map_err(|e| format!("failed to inspect torchcodec dependencies for '{}': {e}", binary.display()))?;
+        if !deps_output.status.success() {
+            return Err(format!(
+                "failed to inspect torchcodec dependencies for '{}': {}",
+                binary.display(),
+                String::from_utf8_lossy(&deps_output.stderr).trim()
+            ));
+        }
+        let deps_body = String::from_utf8_lossy(&deps_output.stdout);
+        if let Some(dep) = deps_body
+            .lines()
+            .skip(1)
+            .filter_map(|line| line.split_whitespace().next())
+            .find(|dep| is_host_managed_reference(dep))
+        {
+            return Err(format!(
+                "Pyannote runtime still links '{}' against host path '{}'. Repair or reinstall it from Settings > Local Models.",
+                binary.display(),
+                dep
+            ));
+        }
+
+        let rpath_output = std::process::Command::new("/usr/bin/otool")
+            .arg("-l")
+            .arg(&binary)
+            .output()
+            .map_err(|e| format!("failed to inspect torchcodec rpaths for '{}': {e}", binary.display()))?;
+        if !rpath_output.status.success() {
+            return Err(format!(
+                "failed to inspect torchcodec rpaths for '{}': {}",
+                binary.display(),
+                String::from_utf8_lossy(&rpath_output.stderr).trim()
+            ));
+        }
+        if let Some(rpath) = parse_otool_rpath_entries(&String::from_utf8_lossy(&rpath_output.stdout))
+            .into_iter()
+            .find(|entry| is_host_managed_reference(entry))
+        {
+            return Err(format!(
+                "Pyannote runtime still exposes host LC_RPATH '{}' in '{}'. Repair or reinstall it from Settings > Local Models.",
+                rpath,
+                binary.display()
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 fn parse_external_python_framework_reference(otool_output: &str) -> Option<String> {
@@ -2947,6 +3182,8 @@ fn validate_pyannote_python_runtime(
         "Pyannote runtime is missing the bundled Python standard library. Repair or reinstall it from Settings > Local Models.".to_string()
     })?;
 
+    validate_embedded_torchcodec_ffmpeg(runtime_root)?;
+
     let mut command = std::process::Command::new(python_binary);
     let validation_started = Instant::now();
     command
@@ -3184,6 +3421,40 @@ mod tests {
             .expect("collections abc should write");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn copy_directory_recursive_preserves_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempdir().expect("failed to create tempdir");
+        let source = temp.path().join("source");
+        let destination = temp.path().join("destination");
+        let dylibs = source.join("torchcodec").join(".dylibs");
+        std::fs::create_dir_all(&dylibs).expect("source dylibs should exist");
+        std::fs::write(dylibs.join("libavutil.60.8.100.dylib"), b"stub")
+            .expect("target dylib should write");
+        symlink("libavutil.60.8.100.dylib", dylibs.join("libavutil.60.dylib"))
+            .expect("symlink should create");
+
+        super::copy_directory_recursive(&source, &destination).expect("copy should succeed");
+
+        let copied_link = destination
+            .join("torchcodec")
+            .join(".dylibs")
+            .join("libavutil.60.dylib");
+        assert!(
+            std::fs::symlink_metadata(&copied_link)
+                .expect("copied symlink should exist")
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read_link(&copied_link).expect("copied symlink target should read"),
+            std::path::PathBuf::from("libavutil.60.8.100.dylib")
+        );
+        assert!(copied_link.exists());
+    }
+
     fn prepare_managed_runtime(
         factory: &RuntimeTranscriptionFactory,
         ffmpeg_script: &str,
@@ -3283,6 +3554,45 @@ mod tests {
                 .join("bin")
                 .join("python3"),
             "#!/bin/sh\nexit 0\n",
+        );
+        write_fake_pyannote_stdlib(&factory.managed_pyannote_python_dir(), "python3.11");
+        let model_dir = factory.managed_pyannote_model_dir();
+        std::fs::create_dir_all(&model_dir).expect("model dir should exist");
+        std::fs::write(model_dir.join("config.yaml"), "name: test\n").expect("config should write");
+        factory
+            .write_managed_pyannote_manifest(&ManagedPyannoteManifest {
+                source: "release_asset".to_string(),
+                app_version: env!("CARGO_PKG_VERSION").to_string(),
+                runtime_asset: "pyannote-runtime-macos-aarch64.zip".to_string(),
+                runtime_sha256: "abc".to_string(),
+                model_asset: "pyannote-model-community-1.zip".to_string(),
+                model_sha256: "def".to_string(),
+                runtime_arch: super::target_triple_suffix().to_string(),
+                installed_at: "2026-03-13T00:00:00Z".to_string(),
+            })
+            .expect("manifest should write");
+        factory
+            .write_managed_pyannote_status("ok", "ready")
+            .expect("status should write");
+
+        let health = factory
+            .runtime_health()
+            .expect("runtime health should load");
+        assert!(health.pyannote.ready);
+        assert_eq!(health.pyannote.reason_code, "ok");
+    }
+
+    #[test]
+    fn runtime_health_trusts_cached_ready_pyannote_status_on_warm_start() {
+        let (_temp, factory) = build_factory();
+        persist_enabled_diarization(&factory);
+
+        write_executable_file(
+            &factory
+                .managed_pyannote_python_dir()
+                .join("bin")
+                .join("python3"),
+            "#!/bin/sh\nif [ \"$1\" = \"--help\" ]; then\n  exit 0\nfi\nexit 1\n",
         );
         write_fake_pyannote_stdlib(&factory.managed_pyannote_python_dir(), "python3.11");
         let model_dir = factory.managed_pyannote_model_dir();
@@ -3819,6 +4129,34 @@ Load command 14
 
         let entries = parse_otool_rpath_entries(output);
         assert_eq!(entries, vec!["@executable_path/../../../../", "/usr/lib"]);
+    }
+
+    #[test]
+    fn is_host_managed_reference_detects_non_portable_paths() {
+        assert!(super::is_host_managed_reference(
+            "/opt/homebrew/opt/ffmpeg/lib/libavutil.60.dylib"
+        ));
+        assert!(super::is_host_managed_reference(
+            "/usr/local/opt/ffmpeg/lib/libavutil.60.dylib"
+        ));
+        assert!(!super::is_host_managed_reference("@rpath/libavutil.60.dylib"));
+        assert!(!super::is_host_managed_reference("/usr/lib/libSystem.B.dylib"));
+    }
+
+    #[test]
+    fn validate_embedded_torchcodec_ffmpeg_requires_bundled_libs() {
+        let temp = tempdir().expect("failed to create tempdir");
+        let runtime_root = temp.path();
+        let torchcodec_dir = runtime_root
+            .join("lib")
+            .join("python3.11")
+            .join("site-packages")
+            .join("torchcodec");
+        std::fs::create_dir_all(&torchcodec_dir).expect("torchcodec dir should exist");
+
+        let error = super::validate_embedded_torchcodec_ffmpeg(runtime_root)
+            .expect_err("validation should fail without bundled ffmpeg libs");
+        assert!(error.contains("libavutil.60.dylib"));
     }
 
     #[test]

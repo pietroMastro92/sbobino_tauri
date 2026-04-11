@@ -23,6 +23,14 @@ struct GitHubAsset {
     browser_download_url: String,
 }
 
+fn select_manual_download_asset<'a>(
+    latest_version: &str,
+    assets: &'a [GitHubAsset],
+) -> Option<&'a GitHubAsset> {
+    let expected_dmg = format!("Sbobino_{latest_version}_aarch64.dmg");
+    assets.iter().find(|asset| asset.name == expected_dmg)
+}
+
 #[tauri::command]
 pub async fn check_updates(
     _state: State<'_, AppState>,
@@ -50,17 +58,14 @@ pub async fn check_updates(
     let latest_version = release.tag_name.trim_start_matches('v').to_string();
     let has_update = compare_versions(&latest_version, &current_version) > 0;
 
-    let dmg_or_zip = release
-        .assets
-        .iter()
-        .find(|asset| asset.name.ends_with(".dmg") || asset.name.ends_with(".zip"))
+    let download_url = select_manual_download_asset(&latest_version, &release.assets)
         .map(|asset| asset.browser_download_url.clone());
 
     Ok(UpdateCheckResponse {
         has_update,
         current_version,
         latest_version: Some(latest_version),
-        download_url: dmg_or_zip,
+        download_url,
     })
 }
 
@@ -89,4 +94,54 @@ fn compare_versions(a: &str, b: &str) -> i32 {
     }
 
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{compare_versions, select_manual_download_asset, GitHubAsset};
+
+    #[test]
+    fn manual_download_prefers_exact_apple_silicon_dmg() {
+        let assets = vec![
+            GitHubAsset {
+                name: "speech-runtime-macos-aarch64.zip".to_string(),
+                browser_download_url: "https://example.com/runtime.zip".to_string(),
+            },
+            GitHubAsset {
+                name: "Sbobino_0.1.13_aarch64.dmg".to_string(),
+                browser_download_url: "https://example.com/Sbobino_0.1.13_aarch64.dmg".to_string(),
+            },
+            GitHubAsset {
+                name: "pyannote-runtime-macos-aarch64.zip".to_string(),
+                browser_download_url: "https://example.com/pyannote.zip".to_string(),
+            },
+        ];
+
+        let selected =
+            select_manual_download_asset("0.1.13", &assets).expect("expected a dmg asset");
+        assert_eq!(selected.name, "Sbobino_0.1.13_aarch64.dmg");
+    }
+
+    #[test]
+    fn manual_download_does_not_fall_back_to_runtime_zip_assets() {
+        let assets = vec![
+            GitHubAsset {
+                name: "speech-runtime-macos-aarch64.zip".to_string(),
+                browser_download_url: "https://example.com/runtime.zip".to_string(),
+            },
+            GitHubAsset {
+                name: "pyannote-runtime-macos-aarch64.zip".to_string(),
+                browser_download_url: "https://example.com/pyannote.zip".to_string(),
+            },
+        ];
+
+        assert!(select_manual_download_asset("0.1.13", &assets).is_none());
+    }
+
+    #[test]
+    fn compare_versions_handles_patch_updates() {
+        assert_eq!(compare_versions("0.1.13", "0.1.12"), 1);
+        assert_eq!(compare_versions("0.1.12", "0.1.12"), 0);
+        assert_eq!(compare_versions("0.1.11", "0.1.12"), -1);
+    }
 }
