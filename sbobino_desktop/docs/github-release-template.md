@@ -29,8 +29,8 @@ You must comply with all applicable third-party licenses when you use, copy, or 
 
 | Placeholder | Example |
 |-------------|---------|
-| `VERSION` | `0.1.14` |
+| `VERSION` | `0.1.15` |
 | `OWNER/REPO` | Your GitHub `owner/repo` path |
-| `vVERSION` | Tag name, e.g. `v0.1.14` |
+| `vVERSION` | Tag name, e.g. `v0.1.15` |
 
 Keep `THIRD_PARTY_NOTICES.md` in the repo **up to date** with the same tag you publish so the links above stay accurate.

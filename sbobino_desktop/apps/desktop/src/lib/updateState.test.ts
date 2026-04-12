@@ -34,10 +34,10 @@ describe("updateState", () => {
   });
 
   it("persists version markers in local storage", () => {
-    writeLastSeenAppVersion("0.1.14");
+    writeLastSeenAppVersion("0.1.15");
     writeDismissedUpdateVersion("0.1.15");
 
-    expect(readLastSeenAppVersion()).toBe("0.1.14");
+    expect(readLastSeenAppVersion()).toBe("0.1.15");
     expect(readDismissedUpdateVersion()).toBe("0.1.15");
   });
 
@@ -45,7 +45,7 @@ describe("updateState", () => {
     writeSharedUpdateSnapshot({
       updateInfo: {
         has_update: true,
-        current_version: "0.1.14",
+        current_version: "0.1.15",
         latest_version: "0.1.15",
         download_url: null,
       },
@@ -60,7 +60,7 @@ describe("updateState", () => {
     expect(readSharedUpdateSnapshot()).toEqual({
       updateInfo: {
         has_update: true,
-        current_version: "0.1.14",
+        current_version: "0.1.15",
         latest_version: "0.1.15",
         download_url: null,
       },
@@ -78,7 +78,7 @@ describe("updateState", () => {
       shouldShowUpdateBanner(
         {
           has_update: true,
-          current_version: "0.1.14",
+          current_version: "0.1.15",
           latest_version: "0.1.15",
           download_url: null,
         },
@@ -92,7 +92,7 @@ describe("updateState", () => {
       shouldShowUpdateBanner(
         {
           has_update: true,
-          current_version: "0.1.14",
+          current_version: "0.1.15",
           latest_version: "0.1.16",
           download_url: null,
         },
