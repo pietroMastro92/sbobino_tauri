@@ -3,6 +3,7 @@
 import argparse
 import json
 import sys
+import wave
 from typing import Dict, List
 
 
@@ -37,6 +38,52 @@ def resolve_annotation(diarization):
     return diarization
 
 
+def load_wav_input(audio_path: str):
+    import numpy as np
+    import torch
+
+    with wave.open(audio_path, "rb") as wav_file:
+        if wav_file.getcomptype() != "NONE":
+            raise ValueError(
+                "compressed WAV input is not supported for offline diarization"
+            )
+
+        channels = wav_file.getnchannels()
+        sample_width = wav_file.getsampwidth()
+        sample_rate = wav_file.getframerate()
+        frame_count = wav_file.getnframes()
+        raw = wav_file.readframes(frame_count)
+
+    if channels <= 0 or sample_rate <= 0:
+        raise ValueError("invalid WAV metadata")
+
+    if sample_width == 1:
+        samples = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+    elif sample_width == 2:
+        samples = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
+    elif sample_width == 3:
+        data = np.frombuffer(raw, dtype=np.uint8).reshape(-1, 3)
+        samples = (
+            data[:, 0].astype(np.int32)
+            | (data[:, 1].astype(np.int32) << 8)
+            | (data[:, 2].astype(np.int32) << 16)
+        )
+        samples = np.where(samples & 0x800000, samples - 0x1000000, samples)
+        samples = samples.astype(np.float32) / 8388608.0
+    elif sample_width == 4:
+        samples = np.frombuffer(raw, dtype="<i4").astype(np.float32) / 2147483648.0
+    else:
+        raise ValueError(f"unsupported WAV sample width: {sample_width}")
+
+    if channels > 1:
+        samples = samples.reshape(-1, channels).transpose()
+    else:
+        samples = samples.reshape(1, -1)
+
+    waveform = torch.from_numpy(np.ascontiguousarray(samples))
+    return {"waveform": waveform, "sample_rate": sample_rate}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run speaker diarization with pyannote.audio")
     parser.add_argument("--audio-path", required=True)
@@ -57,7 +104,7 @@ def main() -> int:
     try:
         pipeline = Pipeline.from_pretrained(args.model_path)
         pipeline.to(resolve_device(args.device))
-        diarization = pipeline(args.audio_path)
+        diarization = pipeline(load_wav_input(args.audio_path))
     except Exception as error:
         sys.stderr.write(f"pyannote inference failed: {error}\n")
         return 1

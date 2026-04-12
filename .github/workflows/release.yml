@@ -92,7 +92,7 @@ jobs:
 
           codesign --force --deep --sign - "$APP_PATH"
           rm -f "$UPDATER_TAR" "$UPDATER_SIG"
-          tar -czf "$UPDATER_TAR" -C "$APP_DIR" "$APP_NAME"
+          COPYFILE_DISABLE=1 tar -czf "$UPDATER_TAR" -C "$APP_DIR" "$APP_NAME"
           npx tauri signer sign "$UPDATER_TAR"
 
       - name: Create standalone macOS DMG
@@ -232,7 +232,7 @@ jobs:
           PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           SIGNATURE=$(tr -d '\n' < "dist/macos/Sbobino.app.tar.gz.sig")
           NOTES=$(cat release-notes.md)
-          URL="https://github.com/pietroMastro92/sbobino_tauri/releases/download/v${VERSION}/Sbobino.app.tar.gz"
+          URL="https://github.com/pietroMastro92/Sbobino/releases/download/v${VERSION}/Sbobino.app.tar.gz"
 
           jq -n \
             --arg version "$VERSION" \

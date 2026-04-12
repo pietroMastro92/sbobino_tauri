@@ -249,7 +249,8 @@ fi
 
 codesign --force --deep --sign - "$APP_PATH"
 rm -f "$UPDATER_TAR" "$UPDATER_SIG"
-tar -czf "$UPDATER_TAR" -C "$APP_DIR" "Sbobino.app"
+# Avoid AppleDouble metadata entries (._*) that break Tauri's updater unpack step.
+COPYFILE_DISABLE=1 tar -czf "$UPDATER_TAR" -C "$APP_DIR" "Sbobino.app"
 
 LATEST_JSON_CREATED=0
 if [[ "$HAS_UPDATER_KEYS" -eq 1 ]]; then
