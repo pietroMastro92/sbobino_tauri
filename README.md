@@ -211,8 +211,6 @@ If you want to fuel development with a coffee:
 
 ### 💖 GitHub Sponsors
 
-GitHub does not allow `<iframe>` embeds in README files (they would show as raw HTML). Use the button below instead:
-
 [![Sponsor pietroMastro92 on GitHub](https://img.shields.io/badge/Sponsor%20on%20GitHub-30363D?style=for-the-badge&logo=githubsponsors&logoColor=ea4aaa)](https://github.com/sponsors/pietroMastro92)
 
 ## 📌 Status
