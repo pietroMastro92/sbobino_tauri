@@ -29,6 +29,11 @@
   - `pyannote-manifest.json`
 - `setup-manifest.json` is the single bootstrap contract for first-launch setup and repair. Runtime and pyannote manifests are no longer treated as independent entrypoints.
 
+### Legal / attribution artifacts
+
+- Third-party licenses and version pins: [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) (update when runtime or pyannote pins change).
+- Suggested GitHub Release body text: [`github-release-template.md`](github-release-template.md).
+
 ## Signing and Notarization
 
 ### Required Secrets

@@ -12,6 +12,8 @@ This repository is the production-grade rewrite of the original Python Sbobino a
 - `docs/architecture.md`: architecture and dependency rules
 - `docs/release-and-migration.md`: release pipeline and migration plan
 - `docs/feature-migration-matrix.md`: feature-by-feature parity checklist
+- `THIRD_PARTY_NOTICES.md`: licenses and attribution for FFmpeg, whisper.cpp, pyannote, Hugging Face models, and related runtime components
+- `docs/github-release-template.md`: copy-paste text for GitHub Release notes (third-party disclaimer + links)
 
 ## Quick Start
 
@@ -65,6 +67,10 @@ Stable release policy:
 - the default promotion flow removes older stable releases so only the latest validated stable remains public
 
 Set `SBOBINO_RELEASE_PROFILE=standalone-dev` only for internal/offline builds that intentionally embed bundled pyannote assets.
+
+## Open source and third-party licenses
+
+Sbobino Desktop is released under the **MIT License** ([`LICENSE`](LICENSE)). Binary releases and first-launch provisioning also redistribute or install other open-source software (FFmpeg, whisper.cpp, Python, pyannote, PyTorch stack, and CC-BY-4.0 model data from Hugging Face). See **[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)** for version pins, links, and compliance notes. When publishing a GitHub Release, use **[`docs/github-release-template.md`](docs/github-release-template.md)** as a starting point for user-facing notes.
 
 ## Current Milestone
 
