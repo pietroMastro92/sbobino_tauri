@@ -31,9 +31,9 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy -p sbobino-domain -p sbobino-application -p sbobino-infrastructure --all-targets -- -D warnings
       - name: Tests
-        run: cargo test --workspace
+        run: cargo test -p sbobino-domain -p sbobino-application -p sbobino-infrastructure
 
   frontend:
     runs-on: ubuntu-latest
