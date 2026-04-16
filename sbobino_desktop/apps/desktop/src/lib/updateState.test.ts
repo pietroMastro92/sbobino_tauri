@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   readDismissedUpdateVersion,
+  readLastAutoMigratedPyannoteVersion,
   readLastSeenAppVersion,
   readSharedUpdateSnapshot,
   shouldShowUpdateBanner,
   writeDismissedUpdateVersion,
+  writeLastAutoMigratedPyannoteVersion,
   writeLastSeenAppVersion,
   writeSharedUpdateSnapshot,
 } from "./updateState";
@@ -36,9 +38,11 @@ describe("updateState", () => {
   it("persists version markers in local storage", () => {
     writeLastSeenAppVersion("0.1.15");
     writeDismissedUpdateVersion("0.1.15");
+    writeLastAutoMigratedPyannoteVersion("0.1.15");
 
     expect(readLastSeenAppVersion()).toBe("0.1.15");
     expect(readDismissedUpdateVersion()).toBe("0.1.15");
+    expect(readLastAutoMigratedPyannoteVersion()).toBe("0.1.15");
   });
 
   it("persists the shared updater snapshot", () => {

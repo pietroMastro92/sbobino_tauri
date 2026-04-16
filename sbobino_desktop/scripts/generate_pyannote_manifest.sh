@@ -11,6 +11,7 @@ RUNTIME_AARCH64=$2
 RUNTIME_X86_64=$3
 MODEL_ZIP=$4
 OUTPUT_JSON=$5
+PYANNOTE_COMPAT_LEVEL=${PYANNOTE_COMPAT_LEVEL:-1}
 
 for path in "$RUNTIME_AARCH64" "$RUNTIME_X86_64" "$MODEL_ZIP"; do
   if [[ ! -f "$path" ]]; then
@@ -28,6 +29,7 @@ sha256() {
 cat >"$OUTPUT_JSON" <<JSON
 {
   "app_version": "$VERSION",
+  "compat_level": $PYANNOTE_COMPAT_LEVEL,
   "assets": [
     {
       "kind": "pyannote_runtime_macos_aarch64",

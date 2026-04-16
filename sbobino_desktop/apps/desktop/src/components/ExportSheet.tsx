@@ -419,11 +419,7 @@ export function ExportSheet({
   const [format, setFormat] = useState<ExportFormat>("txt");
   const [style, setStyle] = useState<ExportStyle>("transcript");
   const [includeTimestamps, setIncludeTimestamps] = useState(false);
-  const [grouping, setGrouping] = useState<ExportGrouping>("none");
   const [showSpeakerNames, setShowSpeakerNames] = useState(false);
-  const [favoritedOnly, setFavoritedOnly] = useState(false);
-  const [allowMultipleLines, setAllowMultipleLines] = useState(false);
-  const [useOriginalFileName, setUseOriginalFileName] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const { t, language } = useTranslation();
@@ -536,7 +532,7 @@ export function ExportSheet({
         style,
         options: {
           includeTimestamps,
-          grouping,
+          grouping: "none",
           includeSpeakerNames: showSpeakerNames,
         },
         segments: exportSegments,
@@ -658,18 +654,6 @@ export function ExportSheet({
 
               {style === "transcript" ? (
                 <>
-                  <div className="property-line">
-                    <span>{t("export.grouping", "Grouping")}</span>
-                    <select
-                      value={grouping}
-                      onChange={(event) => setGrouping(event.target.value as ExportGrouping)}
-                    >
-                      <option value="none">{t("export.groupingNone", "None")}</option>
-                      <option value="speaker_paragraphs" disabled>
-                        {t("export.speakerParagraphs", "Speaker paragraphs")}
-                      </option>
-                    </select>
-                  </div>
                   <label className="toggle-row">
                     <span>{t("export.showTimestamps", "Show Timestamps")}</span>
                     <input
@@ -679,12 +663,6 @@ export function ExportSheet({
                       disabled={!segmentsAlignedWithTranscript}
                     />
                   </label>
-                  <p className="export-option-note">
-                    {t(
-                      "export.speakerNote",
-                      "The Speaker paragraphs option is unavailable unless speakers are assigned to your transcript.",
-                    )}
-                  </p>
                 </>
               ) : null}
 
@@ -699,36 +677,12 @@ export function ExportSheet({
                       disabled={!speakerNamesAvailable}
                     />
                   </label>
-                  <label className="toggle-row">
-                    <span>{t("export.favoritedOnly", "Favorited Segments Only")}</span>
-                    <input
-                      type="checkbox"
-                      checked={favoritedOnly}
-                      onChange={(event) => setFavoritedOnly(event.target.checked)}
-                    />
-                  </label>
                   <p className="export-option-note">
                     {t(
                       "export.speakerNote",
                       "You can only enable speaker names if you assign speakers in your transcript.",
                     )}
                   </p>
-                  <label className="toggle-row">
-                    <span>{t("export.allowMultipleLines", "Allow multiple lines")}</span>
-                    <input
-                      type="checkbox"
-                      checked={allowMultipleLines}
-                      onChange={(event) => setAllowMultipleLines(event.target.checked)}
-                    />
-                  </label>
-                  <label className="toggle-row">
-                    <span>{t("export.useOriginalFileName", "Use Original File Name")}</span>
-                    <input
-                      type="checkbox"
-                      checked={useOriginalFileName}
-                      onChange={(event) => setUseOriginalFileName(event.target.checked)}
-                    />
-                  </label>
                 </>
               ) : null}
 
@@ -743,14 +697,6 @@ export function ExportSheet({
                       disabled={!speakerNamesAvailable}
                     />
                   </label>
-                  <label className="toggle-row">
-                    <span>{t("export.favoritedOnly", "Favorited Segments Only")}</span>
-                    <input
-                      type="checkbox"
-                      checked={favoritedOnly}
-                      onChange={(event) => setFavoritedOnly(event.target.checked)}
-                    />
-                  </label>
                   <p className="export-option-note">
                     {t(
                       "export.speakerNote",
@@ -763,22 +709,6 @@ export function ExportSheet({
                       type="checkbox"
                       checked={includeTimestamps}
                       onChange={(event) => setIncludeTimestamps(event.target.checked)}
-                    />
-                  </label>
-                  <label className="toggle-row">
-                    <span>{t("export.allowMultipleLines", "Allow multiple lines")}</span>
-                    <input
-                      type="checkbox"
-                      checked={allowMultipleLines}
-                      onChange={(event) => setAllowMultipleLines(event.target.checked)}
-                    />
-                  </label>
-                  <label className="toggle-row">
-                    <span>{t("export.useOriginalFileName", "Use Original File Name")}</span>
-                    <input
-                      type="checkbox"
-                      checked={useOriginalFileName}
-                      onChange={(event) => setUseOriginalFileName(event.target.checked)}
                     />
                   </label>
                 </>

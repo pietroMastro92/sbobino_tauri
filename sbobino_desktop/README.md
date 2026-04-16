@@ -46,6 +46,7 @@ That folder now always includes:
 - `pyannote-manifest.json`
 - `pyannote-runtime-macos-aarch64.zip`
 - `pyannote-model-community-1.zip`
+- `release-readiness-proof.json` (generated only when `release_readiness.sh` passed)
 
 Manual publish contract:
 1. build the release locally
@@ -57,7 +58,7 @@ Manual publish contract:
 7. if it fails, retire that release and cut a new patch version
 
 Helper scripts:
-- `./scripts/publish_candidate_release.sh <version>` publishes a stable release by default
+- `./scripts/publish_candidate_release.sh <version>` publishes a stable release by default and refuses publishing if readiness proof/checksums/manifests are inconsistent
 - `./scripts/promote_candidate_release.sh <version>`
 - `./scripts/retire_failed_candidate.sh <version>`
 

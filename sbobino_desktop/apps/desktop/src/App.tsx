@@ -146,10 +146,12 @@ import {
 import { loadInitialAppBootstrapData } from "./lib/appBootstrap";
 import {
   readDismissedUpdateVersion,
+  readLastAutoMigratedPyannoteVersion,
   readLastSeenAppVersion,
   readSharedUpdateSnapshot,
   shouldShowUpdateBanner,
   writeDismissedUpdateVersion,
+  writeLastAutoMigratedPyannoteVersion,
   writeLastSeenAppVersion,
   writeSharedUpdateSnapshot,
 } from "./lib/updateState";
@@ -527,6 +529,15 @@ const LEFT_SIDEBAR_MAX_WIDTH = 320;
 const RIGHT_SIDEBAR_MIN_WIDTH = 220;
 const RIGHT_SIDEBAR_MAX_WIDTH = 420;
 const AUTO_UPDATE_POLL_INTERVAL_MS = 30 * 60 * 1000;
+const PYANNOTE_AUTO_MIGRATION_FAILURE_REASON_CODES = new Set([
+  "pyannote_install_incomplete",
+  "pyannote_checksum_invalid",
+  "pyannote_runtime_missing",
+  "pyannote_model_missing",
+  "pyannote_repair_required",
+  "pyannote_version_mismatch",
+  "pyannote_arch_mismatch",
+]);
 
 function guessAppleSiliconFromUA(): boolean {
   const ua = (navigator.userAgent ?? "").toLowerCase();
@@ -2705,9 +2716,6 @@ export function App({
     running: false,
   });
   const [fontSize, setFontSize] = useState(18);
-  const [favoritesOnly, setFavoritesOnly] = useState(false);
-  const [groupSegmentsWithoutSpeakers, setGroupSegmentsWithoutSpeakers] =
-    useState(true);
   const copiedChatResetTimerRef = useRef<number | null>(null);
   const chatMessageSerialRef = useRef(0);
   const promptTestDefaultInputRef = useRef(getDefaultPromptTestInput());
@@ -3243,7 +3251,58 @@ export function App({
           previousSeenVersion !== bootVersion
         ) {
           try {
-            await reconcilePostUpdateRuntime();
+            const reconcile = await reconcilePostUpdateRuntime();
+            if (reconcile.status === "needs_auto_migration") {
+              const lastAutoMigratedVersion =
+                readLastAutoMigratedPyannoteVersion();
+              if (lastAutoMigratedVersion !== bootVersion) {
+                writeLastAutoMigratedPyannoteVersion(bootVersion);
+                setProvisioning((previous) => ({
+                  ...previous,
+                  running: true,
+                  progress: null,
+                  statusMessage:
+                    reconcile.message ??
+                    t(
+                      "provisioning.repairingPyannote",
+                      "Repairing pyannote diarization runtime...",
+                    ),
+                }));
+                void provisioningInstallPyannote(true)
+                  .then((result) => {
+                    if (result.started || disposed) {
+                      return;
+                    }
+                    writeLastAutoMigratedPyannoteVersion(null);
+                    setProvisioning((previous) => ({
+                      ...previous,
+                      running: false,
+                      statusMessage:
+                        reconcile.message ??
+                        t("settings.pyannote.desc"),
+                    }));
+                  })
+                  .catch((error) => {
+                    console.warn(
+                      "Automatic pyannote migration failed after update:",
+                      error,
+                    );
+                    writeLastAutoMigratedPyannoteVersion(null);
+                    if (disposed) {
+                      return;
+                    }
+                    setProvisioning((previous) => ({
+                      ...previous,
+                      running: false,
+                      statusMessage:
+                        reconcile.message ??
+                        t("settings.pyannote.desc"),
+                    }));
+                  });
+              }
+            } else {
+              writeLastAutoMigratedPyannoteVersion(null);
+            }
           } catch {
             // keep startup resilient if release-manifest reconciliation is temporarily unavailable
           }
@@ -4165,6 +4224,16 @@ export function App({
       }
 
       const uProvisioningStatus = await subscribeProvisioningStatus((event) => {
+        const pyannoteAutoMigrationFailed =
+          event.state !== "completed" &&
+          event.state !== "cancelled" &&
+          PYANNOTE_AUTO_MIGRATION_FAILURE_REASON_CODES.has(
+            event.reason_code ?? "",
+          );
+        if (pyannoteAutoMigrationFailed) {
+          writeLastAutoMigratedPyannoteVersion(null);
+        }
+
         const localizedStatusMessage =
           event.state === "completed"
             ? provisioningProgressKindRef.current === "speech_runtime"
@@ -10195,26 +10264,6 @@ export function App({
               <option value={20}>20</option>
               <option value={22}>22</option>
             </select>
-          </label>
-
-          <label className="toggle-row">
-            <span>{t("inspector.favoritesOnly")}</span>
-            <input
-              type="checkbox"
-              checked={favoritesOnly}
-              onChange={(event) => setFavoritesOnly(event.target.checked)}
-            />
-          </label>
-
-          <label className="toggle-row">
-            <span>{t("inspector.groupSegments")}</span>
-            <input
-              type="checkbox"
-              checked={groupSegmentsWithoutSpeakers}
-              onChange={(event) =>
-                setGroupSegmentsWithoutSpeakers(event.target.checked)
-              }
-            />
           </label>
         </div>
       </div>

@@ -15,6 +15,8 @@ export type SharedUpdateSnapshot = {
 export const LAST_SEEN_APP_VERSION_STORAGE_KEY = "sbobino.update.lastSeenAppVersion";
 export const DISMISSED_UPDATE_VERSION_STORAGE_KEY = "sbobino.update.dismissedVersion";
 export const SHARED_UPDATE_STATE_STORAGE_KEY = "sbobino.update.sharedState";
+export const LAST_AUTO_MIGRATED_PYANNOTE_VERSION_STORAGE_KEY =
+  "sbobino.update.lastAutoMigratedPyannoteVersion";
 
 function readStorageValue(key: string): string | null {
   if (typeof window === "undefined") {
@@ -40,6 +42,17 @@ export function readLastSeenAppVersion(): string | null {
 
 export function writeLastSeenAppVersion(version: string | null): void {
   writeStorageValue(LAST_SEEN_APP_VERSION_STORAGE_KEY, version?.trim() || null);
+}
+
+export function readLastAutoMigratedPyannoteVersion(): string | null {
+  return readStorageValue(LAST_AUTO_MIGRATED_PYANNOTE_VERSION_STORAGE_KEY);
+}
+
+export function writeLastAutoMigratedPyannoteVersion(version: string | null): void {
+  writeStorageValue(
+    LAST_AUTO_MIGRATED_PYANNOTE_VERSION_STORAGE_KEY,
+    version?.trim() || null,
+  );
 }
 
 export function readDismissedUpdateVersion(): string | null {

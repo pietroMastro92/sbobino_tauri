@@ -531,8 +531,9 @@ export type UpdateCheckResponse = {
 };
 
 export type PostUpdateReconcileResponse = {
-  reconciled: boolean;
-  requires_repair: boolean;
+  status: "ok_no_action" | "ok_migrated_manifest" | "needs_auto_migration";
+  migration_started: boolean;
+  message?: string | null;
 };
 
 export type UpdateSettingsPartialPayload = {

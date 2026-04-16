@@ -340,6 +340,54 @@ if [[ -f "$UPDATER_SIG" ]]; then
   cp "$UPDATER_SIG" "$OUTPUT_DIR/"
 fi
 
+python3 - <<'PY' "$OUTPUT_DIR" "$VERSION" "$RELEASE_PROFILE"
+import hashlib
+import json
+import pathlib
+import sys
+from datetime import datetime, timezone
+
+output_dir = pathlib.Path(sys.argv[1])
+version = sys.argv[2]
+release_profile = sys.argv[3]
+
+required_assets = [
+    f"Sbobino_{version}_aarch64.dmg",
+    "Sbobino.app.tar.gz",
+    "latest.json",
+    "setup-manifest.json",
+    "runtime-manifest.json",
+    "speech-runtime-macos-aarch64.zip",
+    "pyannote-manifest.json",
+    "pyannote-runtime-macos-aarch64.zip",
+    "pyannote-model-community-1.zip",
+]
+optional_assets = ["Sbobino.app.tar.gz.sig"]
+
+checksums = {}
+for name in required_assets + optional_assets:
+    path = output_dir / name
+    if not path.is_file():
+        continue
+    checksums[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+
+proof = {
+    "version": version,
+    "release_profile": release_profile,
+    "status": "passed",
+    "gate": "release_readiness.sh",
+    "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "required_assets": required_assets,
+    "optional_assets": optional_assets,
+    "sha256": checksums,
+}
+
+(output_dir / "release-readiness-proof.json").write_text(
+    json.dumps(proof, indent=2) + "\n",
+    encoding="utf-8",
+)
+PY
+
 cat >"$OUTPUT_DIR/release-notes.md" <<EOF
 ## Sbobino $VERSION
 
@@ -394,6 +442,7 @@ Nothing in this folder has been published automatically.
    - \`pyannote-runtime-macos-aarch64.zip\`
    - \`pyannote-model-community-1.zip\`
    - \`pyannote-manifest.json\`
+   - \`release-readiness-proof.json\`
    - \`release-notes.md\` (use this exact file as the GitHub release body)
 5. Run \`./scripts/distribution_readiness.sh "$VERSION"\` from \`sbobino_desktop/\`.
 6. Test that exact GitHub release on a second Apple Silicon Mac.
@@ -459,6 +508,7 @@ Artifacts:
   - pyannote-runtime-macos-aarch64.zip
   - pyannote-model-community-1.zip
   - pyannote-manifest.json
+  - release-readiness-proof.json
 EOF
 
 if [[ -f "$OUTPUT_DIR/Sbobino.app.tar.gz.sig" ]]; then

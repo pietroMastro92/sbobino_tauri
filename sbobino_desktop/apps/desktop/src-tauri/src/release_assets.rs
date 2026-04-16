@@ -8,6 +8,11 @@ pub const PYANNOTE_MANIFEST_ASSET: &str = "pyannote-manifest.json";
 pub const PYANNOTE_RUNTIME_AARCH64_ASSET: &str = "pyannote-runtime-macos-aarch64.zip";
 pub const PYANNOTE_RUNTIME_X86_64_ASSET: &str = "pyannote-runtime-macos-x86_64.zip";
 pub const PYANNOTE_MODEL_ASSET: &str = "pyannote-model-community-1.zip";
+pub const PYANNOTE_COMPAT_LEVEL: u32 = 1;
+
+pub const fn default_pyannote_compat_level() -> u32 {
+    PYANNOTE_COMPAT_LEVEL
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReleaseAssetDescriptor {
@@ -23,6 +28,8 @@ pub struct ReleaseAssetDescriptor {
 pub struct SetupReleaseManifest {
     pub app_version: String,
     pub release_tag: String,
+    #[serde(default = "default_pyannote_compat_level")]
+    pub pyannote_compat_level: u32,
     pub runtime_manifest: ReleaseAssetDescriptor,
     pub runtime_asset: ReleaseAssetDescriptor,
     pub pyannote_manifest: ReleaseAssetDescriptor,
@@ -50,6 +57,8 @@ pub struct RuntimeReleaseAsset {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PyannoteReleaseManifest {
     pub app_version: String,
+    #[serde(default = "default_pyannote_compat_level")]
+    pub compat_level: u32,
     pub assets: Vec<PyannoteReleaseAsset>,
 }
 

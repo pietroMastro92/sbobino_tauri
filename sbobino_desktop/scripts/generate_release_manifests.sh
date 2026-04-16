@@ -15,6 +15,7 @@ PYANNOTE_MODEL_ZIP="$ASSET_DIR/pyannote-model-community-1.zip"
 RUNTIME_MANIFEST="$ASSET_DIR/runtime-manifest.json"
 PYANNOTE_MANIFEST="$ASSET_DIR/pyannote-manifest.json"
 SETUP_MANIFEST="$ASSET_DIR/setup-manifest.json"
+PYANNOTE_COMPAT_LEVEL=${PYANNOTE_COMPAT_LEVEL:-1}
 
 for path in "$RUNTIME_ZIP" "$PYANNOTE_RUNTIME_ZIP" "$PYANNOTE_MODEL_ZIP"; do
   if [[ ! -f "$path" ]]; then
@@ -77,6 +78,7 @@ JSON
 cat >"$PYANNOTE_MANIFEST" <<JSON
 {
   "app_version": "$VERSION",
+  "compat_level": $PYANNOTE_COMPAT_LEVEL,
   "assets": [
     {
       "kind": "pyannote_runtime_macos_aarch64",
@@ -103,6 +105,7 @@ cat >"$SETUP_MANIFEST" <<JSON
 {
   "app_version": "$VERSION",
   "release_tag": "v$VERSION",
+  "pyannote_compat_level": $PYANNOTE_COMPAT_LEVEL,
   "runtime_manifest": {
     "name": "$(basename "$RUNTIME_MANIFEST")",
     "sha256": "$RUNTIME_MANIFEST_SHA",

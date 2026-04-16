@@ -13,14 +13,15 @@ use crate::{
     release_assets::{
         release_asset_url, release_tag, PyannoteReleaseAsset, PyannoteReleaseManifest,
         ReleaseAssetDescriptor, RuntimeReleaseAsset, RuntimeReleaseManifest, SetupReleaseManifest,
-        PYANNOTE_MANIFEST_ASSET, PYANNOTE_MODEL_ASSET, PYANNOTE_RUNTIME_AARCH64_ASSET,
-        PYANNOTE_RUNTIME_X86_64_ASSET, RUNTIME_AARCH64_ASSET, RUNTIME_MANIFEST_ASSET,
-        SETUP_MANIFEST_ASSET,
+        PYANNOTE_COMPAT_LEVEL, PYANNOTE_MANIFEST_ASSET, PYANNOTE_MODEL_ASSET,
+        PYANNOTE_RUNTIME_AARCH64_ASSET, PYANNOTE_RUNTIME_X86_64_ASSET, RUNTIME_AARCH64_ASSET,
+        RUNTIME_MANIFEST_ASSET, SETUP_MANIFEST_ASSET,
     },
     state::AppState,
 };
 use sbobino_infrastructure::{
-    ManagedPyannoteManifest, ManagedRuntimeHealth, RuntimeTranscriptionFactory,
+    ManagedPyannoteManifest, ManagedRuntimeHealth, ReconcileManagedPyannoteReleaseOutcome,
+    RuntimeTranscriptionFactory,
 };
 
 const REQUIRED_MODELS: [&str; 5] = [
@@ -99,6 +100,7 @@ const LOCAL_RELEASE_ASSETS_DIR_ENV: &str = "SBOBINO_LOCAL_RELEASE_ASSETS_DIR";
 struct PyannoteAssetSelection {
     runtime_asset: PyannoteReleaseAsset,
     model_asset: PyannoteReleaseAsset,
+    compat_level: u32,
     release_version: String,
 }
 
@@ -134,8 +136,9 @@ pub struct ProvisioningStatusResponse {
 
 #[derive(Debug, Serialize)]
 pub struct PostUpdateReconcileResponse {
-    pub reconciled: bool,
-    pub requires_repair: bool,
+    pub status: String,
+    pub migration_started: bool,
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -175,6 +178,14 @@ pub struct ProvisioningStartResponse {
 }
 
 const PYANNOTE_INSTALL_HEADROOM_BYTES: u64 = 128 * 1024 * 1024;
+
+fn normalize_pyannote_compat_level(level: u32) -> u32 {
+    if level == 0 {
+        PYANNOTE_COMPAT_LEVEL
+    } else {
+        level
+    }
+}
 
 fn format_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
@@ -334,6 +345,62 @@ fn persist_pyannote_install_failure(
     if let Err(error) = runtime_factory.write_managed_pyannote_status(reason_code, message) {
         tracing::warn!("failed to persist pyannote failure status: {error}");
     }
+}
+
+fn prepare_pyannote_runtime_swap(
+    runtime_dir: &Path,
+    reset_existing_install: bool,
+) -> Result<Option<PathBuf>, String> {
+    if !reset_existing_install || !runtime_dir.is_dir() {
+        return Ok(None);
+    }
+
+    let parent = runtime_dir.parent().ok_or_else(|| {
+        format!(
+            "failed to determine parent directory for '{}'.",
+            runtime_dir.display()
+        )
+    })?;
+    let backup_dir = parent.join(format!(
+        ".pyannote-backup-{}",
+        Utc::now().timestamp_millis()
+    ));
+    std::fs::rename(runtime_dir, &backup_dir).map_err(|e| {
+        format!(
+            "failed to stage existing pyannote runtime '{}' into backup '{}': {e}",
+            runtime_dir.display(),
+            backup_dir.display()
+        )
+    })?;
+    Ok(Some(backup_dir))
+}
+
+fn rollback_pyannote_runtime_swap(
+    runtime_dir: &Path,
+    backup_dir: Option<&Path>,
+) -> Result<(), String> {
+    let Some(backup_dir) = backup_dir else {
+        return Ok(());
+    };
+
+    if runtime_dir.exists() {
+        remove_path_if_exists(runtime_dir)?;
+    }
+    std::fs::rename(backup_dir, runtime_dir).map_err(|e| {
+        format!(
+            "failed to restore pyannote runtime backup '{}' into '{}': {e}",
+            backup_dir.display(),
+            runtime_dir.display()
+        )
+    })
+}
+
+fn cleanup_pyannote_runtime_backup(backup_dir: Option<PathBuf>) -> Result<(), String> {
+    let Some(backup_dir) = backup_dir else {
+        return Ok(());
+    };
+
+    remove_path_if_exists(&backup_dir)
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -508,30 +575,48 @@ pub async fn reconcile_post_update_runtime(
         .as_ref()
         .map(|manifest| {
             manifest.source != "bundled_override"
-                && manifest.app_version.trim() != env!("CARGO_PKG_VERSION")
+                && (manifest.app_version.trim() != env!("CARGO_PKG_VERSION")
+                    || normalize_pyannote_compat_level(manifest.compat_level)
+                        != PYANNOTE_COMPAT_LEVEL)
         })
         .unwrap_or(false);
 
     if should_attempt_pyannote_reconcile {
         let client = reqwest::Client::new();
         if let Ok(selection) = fetch_pyannote_asset_selection(&client).await {
-            let reconciled = state
+            let outcome = state
                 .runtime_factory
                 .reconcile_managed_pyannote_release_assets(
                     &selection.release_version,
+                    selection.compat_level,
                     &selection.runtime_asset.name,
                     &selection.runtime_asset.sha256,
                     &selection.model_asset.name,
                     &selection.model_asset.sha256,
                 )
                 .map_err(|e| CommandError::new("reconcile_post_update_runtime", e))?;
-            let health = state
-                .runtime_factory
-                .runtime_health()
-                .map_err(|e| CommandError::new("runtime_health", e))?;
-            return Ok(PostUpdateReconcileResponse {
-                reconciled,
-                requires_repair: health.pyannote.enabled && !health.pyannote.ready,
+            return Ok(match outcome {
+                ReconcileManagedPyannoteReleaseOutcome::NoAction => PostUpdateReconcileResponse {
+                    status: "ok_no_action".to_string(),
+                    migration_started: false,
+                    message: None,
+                },
+                ReconcileManagedPyannoteReleaseOutcome::ManifestUpdated => {
+                    PostUpdateReconcileResponse {
+                        status: "ok_migrated_manifest".to_string(),
+                        migration_started: false,
+                        message: Some(
+                            "Pyannote metadata was updated for this app version.".to_string(),
+                        ),
+                    }
+                }
+                ReconcileManagedPyannoteReleaseOutcome::NeedsMigration { message } => {
+                    PostUpdateReconcileResponse {
+                        status: "needs_auto_migration".to_string(),
+                        migration_started: false,
+                        message: Some(message),
+                    }
+                }
             });
         }
     }
@@ -540,9 +625,21 @@ pub async fn reconcile_post_update_runtime(
         .runtime_factory
         .runtime_health()
         .map_err(|e| CommandError::new("runtime_health", e))?;
+    if health.pyannote.enabled
+        && !health.pyannote.ready
+        && is_pyannote_repair_reason(&health.pyannote.reason_code)
+    {
+        return Ok(PostUpdateReconcileResponse {
+            status: "needs_auto_migration".to_string(),
+            migration_started: false,
+            message: Some(health.pyannote.message),
+        });
+    }
+
     Ok(PostUpdateReconcileResponse {
-        reconciled: false,
-        requires_repair: health.pyannote.enabled && !health.pyannote.ready,
+        status: "ok_no_action".to_string(),
+        migration_started: false,
+        message: None,
     })
 }
 
@@ -1096,9 +1193,25 @@ fn spawn_pyannote_provisioning_download(
         let client = reqwest::Client::new();
         let total = 2usize;
         let runtime_dir = runtime_factory.managed_pyannote_runtime_dir();
-        if reset_existing_install {
-            let _ = tokio::fs::remove_dir_all(&runtime_dir).await;
-        }
+        let backup_runtime_dir =
+            match prepare_pyannote_runtime_swap(&runtime_dir, reset_existing_install) {
+                Ok(value) => value,
+                Err(error) => {
+                    emit_provisioning_status(
+                        &app,
+                        "error",
+                        &error,
+                        Some("pyannote_install_incomplete"),
+                    );
+                    persist_pyannote_install_failure(
+                        runtime_factory.as_ref(),
+                        had_ready_install,
+                        "pyannote_install_incomplete",
+                        &error,
+                    );
+                    return;
+                }
+            };
         if let Err(error) = tokio::fs::create_dir_all(&runtime_dir).await {
             emit_provisioning_status(
                 &app,
@@ -1106,6 +1219,13 @@ fn spawn_pyannote_provisioning_download(
                 &format!("Failed to create pyannote runtime directory: {error}"),
                 Some("pyannote_install_incomplete"),
             );
+            if let Err(restore_error) =
+                rollback_pyannote_runtime_swap(&runtime_dir, backup_runtime_dir.as_deref())
+            {
+                tracing::warn!(
+                    "failed to rollback pyannote runtime after create-dir error: {restore_error}"
+                );
+            }
             if !had_ready_install {
                 let _ = runtime_factory.write_managed_pyannote_status(
                     "pyannote_install_incomplete",
@@ -1124,6 +1244,11 @@ fn spawn_pyannote_provisioning_download(
                     &error,
                     Some("pyannote_install_incomplete"),
                 );
+                if let Err(restore_error) =
+                    rollback_pyannote_runtime_swap(&runtime_dir, backup_runtime_dir.as_deref())
+                {
+                    tracing::warn!("failed to rollback pyannote runtime after selection error: {restore_error}");
+                }
                 persist_pyannote_install_failure(
                     runtime_factory.as_ref(),
                     had_ready_install,
@@ -1136,6 +1261,13 @@ fn spawn_pyannote_provisioning_download(
 
         if let Err(error) = ensure_pyannote_install_has_free_space(&runtime_dir, &selection) {
             emit_provisioning_status(&app, "error", &error, Some("pyannote_install_incomplete"));
+            if let Err(restore_error) =
+                rollback_pyannote_runtime_swap(&runtime_dir, backup_runtime_dir.as_deref())
+            {
+                tracing::warn!(
+                    "failed to rollback pyannote runtime after disk-space check: {restore_error}"
+                );
+            }
             persist_pyannote_install_failure(
                 runtime_factory.as_ref(),
                 had_ready_install,
@@ -1169,6 +1301,13 @@ fn spawn_pyannote_provisioning_download(
                     "Pyannote installation cancelled.",
                     Some("cancelled"),
                 );
+                if let Err(restore_error) =
+                    rollback_pyannote_runtime_swap(&runtime_dir, backup_runtime_dir.as_deref())
+                {
+                    tracing::warn!(
+                        "failed to rollback pyannote runtime after cancellation: {restore_error}"
+                    );
+                }
                 persist_pyannote_install_failure(
                     runtime_factory.as_ref(),
                     had_ready_install,
@@ -1196,6 +1335,11 @@ fn spawn_pyannote_provisioning_download(
                         "Pyannote installation cancelled.",
                         Some("cancelled"),
                     );
+                    if let Err(restore_error) =
+                        rollback_pyannote_runtime_swap(&runtime_dir, backup_runtime_dir.as_deref())
+                    {
+                        tracing::warn!("failed to rollback pyannote runtime after download cancellation: {restore_error}");
+                    }
                     if !had_ready_install {
                         let _ = runtime_factory.write_managed_pyannote_status(
                             "pyannote_install_incomplete",
@@ -1210,6 +1354,13 @@ fn spawn_pyannote_provisioning_download(
                     &format!("Failed to download {}: {error}", asset.name),
                     Some("pyannote_install_incomplete"),
                 );
+                if let Err(restore_error) =
+                    rollback_pyannote_runtime_swap(&runtime_dir, backup_runtime_dir.as_deref())
+                {
+                    tracing::warn!(
+                        "failed to rollback pyannote runtime after download error: {restore_error}"
+                    );
+                }
                 persist_pyannote_install_failure(
                     runtime_factory.as_ref(),
                     had_ready_install,
@@ -1229,6 +1380,11 @@ fn spawn_pyannote_provisioning_download(
                         &error,
                         Some("pyannote_checksum_invalid"),
                     );
+                    if let Err(restore_error) =
+                        rollback_pyannote_runtime_swap(&runtime_dir, backup_runtime_dir.as_deref())
+                    {
+                        tracing::warn!("failed to rollback pyannote runtime after checksum error: {restore_error}");
+                    }
                     persist_pyannote_install_failure(
                         runtime_factory.as_ref(),
                         had_ready_install,
@@ -1266,6 +1422,11 @@ fn spawn_pyannote_provisioning_download(
                         &error,
                         Some("pyannote_install_incomplete"),
                     );
+                    if let Err(restore_error) =
+                        rollback_pyannote_runtime_swap(&runtime_dir, backup_runtime_dir.as_deref())
+                    {
+                        tracing::warn!("failed to rollback pyannote runtime after extraction error: {restore_error}");
+                    }
                     persist_pyannote_install_failure(
                         runtime_factory.as_ref(),
                         had_ready_install,
@@ -1283,6 +1444,11 @@ fn spawn_pyannote_provisioning_download(
                         &message,
                         Some("pyannote_install_incomplete"),
                     );
+                    if let Err(restore_error) =
+                        rollback_pyannote_runtime_swap(&runtime_dir, backup_runtime_dir.as_deref())
+                    {
+                        tracing::warn!("failed to rollback pyannote runtime after extraction task failure: {restore_error}");
+                    }
                     persist_pyannote_install_failure(
                         runtime_factory.as_ref(),
                         had_ready_install,
@@ -1311,6 +1477,7 @@ fn spawn_pyannote_provisioning_download(
         let manifest = ManagedPyannoteManifest {
             source: "release_asset".to_string(),
             app_version: selection.release_version,
+            compat_level: selection.compat_level,
             runtime_asset: selection.runtime_asset.name.clone(),
             runtime_sha256: selection.runtime_asset.sha256.clone(),
             model_asset: selection.model_asset.name.clone(),
@@ -1321,6 +1488,11 @@ fn spawn_pyannote_provisioning_download(
 
         if let Err(error) = runtime_factory.write_managed_pyannote_manifest(&manifest) {
             emit_provisioning_status(&app, "error", &error, Some("pyannote_install_incomplete"));
+            if let Err(restore_error) =
+                rollback_pyannote_runtime_swap(&runtime_dir, backup_runtime_dir.as_deref())
+            {
+                tracing::warn!("failed to rollback pyannote runtime after manifest write error: {restore_error}");
+            }
             persist_pyannote_install_failure(
                 runtime_factory.as_ref(),
                 had_ready_install,
@@ -1341,6 +1513,11 @@ fn spawn_pyannote_provisioning_download(
                         &error,
                         Some("pyannote_install_incomplete"),
                     );
+                    if let Err(restore_error) =
+                        rollback_pyannote_runtime_swap(&runtime_dir, backup_runtime_dir.as_deref())
+                    {
+                        tracing::warn!("failed to rollback pyannote runtime after status write error: {restore_error}");
+                    }
                     persist_pyannote_install_failure(
                         runtime_factory.as_ref(),
                         had_ready_install,
@@ -1355,6 +1532,9 @@ fn spawn_pyannote_provisioning_download(
                     "Pyannote diarization runtime installed successfully.",
                     None,
                 );
+                if let Err(cleanup_error) = cleanup_pyannote_runtime_backup(backup_runtime_dir) {
+                    tracing::warn!("failed to clean up pyannote runtime backup: {cleanup_error}");
+                }
             }
             Ok(health) => {
                 let reason_code = if health.pyannote.reason_code.trim().is_empty() {
@@ -1368,6 +1548,11 @@ fn spawn_pyannote_provisioning_download(
                     health.pyannote.message.as_str()
                 };
                 emit_provisioning_status(&app, "error", message, Some(reason_code));
+                if let Err(restore_error) =
+                    rollback_pyannote_runtime_swap(&runtime_dir, backup_runtime_dir.as_deref())
+                {
+                    tracing::warn!("failed to rollback pyannote runtime after health validation error: {restore_error}");
+                }
                 persist_pyannote_install_failure(
                     runtime_factory.as_ref(),
                     had_ready_install,
@@ -1382,6 +1567,11 @@ fn spawn_pyannote_provisioning_download(
                     &error,
                     Some("pyannote_install_incomplete"),
                 );
+                if let Err(restore_error) =
+                    rollback_pyannote_runtime_swap(&runtime_dir, backup_runtime_dir.as_deref())
+                {
+                    tracing::warn!("failed to rollback pyannote runtime after runtime-health error: {restore_error}");
+                }
                 persist_pyannote_install_failure(
                     runtime_factory.as_ref(),
                     had_ready_install,
@@ -1561,6 +1751,7 @@ async fn fetch_pyannote_asset_selection(
     Ok(PyannoteAssetSelection {
         runtime_asset,
         model_asset,
+        compat_level: normalize_pyannote_compat_level(bundle.pyannote_manifest.compat_level),
         release_version: bundle.release_version,
     })
 }
@@ -1643,6 +1834,21 @@ async fn fetch_setup_release_bundle(
             "Pyannote manifest version '{}' does not match app version '{}'.",
             pyannote_manifest.app_version.trim(),
             version
+        ));
+    }
+    let setup_pyannote_compat_level =
+        normalize_pyannote_compat_level(setup_manifest.pyannote_compat_level);
+    let pyannote_compat_level = normalize_pyannote_compat_level(pyannote_manifest.compat_level);
+    if setup_pyannote_compat_level != pyannote_compat_level {
+        return Err(format!(
+            "Pyannote compatibility level mismatch between setup manifest ({}) and pyannote manifest ({}).",
+            setup_pyannote_compat_level, pyannote_compat_level
+        ));
+    }
+    if setup_pyannote_compat_level != PYANNOTE_COMPAT_LEVEL {
+        return Err(format!(
+            "Pyannote compatibility level '{}' does not match app compatibility level '{}'.",
+            setup_pyannote_compat_level, PYANNOTE_COMPAT_LEVEL
         ));
     }
 
@@ -1759,6 +1965,13 @@ fn validate_setup_manifest(version: &str, manifest: &SetupReleaseManifest) -> Re
             "Setup manifest release tag '{}' does not match expected '{}'.",
             manifest.release_tag.trim(),
             expected_tag
+        ));
+    }
+    if normalize_pyannote_compat_level(manifest.pyannote_compat_level) != PYANNOTE_COMPAT_LEVEL {
+        return Err(format!(
+            "Setup manifest pyannote compatibility level '{}' does not match expected '{}'.",
+            normalize_pyannote_compat_level(manifest.pyannote_compat_level),
+            PYANNOTE_COMPAT_LEVEL
         ));
     }
 
@@ -2172,8 +2385,9 @@ fn extract_zip_archive_with_zip_crate(
 mod tests {
     use super::{
         estimate_pyannote_required_free_bytes, install_pyannote_archive, install_runtime_archive,
-        sha256_file_hex, validate_manifest_asset_descriptor, validate_setup_manifest,
-        verify_file_sha256, PyannoteAssetSelection,
+        prepare_pyannote_runtime_swap, rollback_pyannote_runtime_swap, sha256_file_hex,
+        validate_manifest_asset_descriptor, validate_setup_manifest, verify_file_sha256,
+        PyannoteAssetSelection,
     };
     use crate::release_assets::{
         PyannoteReleaseAsset, ReleaseAssetDescriptor, SetupReleaseManifest,
@@ -2278,10 +2492,35 @@ mod tests {
     }
 
     #[test]
+    fn pyannote_runtime_swap_rolls_back_previous_install_on_failure() {
+        let temp = tempdir().expect("failed to create tempdir");
+        let runtime_dir = temp.path().join("pyannote-runtime");
+        std::fs::create_dir_all(runtime_dir.join("python/bin")).expect("runtime tree should exist");
+        std::fs::write(runtime_dir.join("python/bin/python3"), b"old-runtime")
+            .expect("old runtime should write");
+
+        let backup = prepare_pyannote_runtime_swap(&runtime_dir, true)
+            .expect("swap should stage existing runtime")
+            .expect("backup should be present");
+        std::fs::create_dir_all(runtime_dir.join("python/bin"))
+            .expect("new runtime tree should exist");
+        std::fs::write(runtime_dir.join("python/bin/python3"), b"broken-runtime")
+            .expect("broken runtime should write");
+
+        rollback_pyannote_runtime_swap(&runtime_dir, Some(backup.as_path()))
+            .expect("rollback should restore previous runtime");
+
+        let restored = std::fs::read(runtime_dir.join("python/bin/python3"))
+            .expect("restored runtime should exist");
+        assert_eq!(restored, b"old-runtime");
+    }
+
+    #[test]
     fn validate_setup_manifest_rejects_mismatched_release_tag() {
         let manifest = SetupReleaseManifest {
             app_version: "0.1.15".to_string(),
             release_tag: "v0.1.8".to_string(),
+            pyannote_compat_level: 1,
             runtime_manifest: descriptor("runtime-manifest.json", "deadbeef"),
             runtime_asset: descriptor("speech-runtime-macos-aarch64.zip", "deadbeef"),
             pyannote_manifest: descriptor("pyannote-manifest.json", "deadbeef"),
@@ -2324,6 +2563,7 @@ mod tests {
                 size_bytes: Some(30),
                 expanded_size_bytes: Some(120),
             },
+            compat_level: 1,
             release_version: "0.1.15".to_string(),
         };
 

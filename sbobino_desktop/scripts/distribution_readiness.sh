@@ -111,6 +111,7 @@ latest = load_json("latest.json")
 setup = load_json("setup-manifest.json")
 runtime = load_json("runtime-manifest.json")
 pyannote = load_json("pyannote-manifest.json")
+expected_pyannote_compat_level = 1
 
 if latest.get("version") != version:
     raise SystemExit(f"latest.json version mismatch: expected {version}, got {latest.get('version')}")
@@ -133,6 +134,11 @@ if setup.get("app_version") != version:
     raise SystemExit(f"setup-manifest.json app_version mismatch: expected {version}, got {setup.get('app_version')}")
 if setup.get("release_tag") != tag:
     raise SystemExit(f"setup-manifest.json release_tag mismatch: expected {tag}, got {setup.get('release_tag')}")
+if int(setup.get("pyannote_compat_level", expected_pyannote_compat_level)) != expected_pyannote_compat_level:
+    raise SystemExit(
+        "setup-manifest.json pyannote_compat_level mismatch: "
+        f"expected {expected_pyannote_compat_level}, got {setup.get('pyannote_compat_level')}"
+    )
 
 def ensure_setup_descriptor(key: str, expected_name: str) -> dict:
     descriptor = setup.get(key)
@@ -181,6 +187,11 @@ if runtime.get("app_version") != version:
 if pyannote.get("app_version") != version:
     raise SystemExit(
         f"pyannote-manifest.json app_version mismatch: expected {version}, got {pyannote.get('app_version')}"
+    )
+if int(pyannote.get("compat_level", expected_pyannote_compat_level)) != expected_pyannote_compat_level:
+    raise SystemExit(
+        "pyannote-manifest.json compat_level mismatch: "
+        f"expected {expected_pyannote_compat_level}, got {pyannote.get('compat_level')}"
     )
 
 runtime_assets = {asset.get("kind"): asset for asset in runtime.get("assets", [])}
