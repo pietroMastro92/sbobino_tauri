@@ -4438,6 +4438,7 @@ Load command 14
         ));
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn validate_embedded_torchcodec_ffmpeg_requires_bundled_libs() {
         let temp = tempdir().expect("failed to create tempdir");
