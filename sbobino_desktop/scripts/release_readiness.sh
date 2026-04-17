@@ -456,6 +456,8 @@ popd >/dev/null
 pushd "$ROOT_DIR" >/dev/null
 cargo test -p sbobino-infrastructure runtime_health_reports_compatibility_level_mismatch_as_repair_required
 cargo test -p sbobino-infrastructure runtime_health_backfills_legacy_pyannote_manifest_compat_level
+cargo test -p sbobino-infrastructure load_settings_migrates_legacy_pyannote_runtime_directory_when_current_is_missing
+cargo test -p sbobino-infrastructure load_settings_recovers_pyannote_runtime_from_interrupted_backup_swap
 cargo test -p sbobino-infrastructure runtime_health_reports_install_incomplete_when_python_stdlib_is_missing
 cargo test -p sbobino-infrastructure runtime_health_self_heals_missing_manifest_and_status_from_bundled_override
 cargo test -p sbobino-infrastructure runnable_ffmpeg_probe_accepts_slow_cold_start
@@ -465,6 +467,7 @@ cargo test -p sbobino-infrastructure public_runtime_health_requires_managed_runt
 cargo test -p sbobino-infrastructure public_runtime_health_ignores_configured_host_binaries
 cargo test -p sbobino-infrastructure runtime_health_trusts_cached_ready_pyannote_status_on_warm_start
 cargo test -p sbobino-desktop install_pyannote_archive_extracts_expected_root
+cargo test -p sbobino-desktop promote_staged_pyannote_runtime_swaps_only_after_staging_finishes
 cargo test -p sbobino-desktop pyannote_runtime_swap_rolls_back_previous_install_on_failure
 cargo test -p sbobino-desktop verify_file_sha256_rejects_wrong_checksum
 cargo test -p sbobino-desktop validate_setup_manifest_rejects_mismatched_release_tag

@@ -278,7 +278,6 @@ type DetailMode = "transcript" | "segments" | "summary" | "emotion" | "chat";
 type TranscriptViewMode = "optimized" | "original";
 type InspectorMode = "details" | "info";
 type StartupRequirementsSnapshot = {
-  provisioningStatus: ProvisioningStatus;
   modelCatalog: ProvisioningModelCatalogEntry[];
   runtimeHealth: RuntimeHealth;
 };
@@ -3198,7 +3197,6 @@ export function App({
     }
 
     if (settingsPane === "local_models") {
-      void refreshProvisioningStatus();
       void refreshProvisioningModels();
       return;
     }
@@ -3313,9 +3311,6 @@ export function App({
           : Promise.resolve(
               initialBootstrap?.setupReport?.runtime_health ?? null,
             );
-        const initialProvisioningPromise = shouldPrimeSettingsDiagnostics
-          ? provisioningStatus()
-          : Promise.resolve(null);
         const initialModelCatalogPromise = shouldPrimeModelCatalog
           ? provisioningModels()
           : Promise.resolve(null);
@@ -3323,13 +3318,9 @@ export function App({
         const initialSettings = await initialSettingsPromise;
         if (disposed) return;
 
-        const [
-          initialRuntimeHealthResult,
-          initialProvisioningResult,
-          initialModelCatalogResult,
-        ] = await Promise.allSettled([
+        const [initialRuntimeHealthResult, initialModelCatalogResult] =
+          await Promise.allSettled([
           initialRuntimeHealthPromise,
-          initialProvisioningPromise,
           initialModelCatalogPromise,
         ]);
         if (disposed) return;
@@ -3342,12 +3333,7 @@ export function App({
         ) {
           setRuntimeHealth(initialRuntimeHealthResult.value);
           writeLastSeenAppVersion(initialRuntimeHealthResult.value.app_version);
-        }
-        if (
-          initialProvisioningResult.status === "fulfilled" &&
-          initialProvisioningResult.value
-        ) {
-          setProvisioningState(initialProvisioningResult.value);
+          syncProvisioningFromRuntimeHealth(initialRuntimeHealthResult.value);
         }
         if (
           initialModelCatalogResult.status === "fulfilled" &&
@@ -3362,7 +3348,6 @@ export function App({
           shouldPrimeSettingsDiagnostics &&
           shouldPrimeModelCatalog &&
           initialRuntimeHealthResult.status === "fulfilled" &&
-          initialProvisioningResult.status === "fulfilled" &&
           initialModelCatalogResult.status === "fulfilled"
         ) {
           setStartupRequirementsLoaded(true);
@@ -4266,9 +4251,7 @@ export function App({
         }
 
         if (event.state === "completed") {
-          void refreshProvisioningStatus();
           void refreshProvisioningModels();
-          void refreshRuntimeHealth();
         }
       });
       if (unmounted) {
@@ -5240,7 +5223,18 @@ export function App({
               count:
                 status.missing_models.length + status.missing_encoders.length,
             },
-          ),
+      ),
+    }));
+  }
+
+  function syncProvisioningFromRuntimeHealth(health: RuntimeHealth): void {
+    const missingAssets = [...health.missing_models, ...health.missing_encoders];
+    setProvisioning((previous) => ({
+      ...previous,
+      ready: missingAssets.length === 0,
+      modelsDir: health.models_dir_resolved || previous.modelsDir,
+      missing: missingAssets,
+      pyannote: health.pyannote,
     }));
   }
 
@@ -5706,26 +5700,12 @@ export function App({
     }
   }
 
-  async function refreshProvisioningStatus(): Promise<void> {
-    try {
-      const status = await provisioningStatus();
-      setProvisioningState(status);
-    } catch (statusError) {
-      setError(
-        formatUiError(
-          "error.readProvisioningStatus",
-          "Could not read provisioning status",
-          statusError,
-        ),
-      );
-    }
-  }
-
   async function refreshRuntimeHealth(): Promise<void> {
     try {
       const health = await fetchRuntimeHealth();
       setRuntimeHealth(health);
       writeLastSeenAppVersion(health.app_version);
+      syncProvisioningFromRuntimeHealth(health);
     } catch (healthError) {
       setError(
         formatUiError(
@@ -5746,6 +5726,7 @@ export function App({
       setModelCatalog(models);
       setRuntimeHealth(health);
       writeLastSeenAppVersion(health.app_version);
+      syncProvisioningFromRuntimeHealth(health);
     } catch (modelsError) {
       setError(
         formatUiError(
@@ -5758,13 +5739,12 @@ export function App({
   }
 
   async function loadStartupRequirements(): Promise<StartupRequirementsSnapshot> {
-    const [status, models, health] = await Promise.all([
-      provisioningStatus(),
+    const [models, health] = await Promise.all([
       provisioningModels(),
       fetchRuntimeHealth(),
     ]);
 
-    setProvisioningState(status);
+    syncProvisioningFromRuntimeHealth(health);
     setModelCatalog(models);
     setRuntimeHealth(health);
     writeLastSeenAppVersion(health.app_version);
@@ -5772,7 +5752,6 @@ export function App({
     setStartupRequirementsError(null);
 
     return {
-      provisioningStatus: status,
       modelCatalog: models,
       runtimeHealth: health,
     };
@@ -6248,7 +6227,6 @@ export function App({
       },
     }));
     void refreshRuntimeHealth();
-    void refreshProvisioningStatus();
   }
 
   async function onPatchSpeakerDiarizationPreferences(

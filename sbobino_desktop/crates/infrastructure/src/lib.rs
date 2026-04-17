@@ -73,6 +73,8 @@ const REQUIRED_COREML_ENCODERS: [(&str, &str); 5] = [
 pub const PYANNOTE_MANIFEST_FILENAME: &str = "manifest.json";
 pub const PYANNOTE_STATUS_FILENAME: &str = "status.json";
 const PYANNOTE_BUNDLED_OVERRIDE_SOURCE: &str = "bundled_override";
+const PYANNOTE_SWAP_BACKUP_PREFIX: &str = ".pyannote-backup-";
+const PYANNOTE_SWAP_STAGE_PREFIX: &str = ".pyannote-stage-";
 pub const PYANNOTE_COMPAT_LEVEL: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1011,6 +1013,12 @@ impl RuntimeTranscriptionFactory {
             .load_sync()
             .map_err(|e| format!("failed to load settings: {e}"))?;
 
+        if let Err(error) = self.recover_interrupted_pyannote_swap_if_needed() {
+            warn!("failed to recover interrupted pyannote swap: {error}");
+        }
+        if let Err(error) = self.migrate_pyannote_runtime_if_needed() {
+            warn!("failed to migrate legacy pyannote runtime directory: {error}");
+        }
         self.migrate_models_dir_if_needed(&mut settings)?;
         Ok(settings)
     }
@@ -2365,6 +2373,74 @@ fn managed_runnable_binary_probe(candidate: &Path) -> RunnableBinaryProbe {
     }
 }
 impl RuntimeTranscriptionFactory {
+    fn recover_interrupted_pyannote_swap_if_needed(&self) -> Result<(), String> {
+        let current_runtime_dir = self.managed_pyannote_runtime_dir();
+        if pyannote_runtime_layout_is_usable(&current_runtime_dir) {
+            return Ok(());
+        }
+
+        let Some(parent) = current_runtime_dir.parent() else {
+            return Ok(());
+        };
+
+        for prefix in [PYANNOTE_SWAP_BACKUP_PREFIX, PYANNOTE_SWAP_STAGE_PREFIX] {
+            let Some(candidate) = newest_swap_candidate_dir(parent, prefix) else {
+                continue;
+            };
+            if !pyannote_runtime_layout_is_usable(&candidate) {
+                continue;
+            }
+
+            remove_file_or_directory_if_exists(&current_runtime_dir)?;
+            std::fs::rename(&candidate, &current_runtime_dir).map_err(|e| {
+                format!(
+                    "failed to recover pyannote runtime from '{}' to '{}': {e}",
+                    candidate.display(),
+                    current_runtime_dir.display()
+                )
+            })?;
+            info!(
+                "recovered pyannote runtime from interrupted swap: '{}' -> '{}'",
+                candidate.display(),
+                current_runtime_dir.display()
+            );
+            return Ok(());
+        }
+
+        Ok(())
+    }
+
+    fn migrate_pyannote_runtime_if_needed(&self) -> Result<(), String> {
+        let current_runtime_dir = self.managed_pyannote_runtime_dir();
+        if pyannote_runtime_layout_is_usable(&current_runtime_dir) {
+            return Ok(());
+        }
+
+        for legacy_runtime_dir in legacy_pyannote_runtime_dirs(&self.data_dir) {
+            if legacy_runtime_dir == current_runtime_dir
+                || !pyannote_runtime_layout_is_usable(&legacy_runtime_dir)
+            {
+                continue;
+            }
+
+            copy_directory_recursive(&legacy_runtime_dir, &current_runtime_dir).map_err(|e| {
+                format!(
+                    "failed to copy legacy pyannote runtime from '{}' to '{}': {e}",
+                    legacy_runtime_dir.display(),
+                    current_runtime_dir.display()
+                )
+            })?;
+            info!(
+                "migrated pyannote runtime directory from '{}' to '{}'",
+                legacy_runtime_dir.display(),
+                current_runtime_dir.display()
+            );
+            break;
+        }
+
+        Ok(())
+    }
+
     fn migrate_models_dir_if_needed(&self, settings: &mut AppSettings) -> Result<(), String> {
         let current_models_dir =
             PathBuf::from(self.resolve_models_dir(&settings.transcription.models_dir));
@@ -2717,6 +2793,88 @@ fn legacy_models_dir() -> Option<PathBuf> {
             .join("sbobino")
             .join("models")
     })
+}
+
+fn legacy_pyannote_runtime_dirs(current_data_dir: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let Some(parent) = current_data_dir.parent() else {
+        return candidates;
+    };
+
+    let current_name = current_data_dir
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_default();
+
+    if current_name == "com.sbobino.desktop" {
+        candidates.push(parent.join("sbobino").join("runtime").join("pyannote"));
+    } else if current_name == "sbobino" {
+        candidates.push(
+            parent
+                .join("com.sbobino.desktop")
+                .join("runtime")
+                .join("pyannote"),
+        );
+    } else {
+        candidates.push(parent.join("sbobino").join("runtime").join("pyannote"));
+        candidates.push(
+            parent
+                .join("com.sbobino.desktop")
+                .join("runtime")
+                .join("pyannote"),
+        );
+    }
+
+    candidates
+}
+
+fn pyannote_runtime_layout_is_usable(runtime_dir: &Path) -> bool {
+    if !runtime_dir.is_dir() {
+        return false;
+    }
+
+    let python_dir = runtime_dir.join("python");
+    let python_ready = [
+        python_dir.join("bin").join("python3"),
+        python_dir.join("bin").join("python"),
+    ]
+    .iter()
+    .any(|candidate| is_runnable_binary_file(candidate));
+    let model_ready = is_pyannote_model_dir(&runtime_dir.join("model"));
+
+    python_ready && model_ready
+}
+
+fn newest_swap_candidate_dir(parent: &Path, prefix: &str) -> Option<PathBuf> {
+    let mut candidates = std::fs::read_dir(parent)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if path.is_dir() && name.starts_with(prefix) {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    candidates.sort_by(|left, right| right.file_name().cmp(&left.file_name()));
+    candidates.into_iter().next()
+}
+
+fn remove_file_or_directory_if_exists(path: &Path) -> Result<(), String> {
+    if path.is_dir() {
+        std::fs::remove_dir_all(path)
+            .map_err(|e| format!("failed to remove directory '{}': {e}", path.display()))?;
+    } else if path.is_file() {
+        std::fs::remove_file(path)
+            .map_err(|e| format!("failed to remove file '{}': {e}", path.display()))?;
+    }
+    Ok(())
 }
 
 fn is_executable_file(path: &Path) -> bool {
@@ -3925,6 +4083,92 @@ mod tests {
             .managed_pyannote_model_dir()
             .join("config.yaml")
             .is_file());
+    }
+
+    #[test]
+    fn load_settings_migrates_legacy_pyannote_runtime_directory_when_current_is_missing() {
+        let (temp, factory) = build_factory();
+        persist_enabled_diarization(&factory);
+
+        let legacy_runtime_dir = temp
+            .path()
+            .parent()
+            .expect("tempdir should have parent")
+            .join("com.sbobino.desktop")
+            .join("runtime")
+            .join("pyannote");
+        write_executable_file(
+            &legacy_runtime_dir
+                .join("python")
+                .join("bin")
+                .join("python3"),
+            "#!/bin/sh\nexit 0\n",
+        );
+        std::fs::create_dir_all(legacy_runtime_dir.join("model"))
+            .expect("legacy model dir should exist");
+        std::fs::write(
+            legacy_runtime_dir.join("model").join("config.yaml"),
+            "name: test\n",
+        )
+        .expect("legacy model marker should write");
+
+        factory.load_settings().expect("settings should load");
+
+        assert!(
+            factory
+                .managed_pyannote_python_dir()
+                .join("bin")
+                .join("python3")
+                .is_file(),
+            "managed pyannote python should be migrated into current data dir"
+        );
+        assert!(
+            factory
+                .managed_pyannote_model_dir()
+                .join("config.yaml")
+                .is_file(),
+            "managed pyannote model should be migrated into current data dir"
+        );
+    }
+
+    #[test]
+    fn load_settings_recovers_pyannote_runtime_from_interrupted_backup_swap() {
+        let (_temp, factory) = build_factory();
+        persist_enabled_diarization(&factory);
+
+        let runtime_dir = factory.managed_pyannote_runtime_dir();
+        std::fs::create_dir_all(&runtime_dir).expect("partial runtime dir should exist");
+
+        let backup_dir = runtime_dir
+            .parent()
+            .expect("runtime dir should have parent")
+            .join(".pyannote-backup-999999");
+        write_executable_file(
+            &backup_dir.join("python").join("bin").join("python3"),
+            "#!/bin/sh\nexit 0\n",
+        );
+        std::fs::create_dir_all(backup_dir.join("model")).expect("backup model dir should exist");
+        std::fs::write(backup_dir.join("model").join("config.yaml"), "name: test\n")
+            .expect("backup model marker should write");
+
+        factory.load_settings().expect("settings should load");
+
+        assert!(
+            factory
+                .managed_pyannote_python_dir()
+                .join("bin")
+                .join("python3")
+                .is_file(),
+            "runtime should be restored from backup swap directory"
+        );
+        assert!(
+            factory
+                .managed_pyannote_model_dir()
+                .join("config.yaml")
+                .is_file(),
+            "model should be restored from backup swap directory"
+        );
+        assert!(!backup_dir.exists(), "backup directory should be consumed");
     }
 
     #[test]
