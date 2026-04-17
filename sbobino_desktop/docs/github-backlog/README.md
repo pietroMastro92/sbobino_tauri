@@ -17,6 +17,7 @@ Shared core:
 - ingest new audio automatically from user-controlled sources
 - prepare usable outputs before the user opens the app
 - keep automation visible, reversible, and privacy-safe
+- improve transcription quality on the actual device and evolve with safe local personalization
 
 Initial priority order:
 
@@ -57,6 +58,33 @@ Wave 3:
 - `06-student-study-output-pack.md`
 - `07-enterprise-meeting-intelligence.md`
 
+## Wave 2: Transcription Quality and Personal Adaptation
+
+This second backlog wave focuses on how Sbobino transcribes, not just what it does after import.
+
+Shared quality goals:
+
+- improve whisper.cpp and WhisperKit behavior on the current device
+- route models and decoding strategies more intelligently
+- learn from user vocabulary and corrections in a local-first way
+- surface uncertainty clearly and make review faster
+- keep research on true acoustic personalization separate from shippable product work
+
+Quality wave priority order:
+
+9. Device-aware Whisper Optimization
+10. Adaptive Model Routing for Transcription
+11. Personal Vocabulary and Correction Memory
+12. Hard Audio Recovery Mode
+13. Confidence, Uncertainty, and Review-Aware Transcript UI
+14. Segment Repair and Speaker Quality Pass
+15. Personalized Acoustic Adaptation Research Track
+
+Quality wave delivery split:
+
+- Shippable product epics: `09` to `14`
+- Research-only epic: `15`
+
 ## Shared test scenarios
 
 - A new Voice Memos recording synced to the Mac is queued once and is already available when the user opens the app.
@@ -76,3 +104,10 @@ Wave 3:
 - [06 Student study output pack](./issues/06-student-study-output-pack.md)
 - [07 Enterprise meeting intelligence](./issues/07-enterprise-meeting-intelligence.md)
 - [08 Trust, control, and local compliance](./issues/08-trust-control-local-compliance.md)
+- [09 Device-aware Whisper Optimization](./issues/09-device-aware-whisper-optimization.md)
+- [10 Adaptive Model Routing for Transcription](./issues/10-adaptive-model-routing-for-transcription.md)
+- [11 Personal Vocabulary and Correction Memory](./issues/11-personal-vocabulary-and-correction-memory.md)
+- [12 Hard Audio Recovery Mode](./issues/12-hard-audio-recovery-mode.md)
+- [13 Confidence, Uncertainty, and Review-Aware Transcript UI](./issues/13-confidence-uncertainty-and-review-aware-transcript-ui.md)
+- [14 Segment Repair and Speaker Quality Pass](./issues/14-segment-repair-and-speaker-quality-pass.md)
+- [15 Personalized Acoustic Adaptation Research Track](./issues/15-personalized-acoustic-adaptation-research-track.md)

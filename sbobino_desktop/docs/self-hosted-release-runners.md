@@ -50,6 +50,12 @@ Use GitHub Actions as the orchestrator while running distribution-critical valid
 
 Register each runner at repo or organization scope with the exact label sets above.
 
+Recommended helper:
+
+```bash
+./scripts/install_self_hosted_runner_macos.sh <MACHINE_CLASS> pietroMastro92/Sbobino
+```
+
 Recommended service mode:
 
 - run the GitHub runner as a persistent launch agent or service
@@ -76,6 +82,12 @@ Install and keep available on every runner:
 - `ditto`
 
 Apple Silicon runners also need enough free disk for the full first-launch runtime and pyannote installation.
+
+After installation, run:
+
+```bash
+./scripts/preflight_self_hosted_runner.sh <MACHINE_CLASS> pietroMastro92/Sbobino
+```
 
 ## Workspace hygiene
 
@@ -121,3 +133,7 @@ Minimum acceptable setup:
    - `AS-THIRD.validation-report.json`
    - `INTEL-PRIMARY.validation-report.json`
 4. Stable promotion remains manual and blocked unless all required reports are present and valid.
+
+## First real run
+
+Use [first-real-candidate-runbook.md](first-real-candidate-runbook.md) for the first end-to-end live candidate on GitHub.

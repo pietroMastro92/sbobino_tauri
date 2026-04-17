@@ -13,6 +13,7 @@ This repository is the production-grade rewrite of the original Python Sbobino a
 - `docs/release-and-migration.md`: release pipeline and migration plan
 - `docs/distribution-validation-plan.md`: Apple Silicon clean-room distribution matrix and future Intel/Windows expansion path
 - `docs/self-hosted-release-runners.md`: runner labels, machine preparation, and self-hosted validation requirements
+- `docs/first-real-candidate-runbook.md`: operational checklist for the first live candidate with GitHub Actions + self-hosted Macs
 - `docs/feature-migration-matrix.md`: feature-by-feature parity checklist
 - `THIRD_PARTY_NOTICES.md`: licenses and attribution for FFmpeg, whisper.cpp, pyannote, Hugging Face models, and related runtime components
 - `docs/github-release-template.md`: copy-paste text for GitHub Release notes (third-party disclaimer + links)
@@ -68,6 +69,11 @@ Helper scripts:
 - `./scripts/publish_candidate_release.sh <version>` publishes a prerelease candidate and refuses publishing if readiness proof/checksums/manifests/templates are inconsistent
 - `./scripts/promote_candidate_release.sh <version>`
 - `./scripts/run_release_machine_validation.sh <machine-class> <version>` validates the exact public candidate on `AS-PRIMARY`, `AS-THIRD`, or `INTEL-PRIMARY`
+- `./scripts/install_self_hosted_runner_macos.sh <machine-class>` installs and registers a macOS self-hosted runner with the right labels
+- `./scripts/preflight_self_hosted_runner.sh <machine-class>` checks whether a machine is truly ready to serve as a release runner
+- `./scripts/check_release_runner_matrix.sh` confirms the full GitHub runner matrix is online before dispatch
+- `./scripts/dispatch_release_candidate.sh v<version>` triggers the Release Candidate workflow only when the runner matrix is complete
+- `./scripts/watch_release_candidate.sh` watches the latest candidate run and summarizes the jobs at the end
 - `./scripts/retire_failed_candidate.sh <version>`
 
 Stable release policy:
