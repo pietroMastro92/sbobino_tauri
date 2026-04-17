@@ -128,7 +128,7 @@ pub struct ManagedRuntimeHealth {
     pub whisper_stream: ManagedRuntimeBinaryHealth,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RuntimeHealth {
     pub host_os: String,
     pub host_arch: String,
@@ -258,6 +258,21 @@ impl RuntimeTranscriptionFactory {
         bundle_resources_dir: Option<PathBuf>,
         allow_dev_resource_overrides: bool,
     ) -> Result<Self, String> {
+        let runtime_source_policy = detect_runtime_source_policy(allow_dev_resource_overrides);
+        Self::new_with_explicit_policy(
+            data_dir,
+            bundle_resources_dir,
+            allow_dev_resource_overrides,
+            runtime_source_policy,
+        )
+    }
+
+    fn new_with_explicit_policy(
+        data_dir: &Path,
+        bundle_resources_dir: Option<PathBuf>,
+        allow_dev_resource_overrides: bool,
+        runtime_source_policy: RuntimeSourcePolicy,
+    ) -> Result<Self, String> {
         std::fs::create_dir_all(data_dir)
             .map_err(|e| format!("failed to create app data dir {}: {e}", data_dir.display()))?;
 
@@ -276,7 +291,7 @@ impl RuntimeTranscriptionFactory {
             data_dir: data_dir.to_path_buf(),
             bundle_resources_dir,
             allow_dev_resource_overrides,
-            runtime_source_policy: detect_runtime_source_policy(allow_dev_resource_overrides),
+            runtime_source_policy,
         })
     }
 
@@ -285,7 +300,20 @@ impl RuntimeTranscriptionFactory {
         data_dir: &Path,
         bundle_resources_dir: Option<PathBuf>,
     ) -> Result<Self, String> {
-        Self::new_with_options(data_dir, bundle_resources_dir, false)
+        Self::new_for_tests_with_policy(
+            data_dir,
+            bundle_resources_dir,
+            RuntimeSourcePolicy::PublicManagedOnly,
+        )
+    }
+
+    #[cfg(test)]
+    fn new_for_tests_with_policy(
+        data_dir: &Path,
+        bundle_resources_dir: Option<PathBuf>,
+        runtime_source_policy: RuntimeSourcePolicy,
+    ) -> Result<Self, String> {
+        Self::new_with_explicit_policy(data_dir, bundle_resources_dir, false, runtime_source_policy)
     }
 
     pub fn artifacts_db_path(&self) -> PathBuf {
@@ -3620,17 +3648,17 @@ mod tests {
         parse_external_python_framework_reference, parse_otool_rpath_entries,
         parse_pyannote_python_framework_version, pyannote_runtime_arch_matches_host,
         pyannote_runtime_validation_script, target_triple_suffix, ManagedPyannoteManifest,
-        ReconcileManagedPyannoteReleaseOutcome, RuntimeTranscriptionFactory, PYANNOTE_COMPAT_LEVEL,
-        PYANNOTE_STATUS_FILENAME,
+        ReconcileManagedPyannoteReleaseOutcome, RuntimeSourcePolicy, RuntimeTranscriptionFactory,
+        PYANNOTE_COMPAT_LEVEL, PYANNOTE_STATUS_FILENAME,
     };
     use sbobino_domain::{AiProvider, AppSettings, RemoteServiceConfig, RemoteServiceKind};
     use tempfile::tempdir;
 
     fn build_factory() -> (tempfile::TempDir, RuntimeTranscriptionFactory) {
         std::env::set_var("SBOBINO_ALLOW_INSECURE_LOCAL_SECRETS", "1");
-        std::env::remove_var("SBOBINO_RUNTIME_SOURCE_POLICY");
         let temp = tempdir().expect("failed to create tempdir");
-        let factory = RuntimeTranscriptionFactory::new_for_tests(temp.path(), None)
+        let data_dir = temp.path().join("app-data");
+        let factory = RuntimeTranscriptionFactory::new_for_tests(&data_dir, None)
             .expect("factory should build");
         (temp, factory)
     }
@@ -3641,12 +3669,13 @@ mod tests {
         std::path::PathBuf,
     ) {
         std::env::set_var("SBOBINO_ALLOW_INSECURE_LOCAL_SECRETS", "1");
-        std::env::remove_var("SBOBINO_RUNTIME_SOURCE_POLICY");
         let temp = tempdir().expect("failed to create tempdir");
         let resources_dir = temp.path().join("resources");
-        let factory =
-            RuntimeTranscriptionFactory::new_for_tests(temp.path(), Some(resources_dir.clone()))
-                .expect("factory should build");
+        let factory = RuntimeTranscriptionFactory::new_for_tests(
+            &temp.path().join("app-data"),
+            Some(resources_dir.clone()),
+        )
+        .expect("factory should build");
         (temp, factory, resources_dir)
     }
 
@@ -3656,16 +3685,14 @@ mod tests {
         std::path::PathBuf,
     ) {
         std::env::set_var("SBOBINO_ALLOW_INSECURE_LOCAL_SECRETS", "1");
-        std::env::set_var("SBOBINO_RUNTIME_SOURCE_POLICY", "dev-fallback");
         let temp = tempdir().expect("failed to create tempdir");
         let resources_dir = temp.path().join("resources");
-        let factory = RuntimeTranscriptionFactory::new_with_options(
-            temp.path(),
+        let factory = RuntimeTranscriptionFactory::new_for_tests_with_policy(
+            &temp.path().join("app-data"),
             Some(resources_dir.clone()),
-            true,
+            RuntimeSourcePolicy::DevFallbackAllowed,
         )
         .expect("factory should build");
-        std::env::remove_var("SBOBINO_RUNTIME_SOURCE_POLICY");
         (temp, factory, resources_dir)
     }
 
@@ -4087,13 +4114,13 @@ mod tests {
 
     #[test]
     fn load_settings_migrates_legacy_pyannote_runtime_directory_when_current_is_missing() {
-        let (temp, factory) = build_factory();
+        let (_temp, factory) = build_factory();
         persist_enabled_diarization(&factory);
 
-        let legacy_runtime_dir = temp
-            .path()
+        let legacy_runtime_dir = factory
+            .data_dir()
             .parent()
-            .expect("tempdir should have parent")
+            .expect("data dir should have parent")
             .join("com.sbobino.desktop")
             .join("runtime")
             .join("pyannote");
