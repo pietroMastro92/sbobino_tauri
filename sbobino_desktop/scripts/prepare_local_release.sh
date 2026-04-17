@@ -178,6 +178,7 @@ need_cmd clang
 need_cmd cmake
 need_cmd codesign
 need_cmd curl
+need_cmd git
 need_cmd hdiutil
 need_cmd make
 need_cmd npm
@@ -340,102 +341,11 @@ if [[ -f "$UPDATER_SIG" ]]; then
   cp "$UPDATER_SIG" "$OUTPUT_DIR/"
 fi
 
-python3 - <<'PY' "$OUTPUT_DIR" "$VERSION" "$RELEASE_PROFILE"
-import hashlib
-import json
-import pathlib
-import sys
-from datetime import datetime, timezone
-
-output_dir = pathlib.Path(sys.argv[1])
-version = sys.argv[2]
-release_profile = sys.argv[3]
-
-required_assets = [
-    f"Sbobino_{version}_aarch64.dmg",
-    "Sbobino.app.tar.gz",
-    "latest.json",
-    "setup-manifest.json",
-    "runtime-manifest.json",
-    "speech-runtime-macos-aarch64.zip",
-    "pyannote-manifest.json",
-    "pyannote-runtime-macos-aarch64.zip",
-    "pyannote-model-community-1.zip",
-]
-optional_assets = ["Sbobino.app.tar.gz.sig"]
-
-checksums = {}
-for name in required_assets + optional_assets:
-    path = output_dir / name
-    if not path.is_file():
-        continue
-    checksums[name] = hashlib.sha256(path.read_bytes()).hexdigest()
-
-proof = {
-    "version": version,
-    "release_profile": release_profile,
-    "status": "passed",
-    "gate": "release_readiness.sh",
-    "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    "required_assets": required_assets,
-    "optional_assets": optional_assets,
-    "sha256": checksums,
-}
-
-(output_dir / "release-readiness-proof.json").write_text(
-    json.dumps(proof, indent=2) + "\n",
-    encoding="utf-8",
-)
-
-validation_templates = {
-    "AS-CLEAN-THIRD-MAC.validation-report.json": {
-        "schema_version": 1,
-        "version": version,
-        "release_tag": f"v{version}",
-        "release_url": "",
-        "machine_class": "AS-CLEAN-THIRD-MAC",
-        "status": "pending",
-        "tester": "",
-        "macos_version": "",
-        "tested_at_utc": "",
-        "notes": "",
-        "required_scenarios": [
-            "clean_room_install",
-            "warm_restart",
-            "functional_diarization_smoke",
-        ],
-        "scenario_results": {
-            "clean_room_install": "pending",
-            "warm_restart": "pending",
-            "functional_diarization_smoke": "pending",
-        },
-    },
-    "AS-UPGRADE-MAC.validation-report.json": {
-        "schema_version": 1,
-        "version": version,
-        "release_tag": f"v{version}",
-        "release_url": "",
-        "machine_class": "AS-UPGRADE-MAC",
-        "status": "pending",
-        "tester": "",
-        "macos_version": "",
-        "tested_at_utc": "",
-        "notes": "",
-        "required_scenarios": [
-            "update_path_validation",
-        ],
-        "scenario_results": {
-            "update_path_validation": "pending",
-        },
-    },
-}
-
-for filename, payload in validation_templates.items():
-    (output_dir / filename).write_text(
-        json.dumps(payload, indent=2) + "\n",
-        encoding="utf-8",
-    )
-PY
+python3 "$ROOT_DIR/scripts/generate_release_candidate_metadata.py" \
+  "$OUTPUT_DIR" \
+  "$VERSION" \
+  --release-profile "$RELEASE_PROFILE" \
+  --commit-sha "$(git -C "$ROOT_DIR/.." rev-parse HEAD)"
 
 cat >"$OUTPUT_DIR/release-notes.md" <<EOF
 ## Sbobino $VERSION
@@ -492,23 +402,27 @@ Nothing in this folder has been published automatically.
    - \`pyannote-model-community-1.zip\`
    - \`pyannote-manifest.json\`
    - \`release-readiness-proof.json\`
-   - \`AS-CLEAN-THIRD-MAC.validation-report.json\`
-   - \`AS-UPGRADE-MAC.validation-report.json\`
+   - \`AS-PRIMARY.validation-report.json\`
+   - \`AS-THIRD.validation-report.json\`
+   - \`INTEL-PRIMARY.validation-report.json\`
    - \`release-notes.md\` (use this exact file as the GitHub release body)
 5. Run \`./scripts/distribution_readiness.sh "$VERSION"\` from \`sbobino_desktop/\`.
-6. Validate that exact GitHub release against \`docs/distribution-validation-plan.md\` on:
-   - \`AS-CLEAN-THIRD-MAC\`
-   - \`AS-UPGRADE-MAC\`
-7. Update both validation report JSON files with:
+6. Generate \`distribution-readiness-proof.json\` after the remote integrity gate passes.
+7. Validate that exact GitHub release against \`docs/distribution-validation-plan.md\` on:
+   - \`AS-PRIMARY\`
+   - \`AS-THIRD\`
+   - \`INTEL-PRIMARY\`
+8. Update all machine validation report JSON files with:
    - the GitHub release URL
    - tester name
-   - macOS version
+   - OS name/version
    - \`tested_at_utc\`
    - per-scenario results
    - top-level \`status\` set to \`passed\` only when every mandatory scenario passed
-8. Re-upload those two JSON files to the same GitHub prerelease with \`gh release upload --clobber\`.
-9. Promote to stable only with \`./scripts/promote_candidate_release.sh "$VERSION"\`.
-10. If validation fails, retire the prerelease and cut a new patch version. Do not overwrite a stable release in place.
+   - use \`soft_pass\` only for \`INTEL-PRIMARY\` when the arm64 binary is intentionally marked \`not_applicable\`
+9. Re-upload \`distribution-readiness-proof.json\` plus all three machine validation JSON files to the same GitHub prerelease with \`gh release upload --clobber\`.
+10. Promote to stable only with \`./scripts/promote_candidate_release.sh "$VERSION"\`.
+11. If validation fails, retire the prerelease and cut a new patch version. Do not overwrite a stable release in place.
 
 ## gh CLI example
 
@@ -517,9 +431,15 @@ Nothing in this folder has been published automatically.
 
 ./scripts/distribution_readiness.sh "$VERSION"
 
+python3 ./scripts/write_distribution_readiness_proof.py \
+  "$OUTPUT_DIR/distribution-readiness-proof.json" \
+  "$VERSION"
+
 gh release upload "v$VERSION" \
-  "$OUTPUT_DIR/AS-CLEAN-THIRD-MAC.validation-report.json" \
-  "$OUTPUT_DIR/AS-UPGRADE-MAC.validation-report.json" \
+  "$OUTPUT_DIR/distribution-readiness-proof.json" \
+  "$OUTPUT_DIR/AS-PRIMARY.validation-report.json" \
+  "$OUTPUT_DIR/AS-THIRD.validation-report.json" \
+  "$OUTPUT_DIR/INTEL-PRIMARY.validation-report.json" \
   --clobber
 
 ./scripts/promote_candidate_release.sh "$VERSION"
@@ -588,7 +508,7 @@ Sbobino version installed with working runtime, whisper models, and pyannote.
 
 - Pass only if the update completes without manual repair and pyannote stays usable the same way as before.
 - If any step fails, delete the prerelease and cut a new patch version.
-- Record the result in \`AS-UPGRADE-MAC.validation-report.json\` before promotion.
+- Record the result in \`AS-PRIMARY.validation-report.json\` before promotion.
 EOF
 
 cat <<EOF
@@ -605,8 +525,9 @@ Artifacts:
   - pyannote-model-community-1.zip
   - pyannote-manifest.json
   - release-readiness-proof.json
-  - AS-CLEAN-THIRD-MAC.validation-report.json
-  - AS-UPGRADE-MAC.validation-report.json
+  - AS-PRIMARY.validation-report.json
+  - AS-THIRD.validation-report.json
+  - INTEL-PRIMARY.validation-report.json
 EOF
 
 if [[ -f "$OUTPUT_DIR/Sbobino.app.tar.gz.sig" ]]; then

@@ -34,7 +34,7 @@ A release is distributable only if all mandatory Apple Silicon scenarios pass on
 Mandatory rule:
 
 - Do not publish or promote a stable release until the Apple Silicon distribution matrix in this document is green.
-- Publish the release as a prerelease candidate first, then promote only after the Apple Silicon validation report assets are uploaded with `status=passed`.
+- Publish the release as a prerelease candidate first, then promote only after `release-readiness-proof.json`, `distribution-readiness-proof.json`, and the machine validation report assets are uploaded with passed statuses.
 - If the release fails on a third-party Mac, retire it and cut a new patch version.
 - Never fix a broken stable release in place.
 
@@ -44,28 +44,37 @@ Mandatory rule:
 
 - `macOS Apple Silicon (arm64)`
 
+### Required supporting platform now
+
+- `macOS Intel x86_64` as bootstrap and distribution-layer validation for the arm64 release flow
+
 ### Required platform later
 
-- `macOS Intel x86_64`
 - `Windows x86_64`
 
 ## Test Environments
 
-We should maintain at least these Apple Silicon environments:
+We should maintain these validation environments:
 
-1. `AS-CLEAN-PRIMARY`
-   A clean Apple Silicon Mac with no prior Sbobino app data.
+1. `AS-PRIMARY`
+   Apple Silicon Mac with normal developer/team usage. This machine validates the real upgrade path from the previous stable public release.
 
-2. `AS-CLEAN-THIRD-MAC`
-   A physically separate third-party Apple Silicon Mac used as the final release confidence machine.
+2. `AS-THIRD`
+   A physically separate third-party Apple Silicon Mac used as the clean-room install gate.
 
-3. `AS-UPGRADE-MAC`
-   An Apple Silicon Mac with the previous public Sbobino version installed and used normally, so update and migration paths are exercised.
+3. `INTEL-PRIMARY`
+   Intel Mac used to validate release metadata, DMG integrity, manifest parsing, and bootstrap-layer compatibility for the arm64 candidate while Intel-native binaries are still out of scope.
 
 Useful but optional:
 
-4. `AS-STRESS-MAC`
+4. `AS-STRESS`
    Apple Silicon Mac used for failure injection: flaky network, low disk, interrupted first launch, interrupted update.
+
+Recommended GitHub runner labels:
+
+- `AS-PRIMARY`: `self-hosted`, `macos`, `apple-silicon`, `as-primary`
+- `AS-THIRD`: `self-hosted`, `macos`, `apple-silicon`, `as-third`
+- `INTEL-PRIMARY`: `self-hosted`, `macos`, `x64`, `intel-primary`
 
 ## Apple Silicon Matrix
 
@@ -87,7 +96,7 @@ Release blocker if any of these fail.
 
 ### B. Clean-room install on third Mac
 
-Machine: `AS-CLEAN-THIRD-MAC`
+Machine: `AS-THIRD`
 
 Preconditions:
 
@@ -115,7 +124,7 @@ Pass criteria:
 
 ### C. Warm restart
 
-Machine: `AS-CLEAN-THIRD-MAC`
+Machine: `AS-THIRD`
 
 Steps:
 
@@ -132,7 +141,7 @@ Pass criteria:
 
 ### D. Functional diarization smoke
 
-Machine: `AS-CLEAN-THIRD-MAC`
+Machine: `AS-THIRD`
 
 Steps:
 
@@ -148,7 +157,7 @@ Pass criteria:
 
 ### E. Update-path validation
 
-Machine: `AS-UPGRADE-MAC`
+Machine: `AS-PRIMARY`
 
 Steps:
 
@@ -166,9 +175,27 @@ Pass criteria:
 - pyannote is preserved or auto-migrated
 - user can still use diarization the same way as before the update
 
-### F. First-launch failure recovery
+### F. Intel bootstrap-layer validation
 
-Machine: `AS-STRESS-MAC` or controlled Apple Silicon test host
+Machine: `INTEL-PRIMARY`
+
+Steps:
+
+1. Download the exact candidate DMG from the GitHub release.
+2. Run `distribution_readiness.sh` against that public release.
+3. Mount the DMG and inspect the shipped app bundle and updater/manifests.
+
+Pass criteria:
+
+- remote asset integrity passes
+- bundle version matches the requested release version
+- DMG contains a valid `Sbobino.app`
+- executable, updater metadata, and manifests are coherent
+- report may end as `soft_pass` if arm64 execution is intentionally `not_applicable`
+
+### G. First-launch failure recovery
+
+Machine: `AS-STRESS` or controlled Apple Silicon test host
 
 Scenarios:
 
@@ -190,11 +217,10 @@ A stable Apple Silicon release is allowed only if:
 
 1. `release_readiness.sh` passes.
 2. `distribution_readiness.sh` passes.
-3. Clean-room install passes on `AS-CLEAN-THIRD-MAC`.
-4. Warm restart passes on `AS-CLEAN-THIRD-MAC`.
-5. Functional diarization smoke passes on `AS-CLEAN-THIRD-MAC`.
-6. Update-path validation passes on `AS-UPGRADE-MAC`.
-7. No mandatory scenario requires terminal repair or manual filesystem intervention.
+3. `AS-PRIMARY` passes update-path validation, warm restart, and diarization smoke.
+4. `AS-THIRD` passes clean-room install, warm restart, and diarization smoke.
+5. `INTEL-PRIMARY` passes release metadata and bootstrap-layer validation, with `soft_pass` allowed when arm64 execution is `not_applicable`.
+6. No mandatory scenario requires terminal repair or manual filesystem intervention.
 
 If any item fails, the release is not distributable.
 
@@ -204,8 +230,8 @@ Each release should produce a short validation record with:
 
 - version
 - release URL
-- machine class tested (`AS-CLEAN-THIRD-MAC`, `AS-UPGRADE-MAC`)
-- macOS version
+- machine class tested (`AS-PRIMARY`, `AS-THIRD`, `INTEL-PRIMARY`)
+- OS version
 - outcome of each scenario
 - timestamp
 - tester
@@ -215,24 +241,13 @@ Minimum evidence for the release thread or release notes folder:
 
 - full `release_readiness.sh` success
 - full `distribution_readiness.sh` success
-- `AS-CLEAN-THIRD-MAC.validation-report.json` uploaded on the GitHub release with `status=passed`
-- `AS-UPGRADE-MAC.validation-report.json` uploaded on the GitHub release with `status=passed`
+- `release-readiness-proof.json` uploaded on the GitHub release with `status=passed`
+- `distribution-readiness-proof.json` uploaded on the GitHub release with `status=passed`
+- `AS-PRIMARY.validation-report.json` uploaded on the GitHub release with `status=passed`
+- `AS-THIRD.validation-report.json` uploaded on the GitHub release with `status=passed`
+- `INTEL-PRIMARY.validation-report.json` uploaded on the GitHub release with `status=passed` or `status=soft_pass`
 
 ## Future Matrix Extension
-
-### macOS Intel x86_64
-
-When Intel support is introduced, repeat the same matrix with:
-
-- `INTEL-CLEAN-PRIMARY`
-- `INTEL-THIRD-MAC`
-- `INTEL-UPGRADE-MAC`
-
-Additional checks:
-
-- no Apple-Silicon-only assumptions
-- correct runtime asset selection
-- no MPS-only pyannote behavior assumptions
 
 ### Windows x86_64
 
@@ -256,8 +271,10 @@ For Apple Silicon, the release bar should now be:
 
 1. local `release_readiness.sh`
 2. uploaded release `distribution_readiness.sh`
-3. clean-room validation on a third Apple Silicon Mac
-4. upgrade validation from previous public version on Apple Silicon
-5. only then stable release
+3. `distribution-readiness-proof.json` uploaded to the prerelease
+4. clean-room validation on `AS-THIRD`
+5. upgrade validation from previous public version on `AS-PRIMARY`
+6. Intel bootstrap-layer validation on `INTEL-PRIMARY`
+7. only then manual stable promotion
 
 That gives us a real distribution process instead of a developer-machine check.

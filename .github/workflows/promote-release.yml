@@ -1,0 +1,31 @@
+name: Promote Release Candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: Existing prerelease tag to promote
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    env:
+      TAG_NAME: ${{ inputs.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag_name }}
+          fetch-depth: 0
+
+      - name: Promote validated candidate
+        working-directory: sbobino_desktop
+        run: |
+          VERSION="${TAG_NAME#v}"
+          ./scripts/promote_candidate_release.sh "$VERSION" "$GITHUB_REPOSITORY"

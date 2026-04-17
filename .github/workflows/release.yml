@@ -1,10 +1,10 @@
-name: Release
+name: Release Candidate
 
 on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: Existing git tag to build and publish
+        description: Existing git tag to build and publish as a prerelease candidate
         required: true
         type: string
 
@@ -25,6 +25,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag_name }}
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -181,58 +182,73 @@ jobs:
           path: |
             sbobino_desktop/target/aarch64-apple-darwin/release/bundle/**
 
-  publish:
+  publish-candidate:
     needs: release-readiness
     runs-on: ubuntu-latest
     env:
       TAG_NAME: ${{ inputs.tag_name }}
+      GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag_name }}
+          fetch-depth: 0
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
+          name: sbobino-macos-arm64
           path: dist
-          merge-multiple: true
 
-      - name: Prepare release notes
+      - name: Assemble candidate release directory
+        working-directory: sbobino_desktop
         run: |
           VERSION="${TAG_NAME#v}"
-          cat > release-notes.md <<EOF
+          ASSET_DIR="$PWD/dist/github-release/v$VERSION"
+          mkdir -p "$ASSET_DIR"
+
+          cp "../dist/dmg/Sbobino_${VERSION}_aarch64.dmg" "$ASSET_DIR/"
+          cp "../dist/macos/Sbobino.app.tar.gz" "$ASSET_DIR/"
+          cp "../dist/macos/Sbobino.app.tar.gz.sig" "$ASSET_DIR/"
+          cp "../dist/release-assets/setup-manifest.json" "$ASSET_DIR/"
+          cp "../dist/runtime-release/speech-runtime-macos-aarch64.zip" "$ASSET_DIR/"
+          cp "../dist/runtime-release/runtime-manifest.json" "$ASSET_DIR/"
+          cp "../dist/pyannote-release/pyannote-runtime-macos-aarch64.zip" "$ASSET_DIR/"
+          cp "../dist/pyannote-release/pyannote-model-community-1.zip" "$ASSET_DIR/"
+          cp "../dist/pyannote-release/pyannote-manifest.json" "$ASSET_DIR/"
+
+      - name: Generate release notes
+        working-directory: sbobino_desktop
+        run: |
+          VERSION="${TAG_NAME#v}"
+          cat > "dist/github-release/v$VERSION/release-notes.md" <<EOF
           ## Sbobino ${VERSION}
 
-          Sbobino ${VERSION} is the corrective macOS Apple Silicon release that supersedes the broken first-launch setup shipped in v0.1.5.
+          Candidate release built from the exact tagged sources for public distribution validation.
 
           ### What is included
 
           - Native desktop app for macOS Apple Silicon.
-          - Fix for the first-launch pyannote setup version mismatch that blocked v0.1.5.
-          - Guided first-launch setup for the local transcription runtime.
-          - Automatic first-launch installation of FFmpeg, Whisper CLI, and Whisper Stream.
-          - Automatic first-launch download of the required Whisper models.
-          - Automatic first-launch installation or repair of the pyannote diarization runtime and model.
-          - In-app update support for future releases.
+          - Managed offline runtime setup for speech transcription and pyannote diarization.
+          - Release manifests and updater metadata tied to this exact candidate.
+          - Fail-closed promotion path: stable is blocked until hosted and self-hosted validation reports are uploaded as passed.
 
-          ### Download and installation
+          ### Validation contract
 
-          - Download the \`.dmg\` file for the recommended macOS installation flow.
-          - Open the disk image and drag **Sbobino** into the **Applications** folder.
-          - If macOS warns that the app is from an unidentified developer, Control-click **Sbobino** in Applications and choose **Open**, or go to **System Settings > Privacy & Security** and click **Open Anyway**.
-          - On first launch, accept the privacy terms and let the app complete the guided local runtime setup before entering the main UI.
-
-          ### Important notes
-
-          - This release is intended for macOS Apple Silicon.
-          - This public build may be unsigned if Apple release credentials are not configured in CI, so Gatekeeper approval can be required once on first launch.
-          - Apple notarization is applied only when Apple release credentials are configured in CI.
-          - The DMG stays lighter because the local runtime toolchain, Whisper models, and pyannote diarization assets are installed during setup instead of being bundled inside the app.
+          - This release is published first as a prerelease candidate.
+          - Stable promotion requires \`release_readiness.sh\`, \`distribution_readiness.sh\`, \`AS-PRIMARY\`, \`AS-THIRD\`, and \`INTEL-PRIMARY\` evidence on the exact public assets.
+          - If any mandatory validation fails, retire this candidate and cut a new patch version instead of overwriting the stable release.
           EOF
 
       - name: Generate updater feed
+        working-directory: sbobino_desktop
         run: |
           VERSION="${TAG_NAME#v}"
           PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           SIGNATURE=$(tr -d '\n' < "dist/macos/Sbobino.app.tar.gz.sig")
-          NOTES=$(cat release-notes.md)
-          URL="https://github.com/pietroMastro92/Sbobino/releases/download/v${VERSION}/Sbobino.app.tar.gz"
+          NOTES=$(cat "dist/github-release/v$VERSION/release-notes.md")
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/Sbobino.app.tar.gz"
 
           jq -n \
             --arg version "$VERSION" \
@@ -250,23 +266,215 @@ jobs:
                   signature: $signature
                 }
               }
-            }' > latest.json
+            }' > "dist/github-release/v$VERSION/latest.json"
 
-      - name: Publish GitHub release assets
-        uses: softprops/action-gh-release@v2
+      - name: Generate release candidate metadata
+        working-directory: sbobino_desktop
+        run: |
+          VERSION="${TAG_NAME#v}"
+          python3 ./scripts/generate_release_candidate_metadata.py \
+            "$PWD/dist/github-release/v$VERSION" \
+            "$VERSION" \
+            --release-profile public \
+            --commit-sha "$(git rev-parse HEAD)"
+
+      - name: Publish prerelease candidate
+        working-directory: sbobino_desktop
+        run: |
+          VERSION="${TAG_NAME#v}"
+          ./scripts/publish_candidate_release.sh "$VERSION" "$GITHUB_REPOSITORY" "$PWD/dist/github-release/v$VERSION"
+
+  distribution-readiness:
+    needs: publish-candidate
+    runs-on: ubuntu-latest
+    env:
+      TAG_NAME: ${{ inputs.tag_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          tag_name: ${{ inputs.tag_name }}
-          draft: false
-          prerelease: false
-          body_path: release-notes.md
-          generate_release_notes: false
-          files: |
-            dist/dmg/Sbobino_*.dmg
-            dist/macos/Sbobino.app.tar.gz
-            dist/macos/Sbobino.app.tar.gz.sig
-            dist/release-assets/setup-manifest.json
-            dist/pyannote-release/*.zip
-            dist/pyannote-release/*.json
-            dist/runtime-release/*.zip
-            dist/runtime-release/*.json
-            latest.json
+          ref: ${{ inputs.tag_name }}
+          fetch-depth: 0
+
+      - name: Run distribution readiness
+        working-directory: sbobino_desktop
+        run: |
+          VERSION="${TAG_NAME#v}"
+          ./scripts/distribution_readiness.sh "$VERSION" "$GITHUB_REPOSITORY"
+
+      - name: Write distribution readiness proof
+        working-directory: sbobino_desktop
+        run: |
+          VERSION="${TAG_NAME#v}"
+          python3 ./scripts/write_distribution_readiness_proof.py \
+            "$PWD/distribution-readiness-proof.json" \
+            "$VERSION" \
+            --repo-slug "$GITHUB_REPOSITORY" \
+            --commit-sha "$(git rev-parse HEAD)"
+
+      - name: Upload distribution readiness artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: distribution-readiness-proof
+          path: sbobino_desktop/distribution-readiness-proof.json
+
+  validate-as-primary:
+    needs: publish-candidate
+    runs-on: [self-hosted, macos, apple-silicon, as-primary]
+    env:
+      TAG_NAME: ${{ inputs.tag_name }}
+      SBOBINO_VALIDATION_FIXTURE_AUDIO: ${{ vars.SBOBINO_VALIDATION_FIXTURE_AUDIO }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag_name }}
+          fetch-depth: 0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run AS-PRIMARY validation
+        working-directory: sbobino_desktop
+        run: |
+          VERSION="${TAG_NAME#v}"
+          ./scripts/run_release_machine_validation.sh \
+            AS-PRIMARY \
+            "$VERSION" \
+            "$GITHUB_REPOSITORY" \
+            "$PWD/AS-PRIMARY.validation-report.json"
+
+      - name: Upload AS-PRIMARY validation artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AS-PRIMARY-validation-report
+          path: sbobino_desktop/AS-PRIMARY.validation-report.json
+
+  validate-as-third:
+    needs: publish-candidate
+    runs-on: [self-hosted, macos, apple-silicon, as-third]
+    env:
+      TAG_NAME: ${{ inputs.tag_name }}
+      SBOBINO_VALIDATION_FIXTURE_AUDIO: ${{ vars.SBOBINO_VALIDATION_FIXTURE_AUDIO }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag_name }}
+          fetch-depth: 0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run AS-THIRD validation
+        working-directory: sbobino_desktop
+        run: |
+          VERSION="${TAG_NAME#v}"
+          ./scripts/run_release_machine_validation.sh \
+            AS-THIRD \
+            "$VERSION" \
+            "$GITHUB_REPOSITORY" \
+            "$PWD/AS-THIRD.validation-report.json"
+
+      - name: Upload AS-THIRD validation artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AS-THIRD-validation-report
+          path: sbobino_desktop/AS-THIRD.validation-report.json
+
+  validate-intel-primary:
+    needs: publish-candidate
+    runs-on: [self-hosted, macos, x64, intel-primary]
+    env:
+      TAG_NAME: ${{ inputs.tag_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag_name }}
+          fetch-depth: 0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run INTEL-PRIMARY validation
+        working-directory: sbobino_desktop
+        run: |
+          VERSION="${TAG_NAME#v}"
+          ./scripts/run_release_machine_validation.sh \
+            INTEL-PRIMARY \
+            "$VERSION" \
+            "$GITHUB_REPOSITORY" \
+            "$PWD/INTEL-PRIMARY.validation-report.json"
+
+      - name: Upload INTEL-PRIMARY validation artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: INTEL-PRIMARY-validation-report
+          path: sbobino_desktop/INTEL-PRIMARY.validation-report.json
+
+  upload-validation-assets:
+    needs:
+      - publish-candidate
+      - distribution-readiness
+      - validate-as-primary
+      - validate-as-third
+      - validate-intel-primary
+    if: always()
+    runs-on: ubuntu-latest
+    env:
+      TAG_NAME: ${{ inputs.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+      DISTRIBUTION_RESULT: ${{ needs.distribution-readiness.result }}
+      AS_PRIMARY_RESULT: ${{ needs.validate-as-primary.result }}
+      AS_THIRD_RESULT: ${{ needs.validate-as-third.result }}
+      INTEL_PRIMARY_RESULT: ${{ needs.validate-intel-primary.result }}
+    steps:
+      - name: Download distribution readiness proof
+        uses: actions/download-artifact@v4
+        with:
+          name: distribution-readiness-proof
+          path: validation-assets
+
+      - name: Download AS-PRIMARY validation report
+        uses: actions/download-artifact@v4
+        with:
+          name: AS-PRIMARY-validation-report
+          path: validation-assets
+
+      - name: Download AS-THIRD validation report
+        uses: actions/download-artifact@v4
+        with:
+          name: AS-THIRD-validation-report
+          path: validation-assets
+
+      - name: Download INTEL-PRIMARY validation report
+        uses: actions/download-artifact@v4
+        with:
+          name: INTEL-PRIMARY-validation-report
+          path: validation-assets
+
+      - name: Upload validation assets to prerelease
+        run: |
+          gh release upload "$TAG_NAME" \
+            validation-assets/distribution-readiness-proof.json \
+            validation-assets/AS-PRIMARY.validation-report.json \
+            validation-assets/AS-THIRD.validation-report.json \
+            validation-assets/INTEL-PRIMARY.validation-report.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+
+      - name: Fail workflow if mandatory validation failed
+        run: |
+          echo "distribution-readiness: $DISTRIBUTION_RESULT"
+          echo "AS-PRIMARY: $AS_PRIMARY_RESULT"
+          echo "AS-THIRD: $AS_THIRD_RESULT"
+          echo "INTEL-PRIMARY: $INTEL_PRIMARY_RESULT"
+
+          if [[ "$DISTRIBUTION_RESULT" != "success" || "$AS_PRIMARY_RESULT" != "success" || "$AS_THIRD_RESULT" != "success" || "$INTEL_PRIMARY_RESULT" != "success" ]]; then
+            echo "Release candidate validation did not fully pass." >&2
+            exit 1
+          fi

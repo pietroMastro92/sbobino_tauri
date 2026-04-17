@@ -53,8 +53,11 @@ import sys
 release = json.loads(sys.argv[1])
 version = sys.argv[2]
 expected_assets = {
-    "AS-CLEAN-THIRD-MAC.validation-report.json",
-    "AS-UPGRADE-MAC.validation-report.json",
+    "release-readiness-proof.json",
+    "distribution-readiness-proof.json",
+    "AS-PRIMARY.validation-report.json",
+    "AS-THIRD.validation-report.json",
+    "INTEL-PRIMARY.validation-report.json",
 }
 present_assets = {
     asset.get("name", "").strip()
@@ -80,8 +83,11 @@ trap cleanup EXIT
 gh release download "$TAG" \
   --repo "$REPO_SLUG" \
   --dir "$TMP_DIR" \
-  --pattern "AS-CLEAN-THIRD-MAC.validation-report.json" \
-  --pattern "AS-UPGRADE-MAC.validation-report.json"
+  --pattern "release-readiness-proof.json" \
+  --pattern "distribution-readiness-proof.json" \
+  --pattern "AS-PRIMARY.validation-report.json" \
+  --pattern "AS-THIRD.validation-report.json" \
+  --pattern "INTEL-PRIMARY.validation-report.json"
 
 python3 - <<'PY' "$TMP_DIR" "$VERSION" "$TAG" "$RELEASE_JSON"
 import json
@@ -95,18 +101,33 @@ release = json.loads(sys.argv[4])
 release_url = str(release.get("url", "")).strip()
 
 expected_reports = {
-    "AS-CLEAN-THIRD-MAC.validation-report.json": {
-        "machine_class": "AS-CLEAN-THIRD-MAC",
+    "AS-PRIMARY.validation-report.json": {
+        "machine_class": "AS-PRIMARY",
+        "allowed_statuses": {"passed"},
+        "runner_label": "self-hosted,macos,apple-silicon,as-primary",
+        "required_scenarios": [
+            "update_path_validation",
+            "warm_restart",
+            "functional_diarization_smoke",
+        ],
+    },
+    "AS-THIRD.validation-report.json": {
+        "machine_class": "AS-THIRD",
+        "allowed_statuses": {"passed"},
+        "runner_label": "self-hosted,macos,apple-silicon,as-third",
         "required_scenarios": [
             "clean_room_install",
             "warm_restart",
             "functional_diarization_smoke",
         ],
     },
-    "AS-UPGRADE-MAC.validation-report.json": {
-        "machine_class": "AS-UPGRADE-MAC",
+    "INTEL-PRIMARY.validation-report.json": {
+        "machine_class": "INTEL-PRIMARY",
+        "allowed_statuses": {"passed", "soft_pass"},
+        "runner_label": "self-hosted,macos,x64,intel-primary",
         "required_scenarios": [
-            "update_path_validation",
+            "release_metadata_validation",
+            "bootstrap_layer_validation",
         ],
     },
 }
@@ -115,11 +136,38 @@ def require_non_empty(value: object, label: str, report_name: str) -> None:
     if not str(value or "").strip():
         raise SystemExit(f"Stable promotion blocked: {report_name} missing {label}.")
 
+def load_json(path: pathlib.Path, label: str) -> dict:
+    if not path.is_file():
+        raise SystemExit(f"Stable promotion blocked: could not download {label}.")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+readiness = load_json(report_dir / "release-readiness-proof.json", "release-readiness-proof.json")
+if readiness.get("version") != version:
+    raise SystemExit("Stable promotion blocked: release-readiness-proof.json version mismatch.")
+if str(readiness.get("status", "")).strip().lower() != "passed":
+    raise SystemExit("Stable promotion blocked: release-readiness-proof.json is not marked passed.")
+if str(readiness.get("gate", "")).strip() != "release_readiness.sh":
+    raise SystemExit("Stable promotion blocked: release-readiness-proof.json gate mismatch.")
+
+distribution = load_json(
+    report_dir / "distribution-readiness-proof.json",
+    "distribution-readiness-proof.json",
+)
+if int(distribution.get("schema_version", 0)) != 1:
+    raise SystemExit(
+        "Stable promotion blocked: distribution-readiness-proof.json has unsupported schema_version."
+    )
+if distribution.get("version") != version:
+    raise SystemExit("Stable promotion blocked: distribution-readiness-proof.json version mismatch.")
+if distribution.get("release_tag") != tag:
+    raise SystemExit("Stable promotion blocked: distribution-readiness-proof.json release_tag mismatch.")
+if str(distribution.get("status", "")).strip().lower() != "passed":
+    raise SystemExit("Stable promotion blocked: distribution-readiness-proof.json is not marked passed.")
+if str(distribution.get("gate", "")).strip() != "distribution_readiness.sh":
+    raise SystemExit("Stable promotion blocked: distribution-readiness-proof.json gate mismatch.")
+
 for report_name, expectation in expected_reports.items():
-    report_path = report_dir / report_name
-    if not report_path.is_file():
-        raise SystemExit(f"Stable promotion blocked: could not download {report_name}.")
-    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report = load_json(report_dir / report_name, report_name)
     if int(report.get("schema_version", 0)) != 1:
         raise SystemExit(f"Stable promotion blocked: {report_name} has unsupported schema_version.")
     if report.get("version") != version:
@@ -128,16 +176,20 @@ for report_name, expectation in expected_reports.items():
         raise SystemExit(f"Stable promotion blocked: {report_name} release_tag mismatch.")
     if report.get("machine_class") != expectation["machine_class"]:
         raise SystemExit(f"Stable promotion blocked: {report_name} machine_class mismatch.")
-    if str(report.get("status", "")).strip().lower() != "passed":
-        raise SystemExit(f"Stable promotion blocked: {report_name} is not marked passed.")
+    if str(report.get("status", "")).strip().lower() not in expectation["allowed_statuses"]:
+        raise SystemExit(f"Stable promotion blocked: {report_name} is not in an allowed passed state.")
     require_non_empty(report.get("tester"), "tester", report_name)
-    require_non_empty(report.get("macos_version"), "macos_version", report_name)
+    require_non_empty(report.get("os_name"), "os_name", report_name)
+    require_non_empty(report.get("os_version"), "os_version", report_name)
     require_non_empty(report.get("tested_at_utc"), "tested_at_utc", report_name)
     require_non_empty(report.get("release_url"), "release_url", report_name)
+    require_non_empty(report.get("commit_sha"), "commit_sha", report_name)
     if str(report.get("release_url", "")).strip() != release_url:
         raise SystemExit(
             f"Stable promotion blocked: {report_name} release_url does not match the public release URL."
         )
+    if str(report.get("runner_label", "")).strip() != expectation["runner_label"]:
+        raise SystemExit(f"Stable promotion blocked: {report_name} runner_label mismatch.")
     required_scenarios = report.get("required_scenarios")
     if required_scenarios != expectation["required_scenarios"]:
         raise SystemExit(
@@ -150,6 +202,12 @@ for report_name, expectation in expected_reports.items():
         if str(scenario_results.get(scenario, "")).strip().lower() != "passed":
             raise SystemExit(
                 f"Stable promotion blocked: {report_name} scenario {scenario} is not passed."
+            )
+    if report_name == "INTEL-PRIMARY.validation-report.json":
+        arm64_execution = str(scenario_results.get("arm64_binary_execution", "")).strip().lower()
+        if arm64_execution not in {"passed", "not_applicable"}:
+            raise SystemExit(
+                "Stable promotion blocked: INTEL-PRIMARY arm64_binary_execution must be passed or not_applicable."
             )
 PY
 

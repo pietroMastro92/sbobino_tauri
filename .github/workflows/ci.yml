@@ -53,3 +53,23 @@ jobs:
         run: npm ci
       - name: Build frontend
         run: npm run build
+
+  windows-bootstrap:
+    runs-on: windows-latest
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: sbobino_desktop
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: sbobino_desktop/apps/desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check release version wiring
+        run: ./scripts/check_release_versions.sh
+      - name: Bootstrap metadata smoke
+        run: cargo metadata --manifest-path Cargo.toml --format-version 1 >/dev/null

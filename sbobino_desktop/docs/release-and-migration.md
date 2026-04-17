@@ -11,8 +11,8 @@
 - Trigger: manual `workflow_dispatch` for an existing tag.
 - First public release target:
   - `macos-14` -> `aarch64-apple-darwin` (DMG + APP).
-- Produces updater artifacts/signatures (`createUpdaterArtifacts: true` in `tauri.conf.json`).
-- Publishes all generated bundle assets to the GitHub Release for that tag.
+- Produces updater artifacts/signatures and publishes only a GitHub prerelease candidate.
+- Runs hosted integrity gates plus self-hosted machine validation on exact public assets before any stable promotion is allowed.
 - Production origin is the current public GitHub repository: `pietroMastro92/Sbobino`.
 - Default recommendation: prepare every release locally first with `./scripts/prepare_local_release.sh <version>`, publish the GitHub release as a prerelease candidate, run remote validation, validate that exact release on the Apple Silicon matrix, then promote only after the validation reports are uploaded as passed.
 - Candidate validation is mandatory. If a prerelease fails validation on a third-party Mac, retire it and cut a new patch version instead of overwriting a stable release or reusing the same candidate.
@@ -27,8 +27,11 @@
   - `pyannote-runtime-macos-aarch64.zip`
   - `pyannote-model-community-1.zip`
   - `pyannote-manifest.json`
-  - `AS-CLEAN-THIRD-MAC.validation-report.json`
-  - `AS-UPGRADE-MAC.validation-report.json`
+  - `release-readiness-proof.json`
+  - `distribution-readiness-proof.json`
+  - `AS-PRIMARY.validation-report.json`
+  - `AS-THIRD.validation-report.json`
+  - `INTEL-PRIMARY.validation-report.json`
 - `setup-manifest.json` is the single bootstrap contract for first-launch setup and repair. Runtime and pyannote manifests are no longer treated as independent entrypoints.
 
 ### Legal / attribution artifacts
@@ -61,8 +64,9 @@
   - publish the prerelease candidate with `./scripts/publish_candidate_release.sh <version>`
   - upload the generated files from `dist/local-release/v<version>/`
   - run `./scripts/distribution_readiness.sh <version>`
-  - validate that GitHub prerelease on `AS-CLEAN-THIRD-MAC` and `AS-UPGRADE-MAC`
-  - re-upload both validation report JSON assets with `status=passed`
+  - generate and upload `distribution-readiness-proof.json`
+  - validate that GitHub prerelease on `AS-PRIMARY`, `AS-THIRD`, and `INTEL-PRIMARY`
+  - re-upload all machine validation report JSON assets with `status=passed` or `soft_pass` for `INTEL-PRIMARY`
   - promote it only after it passes with `./scripts/promote_candidate_release.sh <version>`
   - if the release fails, delete/retire it with `./scripts/retire_failed_candidate.sh <version>` and cut a new patch version
   - the default `public` profile keeps pyannote out of the app bundle and installs it from release assets during first launch
@@ -109,6 +113,7 @@
 - `./scripts/distribution_readiness.sh <version> [repo-slug]`
 - Runs only after the full asset set is uploaded to a GitHub release.
 - Verifies HTTP availability, JSON parsing, `app_version` consistency, checksum integrity, updater tarball/signature wiring, and that `setup-manifest.json` points only to assets present in the same release.
+- A passed run must be captured as `distribution-readiness-proof.json` and uploaded back to the same prerelease candidate.
 - This gate validates artifact integrity only. Stable distribution additionally requires the Apple Silicon clean-room and upgrade scenarios in [`distribution-validation-plan.md`](distribution-validation-plan.md).
 
 ## Stable Release Policy
@@ -116,7 +121,8 @@
 - Stable GitHub releases are immutable for distribution purposes.
 - Do not replace stable assets in place to repair a bad public release.
 - A release is considered distributable only if the full Apple Silicon matrix in [`distribution-validation-plan.md`](distribution-validation-plan.md) is green on the exact public assets.
-- Stable promotion is blocked unless the release contains `AS-CLEAN-THIRD-MAC.validation-report.json` and `AS-UPGRADE-MAC.validation-report.json`, both marked `passed`.
+- Stable promotion is blocked unless the release contains `release-readiness-proof.json`, `distribution-readiness-proof.json`, `AS-PRIMARY.validation-report.json`, `AS-THIRD.validation-report.json`, and `INTEL-PRIMARY.validation-report.json`.
+- `AS-PRIMARY` and `AS-THIRD` must be marked `passed`; `INTEL-PRIMARY` may be `passed` or `soft_pass` when `arm64_binary_execution` is intentionally `not_applicable`.
 - The supported correction path is:
   1. retire the failed public release
   2. cut a new patch version
