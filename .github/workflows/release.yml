@@ -64,6 +64,23 @@ jobs:
           TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
         run: ../../scripts/prepare_release_updater_config.sh src-tauri/tauri.conf.json "$TAURI_UPDATER_PUBLIC_KEY"
 
+      - name: Strip bundled pyannote resources from public app build
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          config_path = Path("src-tauri/tauri.conf.json")
+          config = json.loads(config_path.read_text(encoding="utf-8"))
+          bundle = config.setdefault("bundle", {})
+          resources = bundle.get("resources")
+          if isinstance(resources, list):
+              bundle["resources"] = [
+                  item for item in resources if str(item).strip() != "resources/pyannote"
+              ]
+          config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+          PY
+
       - name: Build bundles
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -424,7 +441,7 @@ jobs:
       - validate-as-primary
       - validate-as-third
       - validate-intel-primary
-    if: always()
+    if: always() && needs.publish-candidate.result == 'success'
     runs-on: ubuntu-latest
     env:
       TAG_NAME: ${{ inputs.tag_name }}
