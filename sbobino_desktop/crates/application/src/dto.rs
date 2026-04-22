@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use sbobino_domain::{
@@ -17,6 +19,8 @@ pub struct RunTranscriptionRequest {
     pub title: Option<String>,
     pub parent_id: Option<String>,
     pub source_origin: ArtifactSourceOrigin,
+    pub metadata: BTreeMap<String, String>,
+    pub source_fingerprint_json: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

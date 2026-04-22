@@ -123,6 +123,30 @@ pub struct EmotionAnalysisPayload {
     pub speaker_dynamics: bool,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GeneratedArtifactPackKind {
+    StudyPack,
+    MeetingIntelligence,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeneratedArtifactPack {
+    pub kind: GeneratedArtifactPackKind,
+    pub generated_at: String,
+    pub body_markdown: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GenerateArtifactPackPayload {
+    pub id: String,
+    pub kind: GeneratedArtifactPackKind,
+    #[serde(default = "default_summary_language")]
+    pub language: String,
+    #[serde(flatten)]
+    pub context: ArtifactAiContextOptions,
+}
+
 const CHAT_CONTEXT_BUDGETS: &[(usize, usize)] = &[(8, 7600), (6, 5200), (4, 3400), (2, 2000)];
 const CHAT_CHUNK_TARGET_CHARS: usize = 900;
 const CHAT_CHUNK_OVERLAP_WORDS: usize = 24;
@@ -143,6 +167,8 @@ const LOW_CONFIDENCE_CONTEXT_RADIUS_WORDS: usize = 3;
 const MAX_LOW_CONFIDENCE_PROMPT_SPANS: usize = 10;
 const SUMMARY_CONTEXT_OVERFLOW_MESSAGE: &str =
     "Exceeded model context window size. The app now uses chunked retrieval, but this request is still too large. Try a shorter custom prompt or fewer summary constraints.";
+const STUDY_PACK_METADATA_KEY: &str = "study_pack_v1";
+const MEETING_PACK_METADATA_KEY: &str = "meeting_intelligence_v1";
 
 #[derive(Debug, Clone)]
 struct LowConfidenceSpan {
@@ -556,6 +582,7 @@ pub async fn export_artifact(
         &base_transcription,
         &artifact.summary,
         &artifact.faqs,
+        &artifact.metadata,
         &segments,
         style,
         options.include_timestamps,
@@ -756,6 +783,77 @@ pub async fn summarize_artifact(
     })
     .await
     .map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub async fn generate_artifact_pack(
+    state: State<'_, AppState>,
+    payload: GenerateArtifactPackPayload,
+) -> Result<GeneratedArtifactPack, CommandError> {
+    let artifact = state
+        .artifact_service
+        .get(&payload.id)
+        .await
+        .map_err(CommandError::from)?
+        .ok_or_else(|| CommandError::new("not_found", "artifact not found"))?;
+
+    let enhancers = state
+        .runtime_factory
+        .build_enhancer_candidates()
+        .map_err(|e| CommandError::new("runtime_factory", e))?;
+    if enhancers.is_empty() {
+        let reason = state
+            .runtime_factory
+            .ai_capability_status()
+            .ok()
+            .and_then(|status| status.unavailable_reason);
+        return Err(missing_ai_provider_command_error(reason.as_deref()));
+    }
+
+    let prepared = PreparedTranscriptContext::from_artifact(&artifact, payload.context);
+    if prepared.ai_transcript.trim().is_empty() {
+        return Err(CommandError::new(
+            "empty_content",
+            "no transcription available to summarize",
+        ));
+    }
+
+    let instructions = build_generated_pack_instructions(
+        payload.kind,
+        &payload.language,
+        payload.context.include_timestamps,
+        payload.context.include_speakers,
+    );
+
+    let body_markdown =
+        run_with_enhancer_fallback(&enhancers, "generate artifact pack", |enhancer| {
+            let transcript = prepared.ai_transcript.clone();
+            let instructions = instructions.clone();
+            Box::pin(async move {
+                summarize_transcript_adaptive(enhancer, &transcript, &instructions).await
+            })
+        })
+        .await
+        .map_err(CommandError::from)?;
+
+    let generated = GeneratedArtifactPack {
+        kind: payload.kind,
+        generated_at: Utc::now().to_rfc3339(),
+        body_markdown,
+    };
+    let serialized = serde_json::to_string(&generated)
+        .map_err(|e| CommandError::new("serialize_pack", e.to_string()))?;
+    state
+        .artifact_service
+        .update_metadata_entry(
+            &payload.id,
+            generated_pack_metadata_key(payload.kind),
+            Some(&serialized),
+        )
+        .await
+        .map_err(CommandError::from)?;
+
+    Ok(generated)
 }
 
 #[tauri::command]
@@ -1281,6 +1379,62 @@ fn build_summary_instructions(payload: &SummarizeArtifactPayload) -> String {
     lines.join("\n\n")
 }
 
+fn build_generated_pack_instructions(
+    kind: GeneratedArtifactPackKind,
+    language: &str,
+    include_timestamps: bool,
+    include_speakers: bool,
+) -> String {
+    let language_name = language_display_name(language);
+    let timestamp_rule = if include_timestamps {
+        "Where timestamps are available in the prepared transcript, keep them next to the relevant item."
+    } else {
+        "Do not include timestamps in the final output."
+    };
+    let speaker_rule = if include_speakers {
+        "When speaker labels are available, attribute decisions or statements to the relevant speaker."
+    } else {
+        "Do not invent or infer speaker attributions."
+    };
+
+    match kind {
+        GeneratedArtifactPackKind::StudyPack => format!(
+            "Write the entire output in {language_name}. Produce only markdown.\n\n\
+             Build a student study pack from the transcript with these sections in order:\n\
+             1. Overview\n\
+             2. Structured Notes\n\
+             3. Glossary of Key Terms\n\
+             4. Probable Exam Questions\n\
+             5. Flashcards\n\n\
+             Requirements:\n\
+             - Stay faithful to the transcript and do not invent facts.\n\
+             - Use concise headings and bullet points where helpful.\n\
+             - In Glossary, define the most important terms in plain language.\n\
+             - In Probable Exam Questions, include short model answers.\n\
+             - In Flashcards, format each item as `Q:` followed by `A:`.\n\
+             - If the transcript does not support a section, write `Not enough evidence.` under that heading.\n\
+             - {timestamp_rule}\n\
+             - {speaker_rule}"
+        ),
+        GeneratedArtifactPackKind::MeetingIntelligence => format!(
+            "Write the entire output in {language_name}. Produce only markdown.\n\n\
+             Build a meeting intelligence pack from the transcript with these sections in order:\n\
+             1. Executive Summary\n\
+             2. Decisions\n\
+             3. Action Items\n\
+             4. Open Questions\n\
+             5. Risks and Blockers\n\n\
+             Requirements:\n\
+             - Stay faithful to the transcript and do not invent facts.\n\
+             - Where owners or deadlines are explicit, capture them.\n\
+             - If an item is uncertain, mark it clearly as tentative.\n\
+             - If the transcript does not support a section, write `Not enough evidence.` under that heading.\n\
+             - {timestamp_rule}\n\
+             - {speaker_rule}"
+        ),
+    }
+}
+
 fn language_display_name(language_code: &str) -> &str {
     match language_code.trim() {
         "auto" => "the same language as the transcript",
@@ -1293,6 +1447,13 @@ fn language_display_name(language_code: &str) -> &str {
         "zh" => "Chinese",
         "ja" => "Japanese",
         _ => "the requested language",
+    }
+}
+
+fn generated_pack_metadata_key(kind: GeneratedArtifactPackKind) -> &'static str {
+    match kind {
+        GeneratedArtifactPackKind::StudyPack => STUDY_PACK_METADATA_KEY,
+        GeneratedArtifactPackKind::MeetingIntelligence => MEETING_PACK_METADATA_KEY,
     }
 }
 
@@ -2322,6 +2483,61 @@ fn localized_export_faq_title(language: &str) -> &'static str {
     }
 }
 
+fn localized_generated_pack_title(
+    language: &str,
+    kind: GeneratedArtifactPackKind,
+) -> &'static str {
+    match kind {
+        GeneratedArtifactPackKind::StudyPack => match language {
+            "it" => "Pacchetto studio",
+            "es" => "Paquete de estudio",
+            "de" => "Study Pack",
+            _ => "Study Pack",
+        },
+        GeneratedArtifactPackKind::MeetingIntelligence => match language {
+            "it" => "Meeting intelligence",
+            "es" => "Inteligencia de reuniones",
+            "de" => "Meeting Intelligence",
+            _ => "Meeting Intelligence",
+        },
+    }
+}
+
+fn parse_generated_pack_from_metadata(
+    metadata: &BTreeMap<String, String>,
+    key: &str,
+) -> Option<GeneratedArtifactPack> {
+    let raw = metadata.get(key)?;
+    let parsed = serde_json::from_str::<GeneratedArtifactPack>(raw).ok()?;
+    if parsed.body_markdown.trim().is_empty() {
+        return None;
+    }
+    Some(parsed)
+}
+
+fn build_generated_pack_sections(
+    language: &str,
+    metadata: &BTreeMap<String, String>,
+) -> Vec<ExportDocumentSection> {
+    [
+        (STUDY_PACK_METADATA_KEY, GeneratedArtifactPackKind::StudyPack),
+        (
+            MEETING_PACK_METADATA_KEY,
+            GeneratedArtifactPackKind::MeetingIntelligence,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(key, kind)| {
+        let pack = parse_generated_pack_from_metadata(metadata, key)?;
+        Some(ExportDocumentSection {
+            title: localized_generated_pack_title(language, kind).to_string(),
+            body: pack.body_markdown.trim().to_string(),
+            styled_lines: None,
+        })
+    })
+    .collect()
+}
+
 fn build_primary_section_styled_lines(
     segments: &[ExportSegment],
     _transcription: &str,
@@ -2412,6 +2628,7 @@ fn build_export_document(
     transcription: &str,
     summary: &str,
     faqs: &str,
+    metadata: &BTreeMap<String, String>,
     segments: &[ExportSegment],
     style: ExportStyle,
     include_timestamps: bool,
@@ -2452,6 +2669,7 @@ fn build_export_document(
             styled_lines: None,
         });
     }
+    sections.extend(build_generated_pack_sections(language, metadata));
 
     ExportDocument {
         title: localized_export_document_title(language, title),
@@ -3115,6 +3333,7 @@ mod tests {
             &artifact.raw_transcript,
             &artifact.summary,
             &artifact.faqs,
+            &artifact.metadata,
             &segments,
             ExportStyle::Segments,
             true,
@@ -3177,6 +3396,7 @@ mod tests {
             &artifact.raw_transcript,
             &artifact.summary,
             &artifact.faqs,
+            &artifact.metadata,
             &segments,
             ExportStyle::Segments,
             true,

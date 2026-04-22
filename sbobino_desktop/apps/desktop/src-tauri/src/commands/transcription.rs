@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -13,13 +14,16 @@ use sbobino_domain::{
 };
 
 use crate::{
+    commands::automatic_import::{
+        record_automatic_import_failure, record_automatic_import_success,
+    },
     error::CommandError,
     state::{AppState, TranscriptionTask},
 };
 
 const DELTA_REPLACE_PREFIX: &str = "\u{001F}REPLACE:";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct StartTranscriptionPayload {
     pub input_path: String,
     pub engine: TranscriptionEngine,
@@ -32,6 +36,12 @@ pub struct StartTranscriptionPayload {
     pub title: Option<String>,
     #[serde(default)]
     pub parent_id: Option<String>,
+    #[serde(default)]
+    pub source_origin: Option<ArtifactSourceOrigin>,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, String>,
+    #[serde(default)]
+    pub source_fingerprint_json: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -64,6 +74,14 @@ pub async fn start_transcription(
     state: State<'_, AppState>,
     payload: StartTranscriptionPayload,
 ) -> Result<StartTranscriptionResponse, CommandError> {
+    spawn_transcription_job(app, state.inner().clone(), payload).await
+}
+
+pub(crate) async fn spawn_transcription_job(
+    app: tauri::AppHandle,
+    state: AppState,
+    payload: StartTranscriptionPayload,
+) -> Result<StartTranscriptionResponse, CommandError> {
     let job_id = Uuid::new_v4().to_string();
 
     let request = RunTranscriptionRequest {
@@ -76,7 +94,11 @@ pub async fn start_transcription(
         whisper_options: payload.whisper_options,
         title: payload.title,
         parent_id: payload.parent_id,
-        source_origin: ArtifactSourceOrigin::Imported,
+        source_origin: payload
+            .source_origin
+            .unwrap_or(ArtifactSourceOrigin::Imported),
+        metadata: payload.metadata,
+        source_fingerprint_json: payload.source_fingerprint_json,
     };
 
     let runtime_factory = state.runtime_factory.clone();
@@ -89,6 +111,8 @@ pub async fn start_transcription(
     let cancellation_token = CancellationToken::new();
     let task_cancellation_token = cancellation_token.clone();
     let tasks = state.transcription_tasks.clone();
+    let automatic_import_metadata = request.metadata.clone();
+    let automatic_import_state = state.clone();
 
     tauri::async_runtime::spawn(async move {
         let emit_progress = Arc::new(move |progress: JobProgress| {
@@ -135,10 +159,21 @@ pub async fn start_transcription(
             .await
         {
             Ok(artifact) => {
+                let _ = record_automatic_import_success(
+                    &automatic_import_state,
+                    &automatic_import_metadata,
+                )
+                .await;
                 let _ = app.emit("transcription://completed", artifact);
             }
             Err(ApplicationError::Cancelled) => {}
             Err(error) => {
+                let _ = record_automatic_import_failure(
+                    &automatic_import_state,
+                    &automatic_import_metadata,
+                    &error.to_string(),
+                )
+                .await;
                 let _ = app.emit(
                     "transcription://failed",
                     JobFailedEvent {

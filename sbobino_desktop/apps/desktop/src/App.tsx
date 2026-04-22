@@ -68,6 +68,7 @@ import {
   cancelTranscription,
   chatArtifact,
   checkUpdates,
+  clearAutomaticImportQuarantineItem,
   deleteArtifacts,
   emptyDeletedArtifacts,
   ensureTranscriptionRuntime,
@@ -78,6 +79,7 @@ import {
   fetchTranscriptionStartPreflight,
   fetchRuntimeHealth,
   fetchSettingsSnapshot,
+  generateArtifactPack,
   getArtifact,
   hardDeleteArtifacts,
   importAppBackup,
@@ -95,9 +97,11 @@ import {
   provisioningStart,
   provisioningStatus,
   renameArtifact,
+  retryAutomaticImportQuarantineItem,
   resetPromptTemplates,
   resumeRealtime,
   restoreArtifacts,
+  scanAutomaticImport,
   saveSettings,
   saveSettingsPartial,
   summarizeArtifact,
@@ -188,10 +192,16 @@ import type {
   AiCapabilityStatus,
   AppearanceMode,
   AppSettings,
+  AutomaticImportPostProcessingSettings,
+  AutomaticImportPreset,
+  AutomaticImportScanResponse,
+  AutomaticImportSettings,
+  AutomaticImportSource,
   ArtifactKind,
   EmotionAnalysisResult,
   JobProgress,
   LanguageCode,
+  OrganizationSettings,
   PromptTask,
   PromptTemplate,
   ProvisioningProgressEvent,
@@ -211,6 +221,7 @@ import type {
   TranscriptionStartPreflight,
   TranscriptArtifact,
   UpdateCheckResponse,
+  WorkspaceConfig,
   WhisperOptions,
 } from "./types";
 import { AudioPlayer, type TrimRegion } from "./components/AudioPlayer";
@@ -287,6 +298,7 @@ type StartupRequirementsSnapshot = {
 };
 type SettingsPane =
   | "general"
+  | "automatic_import"
   | "transcription"
   | "whisper_cpp"
   | "local_models"
@@ -297,8 +309,17 @@ const HAS_OPTIMIZED_TRANSCRIPT_METADATA_KEY = "has_optimized_transcript";
 const EMOTION_ANALYSIS_METADATA_KEY = "emotion_analysis_v1";
 const EMOTION_ANALYSIS_GENERATED_AT_METADATA_KEY =
   "emotion_analysis_generated_at";
+const STUDY_PACK_METADATA_KEY = "study_pack_v1";
+const MEETING_PACK_METADATA_KEY = "meeting_intelligence_v1";
+
+type PersistedArtifactPack = {
+  kind: "study_pack" | "meeting_intelligence";
+  generated_at?: string;
+  body_markdown: string;
+};
 const SETTINGS_PANES: SettingsPane[] = [
   "general",
+  "automatic_import",
   "transcription",
   "whisper_cpp",
   "local_models",
@@ -795,6 +816,46 @@ function getDefaultSpeakerDiarizationSettings(): SpeakerDiarizationSettings {
   };
 }
 
+function getDefaultAutomaticImportSettings(): AutomaticImportSettings {
+  return {
+    enabled: false,
+    run_scan_on_app_start: true,
+    scan_interval_minutes: 15,
+    allowed_extensions: [
+      "wav",
+      "m4a",
+      "mp3",
+      "ogg",
+      "opus",
+      "webm",
+      "flac",
+      "aac",
+      "aiff",
+      "aif",
+      "m4b",
+    ],
+    watched_sources: [],
+    excluded_folders: [],
+    source_statuses: [],
+    recent_activity: [],
+    quarantined_items: [],
+  };
+}
+
+function getDefaultOrganizationSettings(): OrganizationSettings {
+  return {
+    workspaces: [],
+  };
+}
+
+function createAutomaticImportSourceId(): string {
+  return createRemoteServiceId("custom");
+}
+
+function createWorkspaceId(): string {
+  return createRemoteServiceId("custom");
+}
+
 type SettingsPaneDefinition = {
   key: SettingsPane;
   label: string;
@@ -811,6 +872,16 @@ function getSettingsPaneDefinitions(): SettingsPaneDefinition[] {
       description: t("settings.general.desc"),
       group: "General",
       icon: House,
+    },
+    {
+      key: "automatic_import",
+      label: t("nav.automaticImport", "Automatic Import"),
+      description: t(
+        "settings.automaticImport.desc",
+        "Watch synced folders and queue new audio automatically.",
+      ),
+      group: "Transcription",
+      icon: Cloud,
     },
     {
       key: "transcription",
@@ -865,12 +936,190 @@ function fileLabel(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
+function defaultAutomaticImportPostProcessing(
+  preset: AutomaticImportPreset,
+): AutomaticImportPostProcessingSettings {
+  switch (preset) {
+    case "voice_memo":
+      return {
+        generate_summary: true,
+        generate_faqs: false,
+        generate_preset_output: false,
+      };
+    case "meeting":
+    case "interview":
+      return {
+        generate_summary: true,
+        generate_faqs: true,
+        generate_preset_output: true,
+      };
+    case "lecture":
+      return {
+        generate_summary: true,
+        generate_faqs: true,
+        generate_preset_output: true,
+      };
+    case "general":
+    default:
+      return {
+        generate_summary: true,
+        generate_faqs: true,
+        generate_preset_output: false,
+      };
+  }
+}
+
+function createDefaultAutomaticImportSource(
+  folderPath: string,
+): AutomaticImportSource {
+  return {
+    id: createAutomaticImportSourceId(),
+    label: fileLabel(folderPath),
+    folder_path: folderPath,
+    enabled: true,
+    preset: "general",
+    workspace_id: null,
+    recursive: true,
+    enable_ai_post_processing: false,
+    post_processing: defaultAutomaticImportPostProcessing("general"),
+  };
+}
+
+function createPresetAutomaticImportSource(
+  folderPath: string,
+  preset: AutomaticImportPreset,
+  overrides?: Partial<
+    Pick<
+      AutomaticImportSource,
+      | "label"
+      | "workspace_id"
+      | "recursive"
+      | "enable_ai_post_processing"
+      | "post_processing"
+    >
+  >,
+): AutomaticImportSource {
+  const base = createDefaultAutomaticImportSource(folderPath);
+  return {
+    ...base,
+    preset,
+    post_processing: {
+      ...defaultAutomaticImportPostProcessing(preset),
+      ...overrides?.post_processing,
+    },
+    label: overrides?.label ?? base.label,
+    workspace_id: overrides?.workspace_id ?? base.workspace_id,
+    recursive: overrides?.recursive ?? base.recursive,
+    enable_ai_post_processing:
+      overrides?.enable_ai_post_processing ?? base.enable_ai_post_processing,
+  };
+}
+
+function createDefaultWorkspace(): WorkspaceConfig {
+  return {
+    id: createWorkspaceId(),
+    label: "",
+    color: "#4F7CFF",
+  };
+}
+
+function artifactWorkspaceId(artifact: TranscriptArtifact): string | null {
+  return artifact.metadata?.workspace_id?.trim() || null;
+}
+
+function artifactImportPreset(artifact: TranscriptArtifact): AutomaticImportPreset | null {
+  const value = artifact.metadata?.auto_import_preset?.trim();
+  if (
+    value === "general" ||
+    value === "lecture" ||
+    value === "meeting" ||
+    value === "interview" ||
+    value === "voice_memo"
+  ) {
+    return value;
+  }
+  return null;
+}
+
 function formatDate(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
     return value;
   }
   return date.toLocaleString();
+}
+
+function formatAutomaticImportPresetLabel(
+  preset: AutomaticImportPreset,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  switch (preset) {
+    case "lecture":
+      return t("automaticImport.preset.lecture", "Lecture");
+    case "meeting":
+      return t("automaticImport.preset.meeting", "Meeting");
+    case "interview":
+      return t("automaticImport.preset.interview", "Interview");
+    case "voice_memo":
+      return t("automaticImport.preset.voiceMemo", "Voice Memo");
+    case "general":
+    default:
+      return t("automaticImport.preset.general", "General");
+  }
+}
+
+function parsePersistedArtifactPack(
+  artifact: TranscriptArtifact | null | undefined,
+  key: string,
+): PersistedArtifactPack | null {
+  const raw = artifact?.metadata?.[key];
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw) as PersistedArtifactPack;
+    if (!parsed.body_markdown?.trim()) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function artifactGeneratedSections(
+  artifact: TranscriptArtifact | null | undefined,
+  t: ReturnType<typeof useTranslation>["t"],
+): Array<{ key: string; title: string; body: string; generatedAt?: string }> {
+  const studyPack = parsePersistedArtifactPack(artifact, STUDY_PACK_METADATA_KEY);
+  const meetingPack = parsePersistedArtifactPack(
+    artifact,
+    MEETING_PACK_METADATA_KEY,
+  );
+
+  return [
+    studyPack
+      ? {
+          key: STUDY_PACK_METADATA_KEY,
+          title: t("summary.studyPackTitle", "Study Pack"),
+          body: studyPack.body_markdown.trim(),
+          generatedAt: studyPack.generated_at,
+        }
+      : null,
+    meetingPack
+      ? {
+          key: MEETING_PACK_METADATA_KEY,
+          title: t("summary.meetingPackTitle", "Meeting Intelligence"),
+          body: meetingPack.body_markdown.trim(),
+          generatedAt: meetingPack.generated_at,
+        }
+      : null,
+  ].filter(Boolean) as Array<{
+    key: string;
+    title: string;
+    body: string;
+    generatedAt?: string;
+  }>;
 }
 
 async function withTimeout<T>(
@@ -1790,6 +2039,84 @@ function normalizeSettings(settings: AppSettings): AppSettings {
     ...getDefaultWhisperOptions(),
     ...settings.transcription.whisper_options,
   });
+  const normalizedAutomation: AutomaticImportSettings = {
+    ...getDefaultAutomaticImportSettings(),
+    ...settings.automation,
+    allowed_extensions:
+      settings.automation?.allowed_extensions?.length > 0
+        ? settings.automation.allowed_extensions
+            .map((value) => value.trim().replace(/^\./, "").toLowerCase())
+            .filter(Boolean)
+        : getDefaultAutomaticImportSettings().allowed_extensions,
+    watched_sources: (settings.automation?.watched_sources ?? []).map(
+      (source) => ({
+        id: source.id,
+        label: source.label ?? "",
+        folder_path: source.folder_path ?? "",
+        enabled: source.enabled ?? true,
+        preset: source.preset ?? "general",
+        workspace_id: source.workspace_id ?? null,
+        recursive: source.recursive ?? true,
+        enable_ai_post_processing:
+          source.enable_ai_post_processing ?? false,
+        post_processing: {
+          ...defaultAutomaticImportPostProcessing(source.preset ?? "general"),
+          ...source.post_processing,
+        },
+      }),
+    ),
+    excluded_folders: (settings.automation?.excluded_folders ?? [])
+      .map((value) => value.trim())
+      .filter(Boolean),
+    source_statuses: (settings.automation?.source_statuses ?? []).map(
+      (status) => ({
+        source_id: status.source_id ?? "",
+        source_label: status.source_label ?? "",
+        health: status.health ?? "idle",
+        last_scan_at: status.last_scan_at ?? null,
+        last_success_at: status.last_success_at ?? null,
+        last_failure_at: status.last_failure_at ?? null,
+        last_error: status.last_error ?? null,
+        last_scan_reason: status.last_scan_reason ?? null,
+        last_trigger: status.last_trigger ?? null,
+        last_scanned_files: Number(status.last_scanned_files ?? 0),
+        last_queued_jobs: Number(status.last_queued_jobs ?? 0),
+        last_skipped_existing: Number(status.last_skipped_existing ?? 0),
+        watcher_mode: status.watcher_mode?.trim() || "periodic_scan",
+      }),
+    ),
+    recent_activity: (settings.automation?.recent_activity ?? []).map(
+      (entry) => ({
+        id: entry.id ?? "",
+        timestamp: entry.timestamp ?? "",
+        source_id: entry.source_id ?? null,
+        level: entry.level ?? "info",
+        message: entry.message ?? "",
+      }),
+    ),
+    quarantined_items: (settings.automation?.quarantined_items ?? []).map(
+      (item) => ({
+        id: item.id ?? "",
+        source_id: item.source_id ?? null,
+        source_label: item.source_label ?? null,
+        file_path: item.file_path ?? "",
+        fingerprint_key: item.fingerprint_key ?? null,
+        reason: item.reason ?? "",
+        first_detected_at: item.first_detected_at ?? "",
+        last_detected_at: item.last_detected_at ?? "",
+        retry_count: Number(item.retry_count ?? 0),
+      }),
+    ),
+  };
+  const normalizedOrganization: OrganizationSettings = {
+    ...getDefaultOrganizationSettings(),
+    ...settings.organization,
+    workspaces: (settings.organization?.workspaces ?? []).map((workspace) => ({
+      id: workspace.id,
+      label: workspace.label ?? "",
+      color: workspace.color ?? "#4F7CFF",
+    })),
+  };
 
   const normalized: AppSettings = {
     ...settings,
@@ -1806,6 +2133,8 @@ function normalizeSettings(settings: AppSettings): AppSettings {
       speaker_diarization: normalizedSpeakerDiarization,
       whisper_options: normalizedWhisperOptions,
     },
+    automation: normalizedAutomation,
+    organization: normalizedOrganization,
     ai: {
       ...settings.ai,
       active_remote_service_id: settings.ai.active_remote_service_id ?? null,
@@ -2486,6 +2815,16 @@ export function App({
   const [search, setSearch] = useState("");
   const [deletedSearch, setDeletedSearch] = useState("");
   const [historyKind, setHistoryKind] = useState<"all" | ArtifactKind>("all");
+  const [historyWorkspaceFilter, setHistoryWorkspaceFilter] = useState("all");
+  const [automaticImportScanResult, setAutomaticImportScanResult] =
+    useState<AutomaticImportScanResponse | null>(null);
+  const [automaticImportScanError, setAutomaticImportScanError] = useState<
+    string | null
+  >(null);
+  const [isAutomaticImportScanning, setIsAutomaticImportScanning] =
+    useState(false);
+  const [automaticImportQuarantineBusyId, setAutomaticImportQuarantineBusyId] =
+    useState<string | null>(null);
   const [deletedArtifacts, setDeletedArtifacts] = useState<
     TranscriptArtifact[]
   >([]);
@@ -2787,6 +3126,7 @@ export function App({
   const [chatIncludeTimestamps, setChatIncludeTimestamps] = useState(true);
   const [chatIncludeSpeakers, setChatIncludeSpeakers] = useState(false);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
+  const [isGeneratingArtifactPack, setIsGeneratingArtifactPack] = useState(false);
   const [isGeneratingEmotionAnalysis, setIsGeneratingEmotionAnalysis] =
     useState(false);
   const [audioDurationSeconds, setAudioDurationSeconds] = useState(0);
@@ -2981,6 +3321,7 @@ export function App({
   const startupWatchdogRef = useRef<number | null>(null);
   const settingsSaveSequenceRef = useRef(0);
   const summaryAutostartedArtifactIdsRef = useRef<Set<string>>(new Set());
+  const automaticImportStartupScanTriggeredRef = useRef(false);
   const clearStartupWatchdog = useCallback(() => {
     if (startupWatchdogRef.current !== null) {
       window.clearTimeout(startupWatchdogRef.current);
@@ -4337,6 +4678,12 @@ export function App({
       if (historyKind !== "all" && artifact.kind !== historyKind) {
         return false;
       }
+      if (
+        historyWorkspaceFilter !== "all" &&
+        artifactWorkspaceId(artifact) !== historyWorkspaceFilter
+      ) {
+        return false;
+      }
 
       if (!needle) {
         return true;
@@ -4349,7 +4696,7 @@ export function App({
         artifact.raw_transcript?.toLowerCase().includes(needle)
       );
     });
-  }, [artifacts, historyKind, search]);
+  }, [artifacts, historyKind, historyWorkspaceFilter, search]);
 
   const filteredDeletedArtifacts = useMemo(() => {
     const needle = deletedSearch.trim().toLowerCase();
@@ -4483,6 +4830,13 @@ export function App({
     "error.aiUnavailable",
     "No usable AI provider is available. Configure it in Settings > AI Services.",
   );
+  const shouldDelayAutomaticImportScan = shouldBlockMainUiDuringStartup({
+    hasSettings: Boolean(settings),
+    privacyAccepted: privacyPolicyAccepted,
+    warmStartEligible,
+    startupRequirementsLoaded,
+    initialSetupReady,
+  });
 
   useEffect(() => {
     if (section === "home" || section === "history") {
@@ -4497,6 +4851,62 @@ export function App({
       previous.filter((id) => artifactIds.has(id)),
     );
   }, [artifacts]);
+
+  useEffect(() => {
+    const workspaceIds = new Set(
+      (settings?.organization.workspaces ?? []).map((workspace) => workspace.id),
+    );
+    if (historyWorkspaceFilter !== "all" && !workspaceIds.has(historyWorkspaceFilter)) {
+      setHistoryWorkspaceFilter("all");
+    }
+  }, [historyWorkspaceFilter, settings?.organization.workspaces]);
+
+  useEffect(() => {
+    if (!settings?.automation.enabled || !settings.automation.run_scan_on_app_start) {
+      automaticImportStartupScanTriggeredRef.current = false;
+      return;
+    }
+    if (shouldDelayAutomaticImportScan) {
+      return;
+    }
+    if (automaticImportStartupScanTriggeredRef.current) {
+      return;
+    }
+
+    automaticImportStartupScanTriggeredRef.current = true;
+    const timer = window.setTimeout(() => {
+      void runAutomaticImportScan("startup");
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [
+    settings?.automation.enabled,
+    settings?.automation.run_scan_on_app_start,
+    shouldDelayAutomaticImportScan,
+  ]);
+
+  useEffect(() => {
+    if (!settings?.automation.enabled || shouldDelayAutomaticImportScan) {
+      return;
+    }
+    if (settings.automation.watched_sources.length === 0) {
+      return;
+    }
+    const intervalMinutes = Math.max(1, settings.automation.scan_interval_minutes);
+    const timer = window.setInterval(() => {
+      void runAutomaticImportScan("interval");
+    }, intervalMinutes * 60 * 1000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [
+    isAutomaticImportScanning,
+    settings?.automation.enabled,
+    settings?.automation.scan_interval_minutes,
+    settings?.automation.watched_sources,
+    shouldDelayAutomaticImportScan,
+  ]);
 
   const detailSegments = useMemo(
     () => parseTimelineV2Segments(activeArtifact?.metadata?.timeline_v2),
@@ -5111,6 +5521,28 @@ export function App({
     }));
   }, [visibleSettingsPanes]);
 
+  const workspaceOptions = useMemo(
+    () => settings?.organization.workspaces ?? [],
+    [settings?.organization.workspaces],
+  );
+  const workspaceLabelMap = useMemo(
+    () =>
+      new Map(
+        workspaceOptions.map((workspace) => [workspace.id, workspace.label]),
+      ),
+    [workspaceOptions],
+  );
+  const automaticImportSourceStatusMap = useMemo(
+    () =>
+      new Map(
+        (settings?.automation.source_statuses ?? []).map((status) => [
+          status.source_id,
+          status,
+        ]),
+      ),
+    [settings?.automation.source_statuses],
+  );
+
   const enabledRemoteServices = useMemo(() => {
     return (settings?.ai.remote_services ?? []).filter(
       (service) => service.enabled,
@@ -5546,6 +5978,181 @@ export function App({
         ),
       );
     }
+  }
+
+  async function patchAutomaticImportSettings(
+    mutator: (
+      current: AppSettings["automation"],
+    ) => AppSettings["automation"],
+  ): Promise<void> {
+    if (!settings) return;
+    const previous = normalizeSettings(settings);
+    const next = normalizeSettings({
+      ...previous,
+      automation: mutator(previous.automation),
+    });
+
+    const sequence = ++settingsSaveSequenceRef.current;
+    setSettings(next);
+
+    try {
+      const persisted = await saveSettingsPartial({ automation: next.automation });
+      if (sequence === settingsSaveSequenceRef.current) {
+        setSettings(normalizeSettings(persisted));
+      }
+    } catch (settingsError) {
+      if (sequence === settingsSaveSequenceRef.current) {
+        setSettings(previous);
+      }
+      setError(
+        formatUiError(
+          "error.saveSettings",
+          "Could not save settings",
+          settingsError,
+        ),
+      );
+    }
+  }
+
+  async function patchOrganizationSettings(
+    mutator: (
+      current: AppSettings["organization"],
+    ) => AppSettings["organization"],
+  ): Promise<void> {
+    if (!settings) return;
+    const previous = normalizeSettings(settings);
+    const next = normalizeSettings({
+      ...previous,
+      organization: mutator(previous.organization),
+    });
+
+    const sequence = ++settingsSaveSequenceRef.current;
+    setSettings(next);
+
+    try {
+      const persisted = await saveSettingsPartial({
+        organization: next.organization,
+      });
+      if (sequence === settingsSaveSequenceRef.current) {
+        setSettings(normalizeSettings(persisted));
+      }
+    } catch (settingsError) {
+      if (sequence === settingsSaveSequenceRef.current) {
+        setSettings(previous);
+      }
+      setError(
+        formatUiError(
+          "error.saveSettings",
+          "Could not save settings",
+          settingsError,
+        ),
+      );
+    }
+  }
+
+  async function runAutomaticImportScan(
+    reason: "manual" | "startup" | "interval",
+  ): Promise<void> {
+    if (isAutomaticImportScanning) {
+      return;
+    }
+    setIsAutomaticImportScanning(true);
+    setAutomaticImportScanError(null);
+    try {
+      const result = await scanAutomaticImport({ reason });
+      setAutomaticImportScanResult(result);
+      await refreshSettingsFromDisk();
+    } catch (scanError) {
+      setAutomaticImportScanError(
+        formatUiError(
+          "automaticImport.scanFailed",
+          "Automatic import scan failed.",
+          scanError,
+        ),
+      );
+    } finally {
+      setIsAutomaticImportScanning(false);
+    }
+  }
+
+  async function retryAutomaticImportQuarantine(id: string): Promise<void> {
+    setAutomaticImportQuarantineBusyId(id);
+    setAutomaticImportScanError(null);
+    try {
+      const result = await retryAutomaticImportQuarantineItem({ id });
+      setAutomaticImportScanResult(result);
+      await refreshSettingsFromDisk();
+    } catch (retryError) {
+      setAutomaticImportScanError(
+        formatUiError(
+          "automaticImport.retryFailed",
+          "Could not retry the quarantined import.",
+          retryError,
+        ),
+      );
+    } finally {
+      setAutomaticImportQuarantineBusyId((current) =>
+        current === id ? null : current,
+      );
+    }
+  }
+
+  async function clearAutomaticImportQuarantine(id: string): Promise<void> {
+    setAutomaticImportQuarantineBusyId(id);
+    try {
+      const persisted = await clearAutomaticImportQuarantineItem({ id });
+      setSettings(normalizeSettings(persisted));
+    } catch (clearError) {
+      setError(
+        formatUiError(
+          "automaticImport.clearFailed",
+          "Could not clear the quarantined import.",
+          clearError,
+        ),
+      );
+    } finally {
+      setAutomaticImportQuarantineBusyId((current) =>
+        current === id ? null : current,
+      );
+    }
+  }
+
+  async function addAutomaticImportSource(
+    preset: AutomaticImportPreset,
+  ): Promise<void> {
+    const title =
+      preset === "voice_memo"
+        ? t(
+            "settings.automaticImport.pickVoiceMemos",
+            "Choose your synced Voice Memos folder",
+          )
+        : t(
+            "settings.automaticImport.pickFolder",
+            "Choose a watched folder",
+          );
+    const folder = await open({
+      directory: true,
+      multiple: false,
+      title,
+    });
+    if (!folder || Array.isArray(folder)) {
+      return;
+    }
+
+    const source =
+      preset === "voice_memo"
+        ? createPresetAutomaticImportSource(folder, "voice_memo", {
+            label: t(
+              "settings.automaticImport.voiceMemosLabel",
+              "Voice Memos",
+            ),
+          })
+        : createPresetAutomaticImportSource(folder, preset);
+
+    await patchAutomaticImportSettings((current) => ({
+      ...current,
+      watched_sources: [...current.watched_sources, source],
+    }));
   }
 
   async function refreshSettingsFromDisk(): Promise<void> {
@@ -6536,7 +7143,7 @@ export function App({
             engine: settings.transcription.engine,
             language: settings.transcription.language,
             model: settings.transcription.model,
-            enable_ai: false,
+            enable_ai: settings.transcription.enable_ai_post_processing,
             whisper_options: sanitizeWhisperOptions(
               settings.transcription.whisper_options ??
                 getDefaultWhisperOptions(platformIsAppleSilicon),
@@ -8026,6 +8633,86 @@ export function App({
     }
   }
 
+  function applySummaryWorkflowPreset(
+    preset: "study_pack" | "meeting_pack",
+  ): void {
+    if (preset === "study_pack") {
+      setSummaryIncludeTimestamps(false);
+      setSummaryIncludeSpeakers(false);
+      setSummarySections(true);
+      setSummaryBulletPoints(true);
+      setSummaryActionItems(false);
+      setSummaryKeyPointsOnly(false);
+      setSummaryCustomPrompt(
+        t(
+          "summary.studyPackPrompt",
+          "Create structured study notes from this transcript. Include a concise lesson overview, a glossary of key terms, probable exam questions with short answers, and a final flashcard section for quick review.",
+        ),
+      );
+      return;
+    }
+
+    setSummaryIncludeTimestamps(true);
+    setSummaryIncludeSpeakers(true);
+    setSummarySections(true);
+    setSummaryBulletPoints(true);
+    setSummaryActionItems(true);
+    setSummaryKeyPointsOnly(false);
+    setSummaryCustomPrompt(
+      t(
+        "summary.meetingPackPrompt",
+        "Create a meeting brief from this transcript. Include an executive summary, decisions taken, action items with owners and deadlines when available, open questions, and risks or blockers to follow up.",
+      ),
+    );
+  }
+
+  async function onGenerateArtifactPack(
+    kind: "study_pack" | "meeting_intelligence",
+  ): Promise<void> {
+    if (!activeArtifact || isGeneratingArtifactPack) return;
+    if (!aiFeaturesAvailable) {
+      setError(aiUnavailableReason);
+      return;
+    }
+
+    setIsGeneratingArtifactPack(true);
+    try {
+      await generateArtifactPack({
+        id: activeArtifact.id,
+        kind,
+        language: summaryLanguage,
+        include_timestamps: summaryIncludeTimestamps,
+        include_speakers: summaryIncludeSpeakers,
+      });
+      const refreshedArtifact = await getArtifact(activeArtifact.id);
+      if (refreshedArtifact) {
+        upsertArtifact(refreshedArtifact);
+        syncArtifactDraftState(refreshedArtifact);
+      }
+      setError(null);
+    } catch (packError) {
+      const code = formatAppErrorCode(packError);
+      if (code === "missing_ai_provider" || code === "missing_api_key") {
+        setError(
+          t(
+            "error.summaryConfigureProvider",
+            "Summary failed: configure an AI provider in Settings > AI Services.",
+          ),
+        );
+      } else {
+        setError(
+          formatUiError(
+            "error.summaryPackFailed",
+            "Could not generate the derived output.",
+            packError,
+          ),
+        );
+      }
+    } finally {
+      setIsGeneratingArtifactPack(false);
+    }
+  }
+
   async function onGenerateEmotionAnalysis(
     revealOnSuccess = true,
   ): Promise<void> {
@@ -8720,6 +9407,20 @@ export function App({
                   <strong>
                     <HighlightMatch text={artifact.title} search={search} />
                   </strong>
+                  {artifactWorkspaceId(artifact) ? (
+                    <span className="kind-chip">
+                      {workspaceLabelMap.get(artifactWorkspaceId(artifact) ?? "") ||
+                        t("history.workspaceTagged", "Workspace")}
+                    </span>
+                  ) : null}
+                  {artifactImportPreset(artifact) ? (
+                    <span className="kind-chip">
+                      {formatAutomaticImportPresetLabel(
+                        artifactImportPreset(artifact) ?? "general",
+                        t,
+                      )}
+                    </span>
+                  ) : null}
                   <span
                     className="history-inline-time"
                     style={{ marginLeft: "auto" }}
@@ -9204,6 +9905,37 @@ export function App({
             </button>
           </div>
         ) : null}
+        <div className="settings-actions-row">
+          <label className="toggle-row compact">
+            <span>{t("history.workspaceFilter", "Workspace")}</span>
+            <select
+              className="inspector-select"
+              value={historyWorkspaceFilter}
+              onChange={(event) => setHistoryWorkspaceFilter(event.target.value)}
+            >
+              <option value="all">
+                {t("history.workspaceFilterAll", "All workspaces")}
+              </option>
+              {workspaceOptions.map((workspace) => (
+                <option key={workspace.id} value={workspace.id}>
+                  {workspace.label || t("history.untitledWorkspace", "Untitled workspace")}
+                </option>
+              ))}
+            </select>
+          </label>
+          <small>
+            {automaticImportScanResult
+              ? t(
+                  "automaticImport.lastScanSummary",
+                  "Last scan queued {count} new files.",
+                  { count: automaticImportScanResult.queued_jobs.length },
+                )
+              : t(
+                  "automaticImport.historyHint",
+                  "Workspace tags come from watched-folder rules.",
+                )}
+          </small>
+        </div>
         {groupedHistoryArtifacts.length === 0 ? (
           <div className="center-empty">
             <div className="center-empty-icon">
@@ -9347,6 +10079,7 @@ export function App({
     }
 
     if (detailMode === "summary") {
+      const generatedSections = artifactGeneratedSections(activeArtifact, t);
       if (isGeneratingSummary) {
         return (
           <LoadingAnimation
@@ -9361,7 +10094,7 @@ export function App({
         );
       }
 
-      if (!draftSummary) {
+      if (!draftSummary && generatedSections.length === 0) {
         return (
           <div className="detail-empty">
             <div className="center-empty-icon">
@@ -9374,11 +10107,33 @@ export function App({
       }
 
       return (
-        <textarea
-          className="detail-editor summary-editor"
-          value={draftSummary}
-          onChange={(event) => setDraftSummary(event.target.value)}
-        />
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <textarea
+            className="detail-editor summary-editor"
+            value={draftSummary}
+            onChange={(event) => setDraftSummary(event.target.value)}
+          />
+          {generatedSections.map((section) => (
+            <div key={section.key} className="inspector-block">
+              <h4>{section.title}</h4>
+              {section.generatedAt ? (
+                <small className="muted">
+                  {t("summary.generatedAt", "Generated")}:{" "}
+                  {formatDate(section.generatedAt)}
+                </small>
+              ) : null}
+              <pre
+                style={{
+                  whiteSpace: "pre-wrap",
+                  margin: "8px 0 0",
+                  fontFamily: "inherit",
+                }}
+              >
+                {section.body}
+              </pre>
+            </div>
+          ))}
+        </div>
       );
     }
 
@@ -10454,6 +11209,50 @@ export function App({
           <p className="muted">{aiUnavailableReason}</p>
         ) : null}
 
+        <div className="inspector-block">
+          <h4>{t("summary.workflowPresets", "Workflow presets")}</h4>
+          <small className="muted">
+            {t(
+              "summary.workflowPresetsDesc",
+              "Apply a ready-made prompt and review settings for common student or meeting workflows.",
+            )}
+          </small>
+          <div className="settings-actions-row">
+            <button
+              className="secondary-button"
+              onClick={() => applySummaryWorkflowPreset("study_pack")}
+            >
+              {t("summary.applyStudyPack", "Apply Study Pack")}
+            </button>
+            <button
+              className="secondary-button"
+              onClick={() => applySummaryWorkflowPreset("meeting_pack")}
+            >
+              {t("summary.applyMeetingPack", "Apply Meeting Pack")}
+            </button>
+          </div>
+          <div className="settings-actions-row">
+            <button
+              className="secondary-button"
+              disabled={isGeneratingArtifactPack || !activeArtifact || !aiFeaturesAvailable}
+              onClick={() => void onGenerateArtifactPack("study_pack")}
+            >
+              {isGeneratingArtifactPack
+                ? t("summary.generatingPack", "Generating...")
+                : t("summary.generateStudyPack", "Generate Study Pack")}
+            </button>
+            <button
+              className="secondary-button"
+              disabled={isGeneratingArtifactPack || !activeArtifact || !aiFeaturesAvailable}
+              onClick={() => void onGenerateArtifactPack("meeting_intelligence")}
+            >
+              {isGeneratingArtifactPack
+                ? t("summary.generatingPack", "Generating...")
+                : t("summary.generateMeetingPack", "Generate Meeting Pack")}
+            </button>
+          </div>
+        </div>
+
         <label className="toggle-row">
           <span>{t("summary.includeTimestamps")}</span>
           <input
@@ -10813,6 +11612,71 @@ export function App({
               <span>{t("metadata.words")}</span>
               <strong>{transcriptWordCount}</strong>
             </div>
+            {artifactWorkspaceId(activeArtifact) ? (
+              <div className="property-line">
+                <span>{t("metadata.workspace", "Workspace")}</span>
+                <strong>
+                  {workspaceLabelMap.get(artifactWorkspaceId(activeArtifact) ?? "") ??
+                    artifactWorkspaceId(activeArtifact)}
+                </strong>
+              </div>
+            ) : null}
+            {artifactImportPreset(activeArtifact) ? (
+              <div className="property-line">
+                <span>{t("metadata.importPreset", "Import preset")}</span>
+                <strong>
+                  {formatAutomaticImportPresetLabel(
+                    artifactImportPreset(activeArtifact) ?? "general",
+                    t,
+                  )}
+                </strong>
+              </div>
+            ) : null}
+            {activeArtifact.metadata?.auto_import_source_label ? (
+              <div className="property-line">
+                <span>{t("metadata.importSource", "Import source")}</span>
+                <strong>{activeArtifact.metadata.auto_import_source_label}</strong>
+              </div>
+            ) : null}
+            {activeArtifact.metadata?.auto_import_source_path ? (
+              <div className="property-line">
+                <span>{t("metadata.importedFrom", "Imported from")}</span>
+                <strong
+                  className="truncate-value"
+                  title={activeArtifact.metadata.auto_import_source_path}
+                >
+                  {activeArtifact.metadata.auto_import_source_path}
+                </strong>
+              </div>
+            ) : null}
+            {activeArtifact.metadata?.auto_import_detected_at ? (
+              <div className="property-line">
+                <span>{t("metadata.detectedAt", "Detected at")}</span>
+                <strong>
+                  {formatDate(activeArtifact.metadata.auto_import_detected_at)}
+                </strong>
+              </div>
+            ) : null}
+            {activeArtifact.metadata?.auto_post_summary_status ? (
+              <div className="property-line">
+                <span>{t("metadata.autoSummary", "Auto summary")}</span>
+                <strong>{activeArtifact.metadata.auto_post_summary_status}</strong>
+              </div>
+            ) : null}
+            {activeArtifact.metadata?.auto_post_faqs_status ? (
+              <div className="property-line">
+                <span>{t("metadata.autoFaqs", "Auto FAQs")}</span>
+                <strong>{activeArtifact.metadata.auto_post_faqs_status}</strong>
+              </div>
+            ) : null}
+            {activeArtifact.metadata?.auto_post_preset_output_status ? (
+              <div className="property-line">
+                <span>{t("metadata.autoPresetOutput", "Preset output")}</span>
+                <strong>
+                  {activeArtifact.metadata.auto_post_preset_output_status}
+                </strong>
+              </div>
+            ) : null}
           </>
         ) : null}
 
@@ -11640,6 +12504,843 @@ export function App({
             </a>
           ) : null}
           {updateStatusMessage ? <small>{updateStatusMessage}</small> : null}
+        </section>
+      </div>
+    );
+  }
+
+  function renderSettingsAutomaticImport(): JSX.Element {
+    if (!settings) {
+      return (
+        <div className="settings-placeholder">{t("settings.unavailable")}</div>
+      );
+    }
+
+    const automation = settings.automation;
+
+    return (
+      <div className="settings-stack">
+        <section className="settings-panel">
+          <header>
+            <h3>{t("settings.automaticImport.title", "Automatic Import")}</h3>
+            <p>
+              {t(
+                "settings.automaticImport.desc",
+                "Watch synced folders and queue new audio automatically.",
+              )}
+            </p>
+          </header>
+
+          <div className="settings-row">
+            <div>
+              <strong>
+                {t("settings.automaticImport.enabled", "Enable automatic import")}
+              </strong>
+              <small>
+                {t(
+                  "settings.automaticImport.enabledDesc",
+                  "Scans watched folders in the background after the app becomes interactive.",
+                )}
+              </small>
+            </div>
+            <input
+              type="checkbox"
+              checked={automation.enabled}
+              onChange={(event) => {
+                void patchAutomaticImportSettings((current) => ({
+                  ...current,
+                  enabled: event.target.checked,
+                }));
+              }}
+            />
+          </div>
+
+          <div className="settings-row">
+            <div>
+              <strong>
+                {t(
+                  "settings.automaticImport.scanOnStart",
+                  "Scan on app start",
+                )}
+              </strong>
+              <small>
+                {t(
+                  "settings.automaticImport.scanOnStartDesc",
+                  "Runs one background scan after the startup gate finishes.",
+                )}
+              </small>
+            </div>
+            <input
+              type="checkbox"
+              checked={automation.run_scan_on_app_start}
+              onChange={(event) => {
+                void patchAutomaticImportSettings((current) => ({
+                  ...current,
+                  run_scan_on_app_start: event.target.checked,
+                }));
+              }}
+            />
+          </div>
+
+          <div className="settings-row settings-row-block">
+            <div>
+              <strong>
+                {t("settings.automaticImport.scanInterval", "Scan interval")}
+              </strong>
+              <small>
+                {t(
+                  "settings.automaticImport.scanIntervalDesc",
+                  "Used by the desktop session for periodic rescans while the app stays open.",
+                )}
+              </small>
+            </div>
+            <input
+              type="number"
+              min={1}
+              max={1440}
+              value={automation.scan_interval_minutes}
+              onChange={(event) => {
+                void patchAutomaticImportSettings((current) => ({
+                  ...current,
+                  scan_interval_minutes: Math.max(
+                    1,
+                    Number(event.target.value) || 15,
+                  ),
+                }));
+              }}
+            />
+          </div>
+
+          <div className="settings-row settings-row-block">
+            <div>
+              <strong>
+                {t("settings.automaticImport.extensions", "Allowed extensions")}
+              </strong>
+              <small>
+                {t(
+                  "settings.automaticImport.extensionsDesc",
+                  "Comma-separated list used by the folder scanner.",
+                )}
+              </small>
+            </div>
+            <input
+              type="text"
+              value={automation.allowed_extensions.join(", ")}
+              onChange={(event) => {
+                const allowedExtensions = event.target.value
+                  .split(",")
+                  .map((value) => value.trim().replace(/^\./, "").toLowerCase())
+                  .filter(Boolean);
+                void patchAutomaticImportSettings((current) => ({
+                  ...current,
+                  allowed_extensions:
+                    allowedExtensions.length > 0
+                      ? allowedExtensions
+                      : getDefaultAutomaticImportSettings().allowed_extensions,
+                }));
+              }}
+            />
+          </div>
+
+          <div className="settings-actions-row">
+            <button
+              className="secondary-button"
+              onClick={() => void runAutomaticImportScan("manual")}
+              disabled={!automation.enabled || isAutomaticImportScanning}
+            >
+              {isAutomaticImportScanning
+                ? t("settings.automaticImport.scanning", "Scanning...")
+                : t("settings.automaticImport.scanNow", "Scan Now")}
+            </button>
+            <button
+              className="secondary-button"
+              onClick={() => void addAutomaticImportSource("general")}
+            >
+              {t("settings.automaticImport.addFolder", "Add Folder")}
+            </button>
+            <button
+              className="secondary-button"
+              onClick={() => void addAutomaticImportSource("voice_memo")}
+            >
+              {t("settings.automaticImport.addVoiceMemos", "Add Voice Memos")}
+            </button>
+          </div>
+          <div className="inspector-block">
+            <h4>{t("settings.automaticImport.exclusions", "Excluded folders")}</h4>
+            <small className="muted">
+              {t(
+                "settings.automaticImport.exclusionsDesc",
+                "Ignore sensitive folders even if they contain supported audio files.",
+              )}
+            </small>
+            <div className="settings-actions-row">
+              <button
+                className="secondary-button"
+                onClick={async () => {
+                  const folder = await open({
+                    directory: true,
+                    multiple: false,
+                    title: t(
+                      "settings.automaticImport.pickExcludedFolder",
+                      "Choose a folder to exclude",
+                    ),
+                  });
+                  if (!folder || Array.isArray(folder)) {
+                    return;
+                  }
+                  void patchAutomaticImportSettings((current) => ({
+                    ...current,
+                    excluded_folders: Array.from(
+                      new Set([...current.excluded_folders, folder]),
+                    ),
+                  }));
+                }}
+              >
+                {t("settings.automaticImport.addExclusion", "Add Exclusion")}
+              </button>
+            </div>
+            {automation.excluded_folders.length === 0 ? (
+              <p className="muted">
+                {t(
+                  "settings.automaticImport.emptyExclusions",
+                  "No excluded folders configured.",
+                )}
+              </p>
+            ) : (
+              automation.excluded_folders.map((folder) => (
+                <div key={folder} className="settings-actions-row">
+                  <small style={{ wordBreak: "break-all" }}>{folder}</small>
+                  <button
+                    className="secondary-button history-action-danger"
+                    onClick={() => {
+                      void patchAutomaticImportSettings((current) => ({
+                        ...current,
+                        excluded_folders: current.excluded_folders.filter(
+                          (entry) => entry !== folder,
+                        ),
+                      }));
+                    }}
+                  >
+                    {t("settings.automaticImport.removeExclusion", "Remove")}
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+          <small className="muted">
+            {t(
+              "settings.automaticImport.voiceMemosHint",
+              "Use this for a Voice Memos folder already synced to your Mac through Apple services.",
+            )}
+          </small>
+
+          {automaticImportScanResult ? (
+            <small>
+              {t(
+                "settings.automaticImport.lastScanStatus",
+                "Last scan: {queued} queued, {existing} already known, {errors} errors.",
+                {
+                  queued: automaticImportScanResult.queued_jobs.length,
+                  existing: automaticImportScanResult.skipped_existing,
+                  errors: automaticImportScanResult.errors.length,
+                },
+              )}
+            </small>
+          ) : null}
+          {automaticImportScanError ? (
+            <small className="muted">{automaticImportScanError}</small>
+          ) : null}
+        </section>
+
+        <section className="settings-panel">
+          <header>
+            <h3>{t("settings.automaticImport.sources", "Watched Sources")}</h3>
+            <p>
+              {t(
+                "settings.automaticImport.sourcesDesc",
+                "Map each folder to a preset and optional workspace.",
+              )}
+            </p>
+          </header>
+
+          {automation.watched_sources.length === 0 ? (
+            <p className="muted">
+              {t(
+                "settings.automaticImport.emptySources",
+                "No watched folders configured yet.",
+              )}
+            </p>
+          ) : (
+            automation.watched_sources.map((source) => {
+              const sourceStatus = automaticImportSourceStatusMap.get(source.id);
+              return (
+              <div key={source.id} className="settings-panel">
+                <div className="settings-row settings-row-block">
+                  <div>
+                    <strong>
+                      {t("settings.automaticImport.sourceLabel", "Label")}
+                    </strong>
+                  </div>
+                  <input
+                    type="text"
+                    value={source.label}
+                    onChange={(event) => {
+                      void patchAutomaticImportSettings((current) => ({
+                        ...current,
+                        watched_sources: current.watched_sources.map((entry) =>
+                          entry.id === source.id
+                            ? { ...entry, label: event.target.value }
+                            : entry,
+                        ),
+                      }));
+                    }}
+                  />
+                </div>
+
+                <div className="settings-row settings-row-block">
+                  <div>
+                    <strong>
+                      {t("settings.automaticImport.sourceFolder", "Folder")}
+                    </strong>
+                  </div>
+                  <input
+                    type="text"
+                    value={source.folder_path}
+                    onChange={(event) => {
+                      void patchAutomaticImportSettings((current) => ({
+                        ...current,
+                        watched_sources: current.watched_sources.map((entry) =>
+                          entry.id === source.id
+                            ? { ...entry, folder_path: event.target.value }
+                            : entry,
+                        ),
+                      }));
+                    }}
+                  />
+                </div>
+
+                <div className="settings-row settings-row-block">
+                  <div>
+                    <strong>
+                      {t("settings.automaticImport.preset", "Preset")}
+                    </strong>
+                  </div>
+                  <select
+                    value={source.preset}
+                    onChange={(event) => {
+                      void patchAutomaticImportSettings((current) => ({
+                        ...current,
+                        watched_sources: current.watched_sources.map((entry) =>
+                          entry.id === source.id
+                            ? {
+                                ...entry,
+                                preset: event.target.value as AutomaticImportPreset,
+                                post_processing: {
+                                  ...defaultAutomaticImportPostProcessing(
+                                    event.target.value as AutomaticImportPreset,
+                                  ),
+                                  ...entry.post_processing,
+                                },
+                              }
+                            : entry,
+                        ),
+                      }));
+                    }}
+                  >
+                    {(
+                      [
+                        "general",
+                        "lecture",
+                        "meeting",
+                        "interview",
+                        "voice_memo",
+                      ] as AutomaticImportPreset[]
+                    ).map((preset) => (
+                      <option key={preset} value={preset}>
+                        {formatAutomaticImportPresetLabel(preset, t)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="settings-row settings-row-block">
+                  <div>
+                    <strong>
+                      {t("settings.automaticImport.workspace", "Workspace")}
+                    </strong>
+                  </div>
+                  <select
+                    value={source.workspace_id ?? "none"}
+                    onChange={(event) => {
+                      const nextWorkspaceId =
+                        event.target.value === "none" ? null : event.target.value;
+                      void patchAutomaticImportSettings((current) => ({
+                        ...current,
+                        watched_sources: current.watched_sources.map((entry) =>
+                          entry.id === source.id
+                            ? { ...entry, workspace_id: nextWorkspaceId }
+                            : entry,
+                        ),
+                      }));
+                    }}
+                  >
+                    <option value="none">
+                      {t("settings.automaticImport.noWorkspace", "No workspace")}
+                    </option>
+                    {workspaceOptions.map((workspace) => (
+                      <option key={workspace.id} value={workspace.id}>
+                        {workspace.label ||
+                          t("history.untitledWorkspace", "Untitled workspace")}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="settings-row">
+                  <div>
+                    <strong>{t("settings.automaticImport.sourceEnabled", "Enabled")}</strong>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={source.enabled}
+                    onChange={(event) => {
+                      void patchAutomaticImportSettings((current) => ({
+                        ...current,
+                        watched_sources: current.watched_sources.map((entry) =>
+                          entry.id === source.id
+                            ? { ...entry, enabled: event.target.checked }
+                            : entry,
+                        ),
+                      }));
+                    }}
+                  />
+                </div>
+
+                <div className="settings-row">
+                  <div>
+                    <strong>
+                      {t("settings.automaticImport.sourceRecursive", "Recursive scan")}
+                    </strong>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={source.recursive}
+                    onChange={(event) => {
+                      void patchAutomaticImportSettings((current) => ({
+                        ...current,
+                        watched_sources: current.watched_sources.map((entry) =>
+                          entry.id === source.id
+                            ? { ...entry, recursive: event.target.checked }
+                            : entry,
+                        ),
+                      }));
+                    }}
+                  />
+                </div>
+
+                <div className="settings-row">
+                  <div>
+                    <strong>
+                      {t(
+                        "settings.automaticImport.sourceEnableAi",
+                        "Enable AI post-processing",
+                      )}
+                    </strong>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={source.enable_ai_post_processing}
+                    onChange={(event) => {
+                      void patchAutomaticImportSettings((current) => ({
+                        ...current,
+                        watched_sources: current.watched_sources.map((entry) =>
+                          entry.id === source.id
+                            ? {
+                                ...entry,
+                                enable_ai_post_processing: event.target.checked,
+                              }
+                            : entry,
+                        ),
+                      }));
+                    }}
+                  />
+                </div>
+
+                <div className="inspector-block">
+                  <h4>
+                    {t(
+                      "settings.automaticImport.postProcessing",
+                      "Post-processing rules",
+                    )}
+                  </h4>
+                  <label className="toggle-row">
+                    <span>
+                      {t(
+                        "settings.automaticImport.generateSummary",
+                        "Generate summary",
+                      )}
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={source.post_processing.generate_summary}
+                      disabled={!source.enable_ai_post_processing}
+                      onChange={(event) => {
+                        void patchAutomaticImportSettings((current) => ({
+                          ...current,
+                          watched_sources: current.watched_sources.map((entry) =>
+                            entry.id === source.id
+                              ? {
+                                  ...entry,
+                                  post_processing: {
+                                    ...entry.post_processing,
+                                    generate_summary: event.target.checked,
+                                  },
+                                }
+                              : entry,
+                          ),
+                        }));
+                      }}
+                    />
+                  </label>
+                  <label className="toggle-row">
+                    <span>
+                      {t(
+                        "settings.automaticImport.generateFaqs",
+                        "Generate FAQs",
+                      )}
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={source.post_processing.generate_faqs}
+                      disabled={!source.enable_ai_post_processing}
+                      onChange={(event) => {
+                        void patchAutomaticImportSettings((current) => ({
+                          ...current,
+                          watched_sources: current.watched_sources.map((entry) =>
+                            entry.id === source.id
+                              ? {
+                                  ...entry,
+                                  post_processing: {
+                                    ...entry.post_processing,
+                                    generate_faqs: event.target.checked,
+                                  },
+                                }
+                              : entry,
+                          ),
+                        }));
+                      }}
+                    />
+                  </label>
+                  <label className="toggle-row">
+                    <span>
+                      {t(
+                        "settings.automaticImport.generatePresetOutput",
+                        "Generate preset output",
+                      )}
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={source.post_processing.generate_preset_output}
+                      disabled={!source.enable_ai_post_processing}
+                      onChange={(event) => {
+                        void patchAutomaticImportSettings((current) => ({
+                          ...current,
+                          watched_sources: current.watched_sources.map((entry) =>
+                            entry.id === source.id
+                              ? {
+                                  ...entry,
+                                  post_processing: {
+                                    ...entry.post_processing,
+                                    generate_preset_output: event.target.checked,
+                                  },
+                                }
+                              : entry,
+                          ),
+                        }));
+                      }}
+                    />
+                  </label>
+                </div>
+
+                <div className="settings-actions-row">
+                  <button
+                    className="secondary-button"
+                    onClick={async () => {
+                      const folder = await open({
+                        directory: true,
+                        multiple: false,
+                        title: t(
+                          "settings.automaticImport.pickFolder",
+                          "Choose a watched folder",
+                        ),
+                      });
+                      if (!folder || Array.isArray(folder)) {
+                        return;
+                      }
+                      void patchAutomaticImportSettings((current) => ({
+                        ...current,
+                        watched_sources: current.watched_sources.map((entry) =>
+                          entry.id === source.id
+                            ? {
+                                ...entry,
+                                folder_path: folder,
+                                label: entry.label || fileLabel(folder),
+                              }
+                            : entry,
+                        ),
+                      }));
+                    }}
+                  >
+                    {t("settings.automaticImport.replaceFolder", "Replace Folder")}
+                  </button>
+                  <button
+                    className="secondary-button history-action-danger"
+                    onClick={() => {
+                      void patchAutomaticImportSettings((current) => ({
+                        ...current,
+                        watched_sources: current.watched_sources.filter(
+                          (entry) => entry.id !== source.id,
+                        ),
+                      }));
+                    }}
+                  >
+                    {t("settings.automaticImport.removeFolder", "Remove Folder")}
+                  </button>
+                </div>
+                {sourceStatus ? (
+                  <div className="inspector-block">
+                    <h4>
+                      {t("settings.automaticImport.sourceStatus", "Source status")}
+                    </h4>
+                    <small>
+                      {t(
+                        `settings.automaticImport.health.${sourceStatus.health}`,
+                        sourceStatus.health,
+                      )}
+                    </small>
+                    <small>
+                      {t("settings.automaticImport.statusWatcherMode", "Mode")}:{" "}
+                      {sourceStatus.watcher_mode}
+                    </small>
+                    {sourceStatus.last_scan_at ? (
+                      <small>
+                        {t("settings.automaticImport.statusLastScan", "Last scan")}:{" "}
+                        {formatDate(sourceStatus.last_scan_at)}
+                      </small>
+                    ) : null}
+                    <small>
+                      {t("settings.automaticImport.statusCounts", "Scanned {scanned}, queued {queued}, skipped {skipped}.", {
+                        scanned: sourceStatus.last_scanned_files,
+                        queued: sourceStatus.last_queued_jobs,
+                        skipped: sourceStatus.last_skipped_existing,
+                      })}
+                    </small>
+                    {sourceStatus.last_error ? (
+                      <small className="muted">
+                        {t("settings.automaticImport.statusLastError", "Last error")}:{" "}
+                        {sourceStatus.last_error}
+                      </small>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            )})
+          )}
+        </section>
+
+        <section className="settings-panel">
+          <header>
+            <h3>{t("settings.automaticImport.activity", "Recent activity")}</h3>
+            <p>
+              {t(
+                "settings.automaticImport.activityDesc",
+                "Review recent scan results, warnings, and retry guidance.",
+              )}
+            </p>
+          </header>
+          {automation.recent_activity.length === 0 ? (
+            <p className="muted">
+              {t(
+                "settings.automaticImport.emptyActivity",
+                "No automatic-import activity recorded yet.",
+              )}
+            </p>
+          ) : (
+            [...automation.recent_activity]
+              .slice()
+              .reverse()
+              .map((entry) => (
+                <div key={entry.id} className="settings-row settings-row-block">
+                  <div>
+                    <strong>
+                      {t(
+                        `settings.automaticImport.activityLevel.${entry.level}`,
+                        entry.level,
+                      )}
+                    </strong>
+                    <small>{entry.message}</small>
+                  </div>
+                  <small>{entry.timestamp ? formatDate(entry.timestamp) : ""}</small>
+                </div>
+              ))
+          )}
+        </section>
+
+        <section className="settings-panel">
+          <header>
+            <h3>{t("settings.automaticImport.quarantine", "Quarantine")}</h3>
+            <p>
+              {t(
+                "settings.automaticImport.quarantineDesc",
+                "Problematic files stay out of the queue until you retry or clear them.",
+              )}
+            </p>
+          </header>
+          {automation.quarantined_items.length === 0 ? (
+            <p className="muted">
+              {t(
+                "settings.automaticImport.emptyQuarantine",
+                "No quarantined automatic-import files.",
+              )}
+            </p>
+          ) : (
+            [...automation.quarantined_items]
+              .slice()
+              .reverse()
+              .map((item) => (
+                <div key={item.id} className="settings-panel">
+                  <div className="settings-row settings-row-block">
+                    <div>
+                      <strong>
+                        {item.source_label ??
+                          t("settings.automaticImport.unknownSource", "Unknown source")}
+                      </strong>
+                      <small style={{ wordBreak: "break-all" }}>{item.file_path}</small>
+                      <small>{item.reason}</small>
+                      <small>
+                        {t(
+                          "settings.automaticImport.quarantineMeta",
+                          "First seen {first}. Last seen {last}. Retries {count}.",
+                          {
+                            first: item.first_detected_at
+                              ? formatDate(item.first_detected_at)
+                              : "-",
+                            last: item.last_detected_at
+                              ? formatDate(item.last_detected_at)
+                              : "-",
+                            count: item.retry_count,
+                          },
+                        )}
+                      </small>
+                    </div>
+                    <div className="settings-actions-row">
+                      <button
+                        className="secondary-button"
+                        disabled={automaticImportQuarantineBusyId === item.id}
+                        onClick={() => void retryAutomaticImportQuarantine(item.id)}
+                      >
+                        {automaticImportQuarantineBusyId === item.id
+                          ? t("settings.automaticImport.retrying", "Retrying...")
+                          : t("settings.automaticImport.retryQuarantine", "Retry")}
+                      </button>
+                      <button
+                        className="secondary-button history-action-danger"
+                        disabled={automaticImportQuarantineBusyId === item.id}
+                        onClick={() => void clearAutomaticImportQuarantine(item.id)}
+                      >
+                        {t("settings.automaticImport.clearQuarantine", "Clear")}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))
+          )}
+        </section>
+
+        <section className="settings-panel">
+          <header>
+            <h3>{t("settings.automaticImport.workspaces", "Workspaces")}</h3>
+            <p>
+              {t(
+                "settings.automaticImport.workspacesDesc",
+                "Group imported transcripts by course, project, client, or team.",
+              )}
+            </p>
+          </header>
+
+          <div className="settings-actions-row">
+            <button
+              className="secondary-button"
+              onClick={() => {
+                void patchOrganizationSettings((current) => ({
+                  ...current,
+                  workspaces: [...current.workspaces, createDefaultWorkspace()],
+                }));
+              }}
+            >
+              {t("settings.automaticImport.addWorkspace", "Add Workspace")}
+            </button>
+          </div>
+
+          {workspaceOptions.length === 0 ? (
+            <p className="muted">
+              {t(
+                "settings.automaticImport.emptyWorkspaces",
+                "No workspaces configured yet.",
+              )}
+            </p>
+          ) : (
+            workspaceOptions.map((workspace) => (
+              <div key={workspace.id} className="settings-row settings-row-block">
+                <div>
+                  <strong>{t("settings.automaticImport.workspaceLabel", "Workspace label")}</strong>
+                </div>
+                <div style={{ display: "flex", gap: 8, width: "100%" }}>
+                  <input
+                    type="text"
+                    value={workspace.label}
+                    onChange={(event) => {
+                      void patchOrganizationSettings((current) => ({
+                        ...current,
+                        workspaces: current.workspaces.map((entry) =>
+                          entry.id === workspace.id
+                            ? { ...entry, label: event.target.value }
+                            : entry,
+                        ),
+                      }));
+                    }}
+                  />
+                  <input
+                    type="color"
+                    value={workspace.color}
+                    onChange={(event) => {
+                      void patchOrganizationSettings((current) => ({
+                        ...current,
+                        workspaces: current.workspaces.map((entry) =>
+                          entry.id === workspace.id
+                            ? { ...entry, color: event.target.value }
+                            : entry,
+                        ),
+                      }));
+                    }}
+                  />
+                  <button
+                    className="secondary-button history-action-danger"
+                    onClick={() => {
+                      void patchOrganizationSettings((current) => ({
+                        ...current,
+                        workspaces: current.workspaces.filter(
+                          (entry) => entry.id !== workspace.id,
+                        ),
+                      }));
+                    }}
+                  >
+                    {t("settings.automaticImport.removeWorkspace", "Remove")}
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
         </section>
       </div>
     );
@@ -13833,6 +15534,7 @@ export function App({
   }
 
   function renderSettingsPane(pane: SettingsPane): JSX.Element {
+    if (pane === "automatic_import") return renderSettingsAutomaticImport();
     if (pane === "transcription") return renderSettingsTranscription();
     if (pane === "whisper_cpp") return renderSettingsWhisperCpp();
     if (pane === "local_models") return renderSettingsLocalModels();
@@ -14552,6 +16254,12 @@ export function App({
         title={activeArtifact?.title ?? ""}
         summary={draftSummary}
         faqs={draftFaqs}
+        derivedSections={artifactGeneratedSections(activeArtifact, t).map(
+          (section) => ({
+            title: section.title,
+            body: section.body,
+          }),
+        )}
         onClose={() => setShowExportSheet(false)}
         onExport={onExport}
       />

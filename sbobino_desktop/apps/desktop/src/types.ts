@@ -104,6 +104,97 @@ export type TranscriptionSettings = {
   whisper_options: WhisperOptions;
 };
 
+export type AutomaticImportPreset =
+  | "general"
+  | "lecture"
+  | "meeting"
+  | "interview"
+  | "voice_memo";
+
+export type AutomaticImportSource = {
+  id: string;
+  label: string;
+  folder_path: string;
+  enabled: boolean;
+  preset: AutomaticImportPreset;
+  workspace_id?: string | null;
+  recursive: boolean;
+  enable_ai_post_processing: boolean;
+  post_processing: AutomaticImportPostProcessingSettings;
+};
+
+export type AutomaticImportPostProcessingSettings = {
+  generate_summary: boolean;
+  generate_faqs: boolean;
+  generate_preset_output: boolean;
+};
+
+export type AutomaticImportSourceHealth =
+  | "idle"
+  | "healthy"
+  | "warning"
+  | "error";
+
+export type AutomaticImportActivityLevel = "info" | "warning" | "error";
+
+export type AutomaticImportSourceStatus = {
+  source_id: string;
+  source_label: string;
+  health: AutomaticImportSourceHealth;
+  last_scan_at?: string | null;
+  last_success_at?: string | null;
+  last_failure_at?: string | null;
+  last_error?: string | null;
+  last_scan_reason?: string | null;
+  last_trigger?: string | null;
+  last_scanned_files: number;
+  last_queued_jobs: number;
+  last_skipped_existing: number;
+  watcher_mode: string;
+};
+
+export type AutomaticImportActivityEntry = {
+  id: string;
+  timestamp: string;
+  source_id?: string | null;
+  level: AutomaticImportActivityLevel;
+  message: string;
+};
+
+export type AutomaticImportSettings = {
+  enabled: boolean;
+  run_scan_on_app_start: boolean;
+  scan_interval_minutes: number;
+  allowed_extensions: string[];
+  watched_sources: AutomaticImportSource[];
+  excluded_folders: string[];
+  source_statuses: AutomaticImportSourceStatus[];
+  recent_activity: AutomaticImportActivityEntry[];
+  quarantined_items: AutomaticImportQuarantineItem[];
+};
+
+export type AutomaticImportQuarantineItem = {
+  id: string;
+  source_id?: string | null;
+  source_label?: string | null;
+  file_path: string;
+  fingerprint_key?: string | null;
+  reason: string;
+  first_detected_at: string;
+  last_detected_at: string;
+  retry_count: number;
+};
+
+export type WorkspaceConfig = {
+  id: string;
+  label: string;
+  color: string;
+};
+
+export type OrganizationSettings = {
+  workspaces: WorkspaceConfig[];
+};
+
 export type FoundationProviderSettings = {
   enabled: boolean;
 };
@@ -184,6 +275,8 @@ export type AppSettings = {
   // Structured settings.
   general: GeneralSettings;
   transcription: TranscriptionSettings;
+  automation: AutomaticImportSettings;
+  organization: OrganizationSettings;
   ai: AiSettings;
   prompts: PromptSettings;
 };
@@ -281,6 +374,14 @@ export type EmotionAnalysisPayload = ArtifactAiContextOptions & {
   speaker_dynamics: boolean;
 };
 
+export type GeneratedArtifactPackKind = "study_pack" | "meeting_intelligence";
+
+export type GeneratedArtifactPack = {
+  kind: GeneratedArtifactPackKind;
+  generated_at: string;
+  body_markdown: string;
+};
+
 export type EmotionOverview = {
   primary_emotions: string[];
   emotional_arc: string;
@@ -376,6 +477,9 @@ export type StartTranscriptionPayload = {
   whisper_options: WhisperOptions;
   title?: string;
   parent_id?: string;
+  source_origin?: ArtifactSourceOrigin;
+  metadata?: Record<string, string>;
+  source_fingerprint_json?: string | null;
 };
 
 export type WriteTrimmedAudioResponse = {
@@ -558,8 +662,33 @@ export type PostUpdateReconcileResponse = {
 export type UpdateSettingsPartialPayload = {
   general?: GeneralSettings;
   transcription?: TranscriptionSettings;
+  automation?: AutomaticImportSettings;
+  organization?: OrganizationSettings;
   ai?: AiSettings;
   prompts?: PromptSettings;
+};
+
+export type AutomaticImportQueuedJob = {
+  job_id: string;
+  source_id: string;
+  source_label: string;
+  file_path: string;
+  title: string;
+  workspace_id?: string | null;
+  preset: AutomaticImportPreset;
+};
+
+export type AutomaticImportScanResponse = {
+  reason: string;
+  started_at: string;
+  finished_at: string;
+  scanned_sources: number;
+  scanned_files: number;
+  queued_jobs: AutomaticImportQueuedJob[];
+  skipped_existing: number;
+  skipped_missing_sources: number;
+  skipped_unreadable: number;
+  errors: string[];
 };
 
 export type UpdateAiProvidersPayload = {

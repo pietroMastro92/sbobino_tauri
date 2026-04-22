@@ -74,6 +74,20 @@ function createSettingsFixture(): AppSettings {
         text_decoder_compute_units: "all",
       },
     },
+    automation: {
+      enabled: false,
+      run_scan_on_app_start: true,
+      scan_interval_minutes: 15,
+      allowed_extensions: ["wav", "m4a", "mp3"],
+      watched_sources: [],
+      excluded_folders: [],
+      source_statuses: [],
+      recent_activity: [],
+      quarantined_items: [],
+    },
+    organization: {
+      workspaces: [],
+    },
     ai: {
       active_provider: "none",
       active_remote_service_id: null,

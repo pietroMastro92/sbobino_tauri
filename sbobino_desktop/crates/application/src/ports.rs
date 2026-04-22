@@ -92,6 +92,12 @@ pub trait ArtifactRepository: Send + Sync {
         summary: &str,
         faqs: &str,
     ) -> Result<Option<TranscriptArtifact>, ApplicationError>;
+    async fn update_metadata_entry(
+        &self,
+        id: &str,
+        key: &str,
+        value: Option<&str>,
+    ) -> Result<Option<TranscriptArtifact>, ApplicationError>;
     async fn update_timeline_v2(
         &self,
         id: &str,

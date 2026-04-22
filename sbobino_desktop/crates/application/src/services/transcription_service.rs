@@ -6,6 +6,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use chrono::Utc;
+use serde_json::json;
 use tokio::fs;
 use tokio_util::sync::CancellationToken;
 use tracing::{instrument, warn};
@@ -17,12 +19,23 @@ use sbobino_domain::{
 
 use crate::{
     dto::{RunTranscriptionRequest, SummaryFaq},
-    is_retryable_ai_provider_error, summarize_and_faq_adaptive, ApplicationError,
+    is_retryable_ai_provider_error, summarize_and_faq_adaptive,
+    summarize_transcript_adaptive, ApplicationError,
     ArtifactRepository, AudioTranscoder, SpeakerDiarizationEngine, SpeechToTextEngine,
     TranscriptEnhancer,
 };
 
 const HAS_OPTIMIZED_TRANSCRIPT_METADATA_KEY: &str = "has_optimized_transcript";
+const STUDY_PACK_METADATA_KEY: &str = "study_pack_v1";
+const MEETING_PACK_METADATA_KEY: &str = "meeting_intelligence_v1";
+const AUTO_IMPORT_GENERATE_SUMMARY_METADATA_KEY: &str = "auto_import_generate_summary";
+const AUTO_IMPORT_GENERATE_FAQS_METADATA_KEY: &str = "auto_import_generate_faqs";
+const AUTO_IMPORT_GENERATE_PRESET_OUTPUT_METADATA_KEY: &str =
+    "auto_import_generate_preset_output";
+const AUTO_POST_SUMMARY_STATUS_METADATA_KEY: &str = "auto_post_summary_status";
+const AUTO_POST_FAQS_STATUS_METADATA_KEY: &str = "auto_post_faqs_status";
+const AUTO_POST_PRESET_OUTPUT_STATUS_METADATA_KEY: &str =
+    "auto_post_preset_output_status";
 
 #[derive(Clone)]
 pub struct TranscriptionService {
@@ -239,7 +252,8 @@ impl TranscriptionService {
                 }
             }
 
-            let (optimized, summary_faq, has_optimized_transcript) = if request.enable_ai {
+            let (optimized, summary_faq, has_optimized_transcript, generated_outputs) =
+                if request.enable_ai {
                 self.emit(
                     &emit_progress,
                     &request.job_id,
@@ -265,6 +279,7 @@ impl TranscriptionService {
                         self.run_ai_post_processing(
                             &raw_transcript,
                             request.language.as_whisper_code(),
+                            &request,
                         ),
                     )
                     .await
@@ -280,6 +295,7 @@ impl TranscriptionService {
                                 faqs: String::new(),
                             },
                             false,
+                            BTreeMap::new(),
                         )
                     }
                 }
@@ -291,6 +307,7 @@ impl TranscriptionService {
                         faqs: String::new(),
                     },
                     false,
+                    BTreeMap::new(),
                 )
             };
 
@@ -304,7 +321,7 @@ impl TranscriptionService {
                 None,
             );
 
-            let mut metadata = BTreeMap::new();
+            let mut metadata = request.metadata.clone();
             metadata.insert(
                 "model".to_string(),
                 request.model.ggml_filename().to_string(),
@@ -333,6 +350,21 @@ impl TranscriptionService {
                     "true".to_string(),
                 );
             }
+            if !request.enable_ai {
+                metadata.insert(
+                    AUTO_POST_SUMMARY_STATUS_METADATA_KEY.to_string(),
+                    "disabled".to_string(),
+                );
+                metadata.insert(
+                    AUTO_POST_FAQS_STATUS_METADATA_KEY.to_string(),
+                    "disabled".to_string(),
+                );
+                metadata.insert(
+                    AUTO_POST_PRESET_OUTPUT_STATUS_METADATA_KEY.to_string(),
+                    "disabled".to_string(),
+                );
+            }
+            metadata.extend(generated_outputs);
 
             let final_title = request.title.clone().unwrap_or_else(|| {
                 input_path
@@ -372,6 +404,7 @@ impl TranscriptionService {
                 .to_string(),
             );
             artifact.set_source_external_path(request.input_path.clone());
+            artifact.source_fingerprint_json = request.source_fingerprint_json.clone();
 
             self.run_cancellable(&cancellation_token, self.artifacts.save(&artifact))
                 .await?;
@@ -432,7 +465,16 @@ impl TranscriptionService {
         &self,
         raw_transcript: &str,
         language_code: &str,
-    ) -> Result<(String, SummaryFaq, bool), ApplicationError> {
+        request: &RunTranscriptionRequest,
+    ) -> Result<(String, SummaryFaq, bool, BTreeMap<String, String>), ApplicationError> {
+        let generate_summary =
+            metadata_bool(request, AUTO_IMPORT_GENERATE_SUMMARY_METADATA_KEY, true);
+        let generate_faqs = metadata_bool(request, AUTO_IMPORT_GENERATE_FAQS_METADATA_KEY, true);
+        let generate_preset_output = metadata_bool(
+            request,
+            AUTO_IMPORT_GENERATE_PRESET_OUTPUT_METADATA_KEY,
+            true,
+        );
         let mut last_retryable_error: Option<ApplicationError> = None;
 
         for enhancer in self.ordered_enhancers() {
@@ -448,28 +490,101 @@ impl TranscriptionService {
             let constrained_optimized = constrain_transcript_edit(raw_transcript, &optimized);
             let has_optimized_transcript = constrained_optimized != raw_transcript;
 
-            let summary_faq = match summarize_and_faq_adaptive(
-                enhancer.as_ref(),
-                &constrained_optimized,
-                language_code,
-            )
-            .await
-            {
-                Ok(value) => value,
-                Err(error) if is_retryable_ai_provider_error(&error) => {
-                    last_retryable_error = Some(error);
-                    continue;
-                }
-                Err(error) => {
-                    warn!("summary/faq generation skipped after optimization: {error}");
-                    SummaryFaq {
-                        summary: String::new(),
-                        faqs: String::new(),
+            let mut summary_faq = if generate_summary || generate_faqs {
+                match summarize_and_faq_adaptive(
+                    enhancer.as_ref(),
+                    &constrained_optimized,
+                    language_code,
+                )
+                .await
+                {
+                    Ok(value) => value,
+                    Err(error) if is_retryable_ai_provider_error(&error) => {
+                        last_retryable_error = Some(error);
+                        continue;
+                    }
+                    Err(error) => {
+                        warn!("summary/faq generation skipped after optimization: {error}");
+                        SummaryFaq {
+                            summary: String::new(),
+                            faqs: String::new(),
+                        }
                     }
                 }
+            } else {
+                SummaryFaq {
+                    summary: String::new(),
+                    faqs: String::new(),
+                }
             };
+            if !generate_summary {
+                summary_faq.summary.clear();
+            }
+            if !generate_faqs {
+                summary_faq.faqs.clear();
+            }
 
-            return Ok((constrained_optimized, summary_faq, has_optimized_transcript));
+            let mut generated_outputs = if generate_preset_output {
+                match self
+                    .generate_preset_outputs(
+                        enhancer.as_ref(),
+                        &constrained_optimized,
+                        language_code,
+                        request,
+                    )
+                    .await
+                {
+                    Ok(outputs) => outputs,
+                    Err(error) => {
+                        warn!("preset-specific outputs skipped after summary generation: {error}");
+                        BTreeMap::new()
+                    }
+                }
+            } else {
+                BTreeMap::new()
+            };
+            generated_outputs.insert(
+                AUTO_POST_SUMMARY_STATUS_METADATA_KEY.to_string(),
+                if !generate_summary {
+                    "skipped"
+                } else if summary_faq.summary.trim().is_empty() {
+                    "unavailable"
+                } else {
+                    "generated"
+                }
+                .to_string(),
+            );
+            generated_outputs.insert(
+                AUTO_POST_FAQS_STATUS_METADATA_KEY.to_string(),
+                if !generate_faqs {
+                    "skipped"
+                } else if summary_faq.faqs.trim().is_empty() {
+                    "unavailable"
+                } else {
+                    "generated"
+                }
+                .to_string(),
+            );
+            let has_preset_output = generated_outputs.contains_key(STUDY_PACK_METADATA_KEY)
+                || generated_outputs.contains_key(MEETING_PACK_METADATA_KEY);
+            generated_outputs.insert(
+                AUTO_POST_PRESET_OUTPUT_STATUS_METADATA_KEY.to_string(),
+                if !generate_preset_output {
+                    "skipped"
+                } else if has_preset_output {
+                    "generated"
+                } else {
+                    "unavailable"
+                }
+                .to_string(),
+            );
+
+            return Ok((
+                constrained_optimized,
+                summary_faq,
+                has_optimized_transcript,
+                generated_outputs,
+            ));
         }
 
         Err(last_retryable_error.unwrap_or_else(|| {
@@ -479,11 +594,107 @@ impl TranscriptionService {
         }))
     }
 
+    async fn generate_preset_outputs(
+        &self,
+        enhancer: &dyn TranscriptEnhancer,
+        transcript: &str,
+        language_code: &str,
+        request: &RunTranscriptionRequest,
+    ) -> Result<BTreeMap<String, String>, ApplicationError> {
+        let Some(preset) = request.metadata.get("auto_import_preset").map(|value| value.trim()) else {
+            return Ok(BTreeMap::new());
+        };
+        if transcript.trim().is_empty() {
+            return Ok(BTreeMap::new());
+        }
+
+        let mut outputs = BTreeMap::new();
+        match preset {
+            "lecture" => {
+                let body_markdown = summarize_transcript_adaptive(
+                    enhancer,
+                    transcript,
+                    &Self::build_study_pack_prompt(language_code),
+                )
+                .await?;
+                outputs.insert(
+                    STUDY_PACK_METADATA_KEY.to_string(),
+                    json!({
+                        "kind": "study_pack",
+                        "generated_at": Utc::now().to_rfc3339(),
+                        "body_markdown": body_markdown,
+                    })
+                    .to_string(),
+                );
+            }
+            "meeting" | "interview" => {
+                let body_markdown = summarize_transcript_adaptive(
+                    enhancer,
+                    transcript,
+                    &Self::build_meeting_pack_prompt(language_code, preset == "interview"),
+                )
+                .await?;
+                outputs.insert(
+                    MEETING_PACK_METADATA_KEY.to_string(),
+                    json!({
+                        "kind": "meeting_intelligence",
+                        "generated_at": Utc::now().to_rfc3339(),
+                        "body_markdown": body_markdown,
+                    })
+                    .to_string(),
+                );
+            }
+            _ => {}
+        }
+        Ok(outputs)
+    }
+
     fn ordered_enhancers(&self) -> Vec<Arc<dyn TranscriptEnhancer>> {
         let mut enhancers = Vec::with_capacity(1 + self.fallback_enhancers.len());
         enhancers.push(self.enhancer.clone());
         enhancers.extend(self.fallback_enhancers.iter().cloned());
         enhancers
+    }
+
+    fn build_study_pack_prompt(language_code: &str) -> String {
+        format!(
+            "Write the entire output in {language_code}. Produce only markdown.\n\n\
+             Build a student study pack from the transcript with these sections in order:\n\
+             1. Overview\n\
+             2. Structured Notes\n\
+             3. Glossary of Key Terms\n\
+             4. Probable Exam Questions\n\
+             5. Flashcards\n\n\
+             Requirements:\n\
+             - Stay faithful to the transcript and do not invent facts.\n\
+             - Use concise headings and bullet points where helpful.\n\
+             - In Glossary, define the most important terms in plain language.\n\
+             - In Probable Exam Questions, include short model answers.\n\
+             - In Flashcards, format each item as `Q:` followed by `A:`.\n\
+             - If the transcript does not support a section, write `Not enough evidence.` under that heading."
+        )
+    }
+
+    fn build_meeting_pack_prompt(language_code: &str, interview_mode: bool) -> String {
+        let opening = if interview_mode {
+            "Build an interview intelligence pack from the transcript"
+        } else {
+            "Build a meeting intelligence pack from the transcript"
+        };
+        format!(
+            "{opening}. Write the entire output in {language_code}. Produce only markdown.\n\n\
+             Use these sections in order:\n\
+             1. Executive Summary\n\
+             2. Decisions\n\
+             3. Action Items\n\
+             4. Open Questions\n\
+             5. Risks and Blockers\n\n\
+             Requirements:\n\
+             - Stay faithful to the transcript and do not invent facts.\n\
+             - Where owners or deadlines are explicit, capture them.\n\
+             - If an item is uncertain, mark it clearly as tentative.\n\
+             - If no evidence exists for a section, write `Not enough evidence.` under that heading."
+        )
     }
 
     pub async fn list_recent_artifacts(
@@ -687,4 +898,12 @@ impl TranscriptionService {
             result = operation => result,
         }
     }
+}
+
+fn metadata_bool(request: &RunTranscriptionRequest, key: &str, default: bool) -> bool {
+    request
+        .metadata
+        .get(key)
+        .map(|value| matches!(value.trim(), "true" | "1" | "yes"))
+        .unwrap_or(default)
 }

@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use tauri::{Emitter, State};
 
 use sbobino_domain::{
-    AiProvider, AiSettings, AppSettings, GeneralSettings, LanguageCode, PromptSettings, PromptTask,
-    PromptTemplate, TranscriptionSettings,
+    AiProvider, AiSettings, AppSettings, AutomaticImportSettings, GeneralSettings, LanguageCode,
+    OrganizationSettings, PromptSettings, PromptTask, PromptTemplate, TranscriptionSettings,
 };
 
 use crate::{
@@ -27,6 +27,8 @@ fn emit_settings_updated(app: &tauri::AppHandle, settings: &AppSettings) {
 pub struct UpdateSettingsPartialPayload {
     pub general: Option<GeneralSettings>,
     pub transcription: Option<TranscriptionSettings>,
+    pub automation: Option<AutomaticImportSettings>,
+    pub organization: Option<OrganizationSettings>,
     pub ai: Option<AiSettings>,
     pub prompts: Option<PromptSettings>,
 }
@@ -218,6 +220,8 @@ pub async fn update_settings_partial(
         .update_partial(
             payload.general,
             payload.transcription,
+            payload.automation,
+            payload.organization,
             payload.ai,
             payload.prompts,
         )

@@ -1204,6 +1204,81 @@ impl ArtifactRepository for SqliteArtifactRepository {
         .map_err(|e| ApplicationError::Persistence(format!("storage task join error: {e}")))?
     }
 
+    async fn update_metadata_entry(
+        &self,
+        id: &str,
+        key: &str,
+        value: Option<&str>,
+    ) -> Result<Option<TranscriptArtifact>, ApplicationError> {
+        let repo = self.clone();
+        let id = id.to_string();
+        let key = key.to_string();
+        let value = value.map(str::to_string);
+
+        tokio::task::spawn_blocking(move || {
+            let mut conn = repo.open_connection()?;
+            let Some(current) = repo.load_one(&conn, &id, false)? else {
+                return Ok(None);
+            };
+
+            let mut metadata = current.metadata.clone();
+            match value.as_deref() {
+                Some(next_value) => {
+                    metadata.insert(key.clone(), next_value.to_string());
+                }
+                None => {
+                    metadata.remove(&key);
+                }
+            }
+            let metadata_json = serde_json::to_string(&metadata).map_err(|e| {
+                ApplicationError::Persistence(format!("failed to serialize metadata: {e}"))
+            })?;
+
+            let tx = conn.transaction().map_err(|e| {
+                ApplicationError::Persistence(format!(
+                    "failed to start metadata update transaction: {e}"
+                ))
+            })?;
+            let changed = tx
+                .execute(
+                    r#"
+                UPDATE transcript_artifacts
+                SET metadata_json_enc = ?2,
+                    updated_at = ?3,
+                    revision = revision + 1
+                WHERE id = ?1 AND is_deleted = 0 AND revision = ?4
+                "#,
+                    params![
+                        id,
+                        repo.encrypt_text(&current.id, "metadata_json", &metadata_json)?,
+                        Utc::now().to_rfc3339(),
+                        current.revision,
+                    ],
+                )
+                .map_err(|e| {
+                    ApplicationError::Persistence(format!(
+                        "failed to update artifact metadata: {e}"
+                    ))
+                })?;
+
+            if changed == 0 {
+                return Err(ApplicationError::Persistence(
+                    "artifact metadata update rejected because a newer revision already exists"
+                        .to_string(),
+                ));
+            }
+            tx.commit().map_err(|e| {
+                ApplicationError::Persistence(format!(
+                    "failed to commit metadata update transaction: {e}"
+                ))
+            })?;
+
+            repo.load_one(&repo.open_connection()?, &id, false)
+        })
+        .await
+        .map_err(|e| ApplicationError::Persistence(format!("storage task join error: {e}")))?
+    }
+
     async fn update_timeline_v2(
         &self,
         id: &str,

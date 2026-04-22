@@ -20,10 +20,14 @@ use tracing_subscriber::{fmt, EnvFilter};
 
 use crate::commands::artifacts::{
     analyze_artifact_emotions, chat_artifact, delete_artifacts, empty_deleted_artifacts,
-    export_artifact, get_artifact, hard_delete_artifacts, list_artifacts, list_deleted_artifacts,
-    list_recent_artifacts, optimize_artifact, read_artifact_audio, read_audio_file,
-    rename_artifact, restore_artifacts, summarize_artifact, update_artifact,
+    export_artifact, generate_artifact_pack, get_artifact, hard_delete_artifacts, list_artifacts,
+    list_deleted_artifacts, list_recent_artifacts, optimize_artifact, read_artifact_audio,
+    read_audio_file, rename_artifact, restore_artifacts, summarize_artifact, update_artifact,
     update_artifact_timeline, write_trimmed_audio,
+};
+use crate::commands::automatic_import::{
+    clear_automatic_import_quarantine_item, retry_automatic_import_quarantine_item,
+    scan_automatic_import,
 };
 use crate::commands::backup::{export_app_backup, import_app_backup};
 use crate::commands::provisioning::{
@@ -187,6 +191,9 @@ pub fn run() {
             update_settings,
             get_settings_snapshot,
             update_settings_partial,
+            scan_automatic_import,
+            retry_automatic_import_quarantine_item,
+            clear_automatic_import_quarantine_item,
             get_ai_providers,
             get_ai_capability_status,
             update_ai_providers,
@@ -213,6 +220,7 @@ pub fn run() {
             export_app_backup,
             chat_artifact,
             summarize_artifact,
+            generate_artifact_pack,
             analyze_artifact_emotions,
             optimize_artifact,
             read_artifact_audio,

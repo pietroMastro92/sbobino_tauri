@@ -1,4 +1,5 @@
 pub mod artifacts;
+pub mod automatic_import;
 pub mod backup;
 pub mod emotion_analysis;
 pub mod prepared_transcript;

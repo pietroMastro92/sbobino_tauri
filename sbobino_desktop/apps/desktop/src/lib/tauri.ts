@@ -3,12 +3,15 @@ import { listen } from "@tauri-apps/api/event";
 import type {
   AiSettings,
   AiCapabilityStatus,
+  AutomaticImportScanResponse,
   AppSettings,
   ChatArtifactPayload,
   EmotionAnalysisPayload,
   EmotionAnalysisResult,
   ExportAppBackupResponse,
+  GeneratedArtifactPack,
   ArtifactKind,
+  GeneratedArtifactPackKind,
   ImportAppBackupResponse,
   EnsureRuntimeResponse,
   JobProgress,
@@ -55,6 +58,29 @@ export async function saveSettingsPartial(
   payload: UpdateSettingsPartialPayload,
 ): Promise<AppSettings> {
   return invoke<AppSettings>("update_settings_partial", { payload });
+}
+
+export async function scanAutomaticImport(payload?: {
+  reason?: string;
+}): Promise<AutomaticImportScanResponse> {
+  return invoke<AutomaticImportScanResponse>("scan_automatic_import", {
+    payload,
+  });
+}
+
+export async function retryAutomaticImportQuarantineItem(payload: {
+  id: string;
+}): Promise<AutomaticImportScanResponse> {
+  return invoke<AutomaticImportScanResponse>(
+    "retry_automatic_import_quarantine_item",
+    { payload },
+  );
+}
+
+export async function clearAutomaticImportQuarantineItem(payload: {
+  id: string;
+}): Promise<AppSettings> {
+  return invoke<AppSettings>("clear_automatic_import_quarantine_item", { payload });
 }
 
 export async function fetchAiProviders(): Promise<AiSettings> {
@@ -235,6 +261,16 @@ export async function chatArtifact(payload: ChatArtifactPayload): Promise<string
 
 export async function summarizeArtifact(payload: SummarizeArtifactPayload): Promise<string> {
   return invoke<string>("summarize_artifact", { payload });
+}
+
+export async function generateArtifactPack(payload: {
+  id: string;
+  kind: GeneratedArtifactPackKind;
+  language: StartTranscriptionPayload["language"];
+  include_timestamps: boolean;
+  include_speakers: boolean;
+}): Promise<GeneratedArtifactPack> {
+  return invoke<GeneratedArtifactPack>("generate_artifact_pack", { payload });
 }
 
 export async function analyzeArtifactEmotions(

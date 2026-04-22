@@ -36,6 +36,7 @@ type ExportSheetProps = {
   title?: string;
   summary?: string;
   faqs?: string;
+  derivedSections?: Array<{ title: string; body: string }>;
   onClose: () => void;
   onExport: (payload: ExportRequest) => Promise<boolean>;
 };
@@ -167,6 +168,7 @@ export function buildPreviewContent(params: {
   title: string;
   summary?: string;
   faqs?: string;
+  derivedSections?: Array<{ title: string; body: string }>;
 }): string {
   const {
     transcriptText,
@@ -179,6 +181,7 @@ export function buildPreviewContent(params: {
     title,
     summary = "",
     faqs = "",
+    derivedSections = [],
   } = params;
   const normalizedTranscript = transcriptText.trim();
 
@@ -277,6 +280,9 @@ export function buildPreviewContent(params: {
       `${localizedPrimarySectionTitle()}\n${body.trim()}`,
       summary.trim() ? `${localizedSummaryTitle()}\n${summary.trim()}` : "",
       faqs.trim() ? `${localizedFaqTitle()}\n${faqs.trim()}` : "",
+      ...derivedSections
+        .filter((section) => section.body.trim())
+        .map((section) => `${section.title.trim()}\n${section.body.trim()}`),
     ].filter(Boolean);
 
     return [localizedDocumentTitle(title), ...sections].join("\n\n");
@@ -413,6 +419,7 @@ export function ExportSheet({
   title = "",
   summary = "",
   faqs = "",
+  derivedSections = [],
   onClose,
   onExport,
 }: ExportSheetProps): JSX.Element | null {
@@ -484,8 +491,9 @@ export function ExportSheet({
       title,
       summary,
       faqs,
+      derivedSections,
     });
-  }, [exportSegments, faqs, includeTimestamps, showSpeakerNames, language, style, format, summary, transcriptText, title]);
+  }, [derivedSections, exportSegments, faqs, includeTimestamps, showSpeakerNames, language, style, format, summary, transcriptText, title]);
 
   const preview = useMemo(() => {
     const normalized = exportContent.trim();

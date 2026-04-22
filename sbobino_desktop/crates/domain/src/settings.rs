@@ -299,6 +299,228 @@ impl Default for TranscriptionSettings {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomaticImportPreset {
+    #[default]
+    General,
+    Lecture,
+    Meeting,
+    Interview,
+    VoiceMemo,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutomaticImportPostProcessingSettings {
+    pub generate_summary: bool,
+    pub generate_faqs: bool,
+    pub generate_preset_output: bool,
+}
+
+impl Default for AutomaticImportPostProcessingSettings {
+    fn default() -> Self {
+        Self {
+            generate_summary: true,
+            generate_faqs: true,
+            generate_preset_output: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutomaticImportSource {
+    pub id: String,
+    pub label: String,
+    pub folder_path: String,
+    pub enabled: bool,
+    pub preset: AutomaticImportPreset,
+    pub workspace_id: Option<String>,
+    pub recursive: bool,
+    pub enable_ai_post_processing: bool,
+    pub post_processing: AutomaticImportPostProcessingSettings,
+}
+
+impl Default for AutomaticImportSource {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            label: String::new(),
+            folder_path: String::new(),
+            enabled: true,
+            preset: AutomaticImportPreset::General,
+            workspace_id: None,
+            recursive: true,
+            enable_ai_post_processing: false,
+            post_processing: AutomaticImportPostProcessingSettings::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutomaticImportSettings {
+    pub enabled: bool,
+    pub run_scan_on_app_start: bool,
+    pub scan_interval_minutes: u32,
+    pub allowed_extensions: Vec<String>,
+    pub watched_sources: Vec<AutomaticImportSource>,
+    pub excluded_folders: Vec<String>,
+    pub source_statuses: Vec<AutomaticImportSourceStatus>,
+    pub recent_activity: Vec<AutomaticImportActivityEntry>,
+    pub quarantined_items: Vec<AutomaticImportQuarantineItem>,
+}
+
+impl Default for AutomaticImportSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            run_scan_on_app_start: true,
+            scan_interval_minutes: 15,
+            allowed_extensions: default_automatic_import_extensions(),
+            watched_sources: Vec::new(),
+            excluded_folders: Vec::new(),
+            source_statuses: Vec::new(),
+            recent_activity: Vec::new(),
+            quarantined_items: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomaticImportSourceHealth {
+    #[default]
+    Idle,
+    Healthy,
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutomaticImportSourceStatus {
+    pub source_id: String,
+    pub source_label: String,
+    pub health: AutomaticImportSourceHealth,
+    pub last_scan_at: Option<String>,
+    pub last_success_at: Option<String>,
+    pub last_failure_at: Option<String>,
+    pub last_error: Option<String>,
+    pub last_scan_reason: Option<String>,
+    pub last_trigger: Option<String>,
+    pub last_scanned_files: u32,
+    pub last_queued_jobs: u32,
+    pub last_skipped_existing: u32,
+    pub watcher_mode: String,
+}
+
+impl Default for AutomaticImportSourceStatus {
+    fn default() -> Self {
+        Self {
+            source_id: String::new(),
+            source_label: String::new(),
+            health: AutomaticImportSourceHealth::Idle,
+            last_scan_at: None,
+            last_success_at: None,
+            last_failure_at: None,
+            last_error: None,
+            last_scan_reason: None,
+            last_trigger: None,
+            last_scanned_files: 0,
+            last_queued_jobs: 0,
+            last_skipped_existing: 0,
+            watcher_mode: "periodic_scan".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomaticImportActivityLevel {
+    #[default]
+    Info,
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutomaticImportActivityEntry {
+    pub id: String,
+    pub timestamp: String,
+    pub source_id: Option<String>,
+    pub level: AutomaticImportActivityLevel,
+    pub message: String,
+}
+
+impl Default for AutomaticImportActivityEntry {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            timestamp: String::new(),
+            source_id: None,
+            level: AutomaticImportActivityLevel::Info,
+            message: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutomaticImportQuarantineItem {
+    pub id: String,
+    pub source_id: Option<String>,
+    pub source_label: Option<String>,
+    pub file_path: String,
+    pub fingerprint_key: Option<String>,
+    pub reason: String,
+    pub first_detected_at: String,
+    pub last_detected_at: String,
+    pub retry_count: u32,
+}
+
+impl Default for AutomaticImportQuarantineItem {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            source_id: None,
+            source_label: None,
+            file_path: String::new(),
+            fingerprint_key: None,
+            reason: String::new(),
+            first_detected_at: String::new(),
+            last_detected_at: String::new(),
+            retry_count: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkspaceConfig {
+    pub id: String,
+    pub label: String,
+    pub color: String,
+}
+
+impl Default for WorkspaceConfig {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            label: String::new(),
+            color: "#4F7CFF".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct OrganizationSettings {
+    pub workspaces: Vec<WorkspaceConfig>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FoundationProviderSettings {
@@ -423,6 +645,8 @@ pub struct AppSettings {
     // New structured settings for Whisper-style settings workspace.
     pub general: GeneralSettings,
     pub transcription: TranscriptionSettings,
+    pub automation: AutomaticImportSettings,
+    pub organization: OrganizationSettings,
     pub ai: AiSettings,
     pub prompts: PromptSettings,
 }
@@ -431,6 +655,8 @@ impl Default for AppSettings {
     fn default() -> Self {
         let general = GeneralSettings::default();
         let transcription = TranscriptionSettings::default();
+        let automation = AutomaticImportSettings::default();
+        let organization = OrganizationSettings::default();
         let ai = AiSettings::default();
         let prompts = PromptSettings::default();
 
@@ -450,6 +676,8 @@ impl Default for AppSettings {
             auto_update_repo: general.auto_update_repo.clone(),
             general,
             transcription,
+            automation,
+            organization,
             ai,
             prompts,
         }
@@ -469,6 +697,22 @@ impl AppSettings {
         self.transcription.ffmpeg_path = self.ffmpeg_path.clone();
         self.transcription.models_dir = self.models_dir.clone();
         self.transcription.enable_ai_post_processing = self.ai_post_processing;
+        self.automation.scan_interval_minutes =
+            self.automation.scan_interval_minutes.clamp(1, 24 * 60);
+        if self.automation.allowed_extensions.is_empty() {
+            self.automation.allowed_extensions = default_automatic_import_extensions();
+        } else {
+            self.automation.allowed_extensions = self
+                .automation
+                .allowed_extensions
+                .iter()
+                .map(|value| value.trim().trim_start_matches('.').to_lowercase())
+                .filter(|value| !value.is_empty())
+                .collect();
+            if self.automation.allowed_extensions.is_empty() {
+                self.automation.allowed_extensions = default_automatic_import_extensions();
+            }
+        }
 
         self.ai.providers.gemini.model = self.gemini_model.clone();
         self.ai.providers.gemini.api_key = self.gemini_api_key.clone();
@@ -744,4 +988,13 @@ pub fn default_prompt_templates() -> Vec<PromptTemplate> {
             updated_at: "".to_string(),
         },
     ]
+}
+
+fn default_automatic_import_extensions() -> Vec<String> {
+    vec![
+        "wav", "m4a", "mp3", "ogg", "opus", "webm", "flac", "aac", "aiff", "aif", "m4b",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }

@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     path::Path,
     sync::{Arc, Mutex},
 };
@@ -326,6 +326,31 @@ impl ArtifactRepository for InMemoryArtifactRepository {
         Ok(Some(artifact.clone()))
     }
 
+    async fn update_metadata_entry(
+        &self,
+        id: &str,
+        key: &str,
+        value: Option<&str>,
+    ) -> Result<Option<TranscriptArtifact>, ApplicationError> {
+        let mut artifacts = self.artifacts.lock().expect("artifact repo lock poisoned");
+        let Some(artifact) = artifacts.iter_mut().find(|artifact| artifact.id == id) else {
+            return Ok(None);
+        };
+
+        match value {
+            Some(next_value) => {
+                artifact
+                    .metadata
+                    .insert(key.to_string(), next_value.to_string());
+            }
+            None => {
+                artifact.metadata.remove(key);
+            }
+        }
+        artifact.touch();
+        Ok(Some(artifact.clone()))
+    }
+
     async fn update_timeline_v2(
         &self,
         id: &str,
@@ -513,6 +538,8 @@ async fn run_file_transcription_without_ai_emits_expected_stages_and_persists() 
                 whisper_options: WhisperOptions::default(),
                 title: None,
                 parent_id: None,
+                metadata: BTreeMap::new(),
+                source_fingerprint_json: None,
             },
             Arc::new(move |event| {
                 emitted_clone
@@ -610,6 +637,8 @@ async fn run_file_transcription_emits_final_transcript_snapshot_before_post_proc
                 whisper_options: WhisperOptions::default(),
                 title: None,
                 parent_id: None,
+                metadata: BTreeMap::new(),
+                source_fingerprint_json: None,
             },
             Arc::new(|_| {}),
             Arc::new(move |text: String| {
@@ -666,6 +695,8 @@ async fn run_file_transcription_with_ai_runs_enhancer_steps() {
                 whisper_options: WhisperOptions::default(),
                 title: None,
                 parent_id: None,
+                metadata: BTreeMap::new(),
+                source_fingerprint_json: None,
             },
             Arc::new(move |event| {
                 emitted_clone
@@ -741,6 +772,8 @@ async fn run_file_transcription_rejects_missing_input_path() {
                 whisper_options: WhisperOptions::default(),
                 title: None,
                 parent_id: None,
+                metadata: BTreeMap::new(),
+                source_fingerprint_json: None,
             },
             Arc::new(|_| {}),
             Arc::new(|_text: String| {}),
@@ -819,6 +852,8 @@ async fn run_file_transcription_assigns_speakers_into_timeline_metadata() {
                 whisper_options: WhisperOptions::default(),
                 title: None,
                 parent_id: None,
+                metadata: BTreeMap::new(),
+                source_fingerprint_json: None,
             },
             Arc::new(|_| {}),
             Arc::new(|_text: String| {}),
@@ -884,6 +919,8 @@ async fn run_file_transcription_persists_diarization_failure_metadata() {
                 whisper_options: WhisperOptions::default(),
                 title: None,
                 parent_id: None,
+                metadata: BTreeMap::new(),
+                source_fingerprint_json: None,
             },
             Arc::new(|_| {}),
             Arc::new(|_text: String| {}),
@@ -942,6 +979,8 @@ async fn run_file_transcription_keeps_raw_transcript_when_ai_fails() {
                 whisper_options: WhisperOptions::default(),
                 title: None,
                 parent_id: None,
+                metadata: BTreeMap::new(),
+                source_fingerprint_json: None,
             },
             Arc::new(|_| {}),
             Arc::new(|_text: String| {}),
@@ -1016,6 +1055,8 @@ async fn run_file_transcription_falls_back_to_secondary_ai_provider() {
                 whisper_options: WhisperOptions::default(),
                 title: None,
                 parent_id: None,
+                metadata: BTreeMap::new(),
+                source_fingerprint_json: None,
             },
             Arc::new(|_| {}),
             Arc::new(|_text: String| {}),
@@ -1050,5 +1091,73 @@ async fn run_file_transcription_falls_back_to_secondary_ai_provider() {
             .lock()
             .expect("second summarize lock poisoned"),
         1
+    );
+}
+
+#[tokio::test]
+async fn run_file_transcription_preserves_auto_import_metadata_and_fingerprint() {
+    let temp = tempdir().expect("failed to create temp dir");
+    let input_path = temp.path().join("memo.wav");
+    tokio::fs::write(&input_path, b"fake wav content")
+        .await
+        .expect("failed to create wav file");
+
+    let service = TranscriptionService::new(
+        Arc::new(MockTranscoder::default()),
+        Arc::new(MockSpeechEngine {
+            transcript: "memo raw".to_string(),
+            segments: Vec::new(),
+        }),
+        Arc::new(MockEnhancer::default()),
+        Arc::new(InMemoryArtifactRepository::default()),
+    );
+
+    let mut metadata = BTreeMap::new();
+    metadata.insert("workspace_id".to_string(), "work".to_string());
+    metadata.insert("auto_import_preset".to_string(), "voice_memo".to_string());
+    metadata.insert(
+        "auto_import_source_path".to_string(),
+        input_path.to_string_lossy().to_string(),
+    );
+
+    let artifact = service
+        .run_file_transcription(
+            RunTranscriptionRequest {
+                job_id: "job-007".to_string(),
+                input_path: input_path.to_string_lossy().to_string(),
+                language: LanguageCode::En,
+                model: SpeechModel::Base,
+                engine: TranscriptionEngine::WhisperCpp,
+                enable_ai: false,
+                source_origin: ArtifactSourceOrigin::Imported,
+                whisper_options: WhisperOptions::default(),
+                title: Some("Memo".to_string()),
+                parent_id: None,
+                metadata,
+                source_fingerprint_json: Some(
+                    "{\"path\":\"/tmp/memo.wav\",\"dedupe_key\":\"123\"}".to_string(),
+                ),
+            },
+            Arc::new(|_| {}),
+            Arc::new(|_text: String| {}),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("transcription should succeed");
+
+    assert_eq!(
+        artifact.metadata.get("workspace_id").map(String::as_str),
+        Some("work")
+    );
+    assert_eq!(
+        artifact
+            .metadata
+            .get("auto_import_preset")
+            .map(String::as_str),
+        Some("voice_memo")
+    );
+    assert_eq!(
+        artifact.source_fingerprint_json.as_deref(),
+        Some("{\"path\":\"/tmp/memo.wav\",\"dedupe_key\":\"123\"}")
     );
 }

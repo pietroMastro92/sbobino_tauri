@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use sbobino_domain::{
-    AiProvider, AiSettings, AppSettings, GeneralSettings, PromptSettings, PromptTask,
-    PromptTemplate, TranscriptionSettings,
+    AiProvider, AiSettings, AppSettings, AutomaticImportSettings, GeneralSettings,
+    OrganizationSettings, PromptSettings, PromptTask, PromptTemplate, TranscriptionSettings,
 };
 
 use crate::{ApplicationError, SettingsRepository};
@@ -35,6 +35,8 @@ impl SettingsService {
         &self,
         general: Option<GeneralSettings>,
         transcription: Option<TranscriptionSettings>,
+        automation: Option<AutomaticImportSettings>,
+        organization: Option<OrganizationSettings>,
         ai: Option<AiSettings>,
         prompts: Option<PromptSettings>,
     ) -> Result<AppSettings, ApplicationError> {
@@ -44,6 +46,12 @@ impl SettingsService {
         }
         if let Some(value) = transcription {
             settings.transcription = value;
+        }
+        if let Some(value) = automation {
+            settings.automation = value;
+        }
+        if let Some(value) = organization {
+            settings.organization = value;
         }
         if let Some(value) = ai {
             settings.ai = value;

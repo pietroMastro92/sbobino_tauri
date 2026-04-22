@@ -88,11 +88,23 @@ impl FsSettingsRepository {
             .get("transcription")
             .is_some_and(|value| value.is_object());
         let has_ai = raw_json.get("ai").is_some_and(|value| value.is_object());
+        let has_automation = raw_json
+            .get("automation")
+            .is_some_and(|value| value.is_object());
+        let has_organization = raw_json
+            .get("organization")
+            .is_some_and(|value| value.is_object());
         let has_prompts = raw_json
             .get("prompts")
             .is_some_and(|value| value.is_object());
 
-        if has_general && has_transcription && has_ai && has_prompts {
+        if has_general
+            && has_transcription
+            && has_automation
+            && has_organization
+            && has_ai
+            && has_prompts
+        {
             settings.sync_legacy_from_sections();
         } else {
             settings.sync_sections_from_legacy();
@@ -206,6 +218,8 @@ fn should_treat_legacy_fields_as_source(settings: &AppSettings) -> bool {
             "auto_update_repo": &settings.general.auto_update_repo,
         },
         "transcription": &settings.transcription,
+        "automation": &settings.automation,
+        "organization": &settings.organization,
         "ai": &settings.ai,
         "prompts": &settings.prompts,
     }) == json!({
@@ -214,6 +228,8 @@ fn should_treat_legacy_fields_as_source(settings: &AppSettings) -> bool {
             "auto_update_repo": &defaults.general.auto_update_repo,
         },
         "transcription": &defaults.transcription,
+        "automation": &defaults.automation,
+        "organization": &defaults.organization,
         "ai": &defaults.ai,
         "prompts": &defaults.prompts,
     });

@@ -115,7 +115,7 @@ async fn update_partial_persists_ai_remote_services() {
     ];
 
     let updated = service
-        .update_partial(None, None, Some(ai), None)
+        .update_partial(None, None, None, None, Some(ai), None)
         .await
         .expect("update_partial should succeed");
 
@@ -173,7 +173,7 @@ async fn update_partial_accepts_all_remote_service_kinds() {
     };
 
     let updated = service
-        .update_partial(None, None, Some(ai), None)
+        .update_partial(None, None, None, None, Some(ai), None)
         .await
         .expect("all remote service kinds should persist");
 
