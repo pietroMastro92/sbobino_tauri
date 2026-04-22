@@ -53,8 +53,18 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Install macOS runtime packaging dependencies
-        run: brew install whisper-cpp ffmpeg sdl2
+      - name: Check macOS runtime packaging prerequisites
+        run: |
+          missing=0
+          for binary in cmake python3 xcrun clang make tar; do
+            if ! command -v "$binary" >/dev/null 2>&1; then
+              echo "Missing required packaging tool: $binary" >&2
+              missing=1
+            fi
+          done
+          if [[ "$missing" -ne 0 ]]; then
+            exit 1
+          fi
 
       - name: Prepare pyannote setup assets
         run: ../../scripts/setup_bundled_pyannote.sh --force
