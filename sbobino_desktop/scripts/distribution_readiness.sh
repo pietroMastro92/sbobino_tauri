@@ -47,7 +47,11 @@ import zipfile
 archive = pathlib.Path(sys.argv[1])
 destination = pathlib.Path(sys.argv[2])
 with zipfile.ZipFile(archive) as zf:
-    zf.extractall(destination)
+    for member in zf.infolist():
+        extracted = pathlib.Path(zf.extract(member, destination))
+        mode = member.external_attr >> 16
+        if mode:
+            extracted.chmod(mode)
 PY
 }
 
@@ -255,16 +259,20 @@ if pyannote_model.get("expanded_size_bytes") != pyannote_model_descriptor.get("e
 print(f"Distribution readiness passed for {tag} from {base_url}")
 PY
 
-PYANNOTE_SMOKE_DIR="$TEMP_DIR/pyannote-smoke"
-mkdir -p "$PYANNOTE_SMOKE_DIR"
-extract_zip "$TEMP_DIR/pyannote-runtime-macos-aarch64.zip" "$PYANNOTE_SMOKE_DIR"
+if [[ "${SBOBINO_DISTRIBUTION_SKIP_RUNTIME_SMOKE:-0}" == "1" || "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
+  echo "Skipping pyannote runtime smoke on host $(uname -s)/$(uname -m)."
+else
+  PYANNOTE_SMOKE_DIR="$TEMP_DIR/pyannote-smoke"
+  mkdir -p "$PYANNOTE_SMOKE_DIR"
+  extract_zip "$TEMP_DIR/pyannote-runtime-macos-aarch64.zip" "$PYANNOTE_SMOKE_DIR"
+  chmod 755 "$PYANNOTE_SMOKE_DIR/python/bin/python3"
 
-PATH="/usr/bin:/bin" \
-PYANNOTE_RUNTIME_ROOT="$PYANNOTE_SMOKE_DIR/python" \
-PYTHONHOME="$PYANNOTE_SMOKE_DIR/python" \
-PYTHONPATH="$PYANNOTE_SMOKE_DIR/python/lib/python3.11:$PYANNOTE_SMOKE_DIR/python/lib/python3.11/lib-dynload:$PYANNOTE_SMOKE_DIR/python/lib/python3.11/site-packages" \
-PYTHONNOUSERSITE="1" \
-"$PYANNOTE_SMOKE_DIR/python/bin/python3" - <<'PY'
+  PATH="/usr/bin:/bin" \
+  PYANNOTE_RUNTIME_ROOT="$PYANNOTE_SMOKE_DIR/python" \
+  PYTHONHOME="$PYANNOTE_SMOKE_DIR/python" \
+  PYTHONPATH="$PYANNOTE_SMOKE_DIR/python/lib/python3.11:$PYANNOTE_SMOKE_DIR/python/lib/python3.11/lib-dynload:$PYANNOTE_SMOKE_DIR/python/lib/python3.11/site-packages" \
+  PYTHONNOUSERSITE="1" \
+  "$PYANNOTE_SMOKE_DIR/python/bin/python3" - <<'PY'
 import os
 import pathlib
 import subprocess
@@ -409,5 +417,6 @@ import torch
 from pyannote.audio import Pipeline
 print("Remote pyannote runtime smoke test passed")
 PY
+fi
 
 echo "Distribution readiness checks passed for $TAG"

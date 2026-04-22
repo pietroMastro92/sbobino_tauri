@@ -556,23 +556,58 @@ ensure_fixture_audio() {
   afconvert -f WAVE -d LEI16@16000 -c 1 "$part1_aiff" "$part1_wav"
   afconvert -f WAVE -d LEI16@16000 -c 1 "$part2_aiff" "$part2_wav"
 
-  python3 - <<'PY' "$part1_wav" "$part2_wav" "$output_wav"
-import wave
+  if ! python3 - <<'PY' "$part1_wav" "$part2_wav" "$output_wav"
+import audioop
 import sys
+import wave
 
 first, second, output = sys.argv[1:4]
+TARGET_RATE = 16000
+TARGET_CHANNELS = 1
+TARGET_WIDTH = 2
+
+
+def normalize_frames(source: wave.Wave_read) -> bytes:
+    channels = source.getnchannels()
+    width = source.getsampwidth()
+    rate = source.getframerate()
+    frames = source.readframes(source.getnframes())
+
+    if width != TARGET_WIDTH:
+        frames = audioop.lin2lin(frames, width, TARGET_WIDTH)
+        width = TARGET_WIDTH
+
+    if channels != TARGET_CHANNELS:
+        if channels == 2 and TARGET_CHANNELS == 1:
+            frames = audioop.tomono(frames, width, 0.5, 0.5)
+        elif channels == 1 and TARGET_CHANNELS == 2:
+            frames = audioop.tostereo(frames, width, 1.0, 1.0)
+        else:
+            raise SystemExit(f"Unsupported channel conversion: {channels} -> {TARGET_CHANNELS}")
+        channels = TARGET_CHANNELS
+
+    if rate != TARGET_RATE:
+        frames, _ = audioop.ratecv(frames, width, channels, rate, TARGET_RATE, None)
+        rate = TARGET_RATE
+
+    if (channels, width, rate) != (TARGET_CHANNELS, TARGET_WIDTH, TARGET_RATE):
+        raise SystemExit("Generated fixture clip normalization failed.")
+
+    return frames
+
 
 with wave.open(first, "rb") as source_a, wave.open(second, "rb") as source_b:
-    params_a = source_a.getparams()
-    params_b = source_b.getparams()
-    if params_a[:4] != params_b[:4]:
-        raise SystemExit("Generated fixture clips do not share the same WAV parameters.")
-    frames = source_a.readframes(source_a.getnframes()) + source_b.readframes(source_b.getnframes())
+    frames = normalize_frames(source_a) + normalize_frames(source_b)
 
 with wave.open(output, "wb") as destination:
-    destination.setparams(params_a)
+    destination.setnchannels(TARGET_CHANNELS)
+    destination.setsampwidth(TARGET_WIDTH)
+    destination.setframerate(TARGET_RATE)
     destination.writeframes(frames)
 PY
+  then
+    fail_validation "Failed to build a normalized two-speaker WAV fixture for pyannote validation."
+  fi
 
   FIXTURE_AUDIO="$output_wav"
 }
