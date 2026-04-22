@@ -101,6 +101,7 @@ write_report() {
     "$SCENARIO_BOOTSTRAP_LAYER_VALIDATION" \
     "$SCENARIO_ARM64_BINARY_EXECUTION"
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -557,52 +558,39 @@ ensure_fixture_audio() {
   afconvert -f WAVE -d LEI16@16000 -c 1 "$part2_aiff" "$part2_wav"
 
   if ! python3 - <<'PY' "$part1_wav" "$part2_wav" "$output_wav"
-import audioop
 import sys
 import wave
 
 first, second, output = sys.argv[1:4]
-TARGET_RATE = 16000
-TARGET_CHANNELS = 1
-TARGET_WIDTH = 2
-
-
-def normalize_frames(source: wave.Wave_read) -> bytes:
-    channels = source.getnchannels()
-    width = source.getsampwidth()
-    rate = source.getframerate()
-    frames = source.readframes(source.getnframes())
-
-    if width != TARGET_WIDTH:
-        frames = audioop.lin2lin(frames, width, TARGET_WIDTH)
-        width = TARGET_WIDTH
-
-    if channels != TARGET_CHANNELS:
-        if channels == 2 and TARGET_CHANNELS == 1:
-            frames = audioop.tomono(frames, width, 0.5, 0.5)
-        elif channels == 1 and TARGET_CHANNELS == 2:
-            frames = audioop.tostereo(frames, width, 1.0, 1.0)
-        else:
-            raise SystemExit(f"Unsupported channel conversion: {channels} -> {TARGET_CHANNELS}")
-        channels = TARGET_CHANNELS
-
-    if rate != TARGET_RATE:
-        frames, _ = audioop.ratecv(frames, width, channels, rate, TARGET_RATE, None)
-        rate = TARGET_RATE
-
-    if (channels, width, rate) != (TARGET_CHANNELS, TARGET_WIDTH, TARGET_RATE):
-        raise SystemExit("Generated fixture clip normalization failed.")
-
-    return frames
-
 
 with wave.open(first, "rb") as source_a, wave.open(second, "rb") as source_b:
-    frames = normalize_frames(source_a) + normalize_frames(source_b)
+    format_a = (
+        source_a.getnchannels(),
+        source_a.getsampwidth(),
+        source_a.getframerate(),
+        source_a.getcomptype(),
+        source_a.getcompname(),
+    )
+    format_b = (
+        source_b.getnchannels(),
+        source_b.getsampwidth(),
+        source_b.getframerate(),
+        source_b.getcomptype(),
+        source_b.getcompname(),
+    )
+    if format_a != format_b:
+        raise SystemExit(
+            "Generated fixture clips do not share the same WAV format: "
+            f"{format_a!r} != {format_b!r}"
+        )
+
+    frames = source_a.readframes(source_a.getnframes()) + source_b.readframes(source_b.getnframes())
 
 with wave.open(output, "wb") as destination:
-    destination.setnchannels(TARGET_CHANNELS)
-    destination.setsampwidth(TARGET_WIDTH)
-    destination.setframerate(TARGET_RATE)
+    destination.setnchannels(format_a[0])
+    destination.setsampwidth(format_a[1])
+    destination.setframerate(format_a[2])
+    destination.setcomptype(format_a[3], format_a[4])
     destination.writeframes(frames)
 PY
   then
