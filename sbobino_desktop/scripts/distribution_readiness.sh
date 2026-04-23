@@ -12,6 +12,7 @@ TAG="v$VERSION"
 BASE_URL="https://github.com/$REPO_SLUG/releases/download/$TAG"
 TEMP_DIR=$(mktemp -d)
 CACHE_BUSTER=$(date +%s)
+GITHUB_API_TOKEN=${GH_TOKEN:-${GITHUB_TOKEN:-}}
 
 cleanup() {
   rm -rf "$TEMP_DIR"
@@ -57,13 +58,16 @@ PY
 
 RELEASE_API_URL="https://api.github.com/repos/$REPO_SLUG/releases/tags/$TAG"
 
-python3 - "$RELEASE_API_URL" <<'PY'
+python3 - "$RELEASE_API_URL" "${GITHUB_API_TOKEN:-}" <<'PY'
 import json
 import sys
 import urllib.request
 
-url = sys.argv[1]
-request = urllib.request.Request(url, headers={"User-Agent": "sbobino-distribution-readiness"})
+url, api_token = sys.argv[1:3]
+headers = {"User-Agent": "sbobino-distribution-readiness"}
+if api_token.strip():
+    headers["Authorization"] = f"Bearer {api_token.strip()}"
+request = urllib.request.Request(url, headers=headers)
 with urllib.request.urlopen(request) as response:
     release = json.load(response)
 if release.get("draft", False):
@@ -87,6 +91,10 @@ download_asset() {
   local asset_name=$1
   local destination="$TEMP_DIR/$asset_name"
   local url="$BASE_URL/$asset_name?nocache=$CACHE_BUSTER"
+  local curl_args=()
+  if [[ -n "${GITHUB_API_TOKEN// }" ]]; then
+    curl_args+=(-H "Authorization: Bearer $GITHUB_API_TOKEN")
+  fi
 
   mkdir -p "$(dirname "$destination")"
   curl \
@@ -97,6 +105,7 @@ download_asset() {
     --silent \
     --show-error \
     --user-agent "sbobino-distribution-readiness" \
+    "${curl_args[@]}" \
     --output "$destination" \
     "$url"
 }

@@ -351,6 +351,7 @@ jobs:
     env:
       TAG_NAME: ${{ inputs.tag_name }}
       SBOBINO_VALIDATION_FIXTURE_AUDIO: ${{ vars.SBOBINO_VALIDATION_FIXTURE_AUDIO }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -384,6 +385,7 @@ jobs:
     env:
       TAG_NAME: ${{ inputs.tag_name }}
       SBOBINO_VALIDATION_RUNNER_LABEL: github-hosted,macos-14
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -417,6 +419,7 @@ jobs:
     env:
       TAG_NAME: ${{ inputs.tag_name }}
       SBOBINO_VALIDATION_RUNNER_LABEL: github-hosted,macos-15-intel
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

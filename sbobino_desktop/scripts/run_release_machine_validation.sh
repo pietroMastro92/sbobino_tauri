@@ -44,6 +44,7 @@ DATA_DIR=${SBOBINO_VALIDATION_DATA_DIR:-"$HOME/Library/Application Support/com.s
 APP_PATH=${SBOBINO_VALIDATION_APP_PATH:-"/Applications/Sbobino.app"}
 FIXTURE_AUDIO=${SBOBINO_VALIDATION_FIXTURE_AUDIO:-}
 LEGACY_UPGRADE_BASELINE_VERSION=${SBOBINO_VALIDATION_LEGACY_UPGRADE_BASELINE_VERSION:-0.1.16}
+LEGACY_UPGRADE_BASELINE_REVISION=${SBOBINO_VALIDATION_LEGACY_UPGRADE_BASELINE_REVISION:-}
 LEGACY_UPGRADE_BASELINE_DMG=${SBOBINO_VALIDATION_LEGACY_UPGRADE_BASELINE_DMG:-}
 NATIVE_UPDATE_TIMEOUT_SECONDS=${SBOBINO_VALIDATION_NATIVE_UPDATE_TIMEOUT_SECONDS:-1800}
 TIMEOUT_SECONDS=${SBOBINO_VALIDATION_TIMEOUT_SECONDS:-2400}
@@ -60,6 +61,7 @@ OS_VERSION="$(sw_vers -productVersion) ($(uname -m))"
 TESTER=${GITHUB_ACTOR:-$(whoami)}
 RUNNER_LABEL_OVERRIDE=${SBOBINO_VALIDATION_RUNNER_LABEL:-}
 REPO_ROOT=$(cd "$ROOT_DIR/.." && pwd)
+GITHUB_API_TOKEN=${GH_TOKEN:-${GITHUB_TOKEN:-}}
 
 FINAL_STATUS="failed"
 REPORT_NOTES=""
@@ -236,6 +238,10 @@ download_asset() {
   local asset_name=$2
   local destination=$3
   local url="https://github.com/$REPO_SLUG/releases/download/v${version_arg}/${asset_name}"
+  local curl_args=()
+  if [[ -n "${GITHUB_API_TOKEN// }" ]]; then
+    curl_args+=(-H "Authorization: Bearer $GITHUB_API_TOKEN")
+  fi
   curl \
     --fail \
     --location \
@@ -243,6 +249,7 @@ download_asset() {
     --retry-delay 2 \
     --silent \
     --show-error \
+    "${curl_args[@]}" \
     --output "$destination" \
     "$url"
 }
@@ -252,6 +259,10 @@ try_download_asset() {
   local asset_name=$2
   local destination=$3
   local url="https://github.com/$REPO_SLUG/releases/download/v${version_arg}/${asset_name}"
+  local curl_args=()
+  if [[ -n "${GITHUB_API_TOKEN// }" ]]; then
+    curl_args+=(-H "Authorization: Bearer $GITHUB_API_TOKEN")
+  fi
   curl \
     --fail \
     --location \
@@ -259,8 +270,34 @@ try_download_asset() {
     --retry-delay 1 \
     --silent \
     --show-error \
+    "${curl_args[@]}" \
     --output "$destination" \
     "$url" >/dev/null 2>&1
+}
+
+resolve_legacy_upgrade_baseline_git_ref() {
+  local baseline_tag="v${LEGACY_UPGRADE_BASELINE_VERSION}"
+  if git -C "$REPO_ROOT" rev-parse "$baseline_tag" >/dev/null 2>&1; then
+    echo "$baseline_tag"
+    return 0
+  fi
+
+  local baseline_revision="${LEGACY_UPGRADE_BASELINE_REVISION:-}"
+  if [[ -z "${baseline_revision// }" && "$LEGACY_UPGRADE_BASELINE_VERSION" == "0.1.16" ]]; then
+    baseline_revision="c8a0992576055ec8c99fce8cfb383845c60be0da"
+  fi
+
+  if [[ -z "${baseline_revision// }" ]]; then
+    return 1
+  fi
+
+  git -C "$REPO_ROOT" fetch --no-tags origin "$baseline_revision" >/dev/null 2>&1 || true
+  if git -C "$REPO_ROOT" rev-parse "$baseline_revision" >/dev/null 2>&1; then
+    echo "$baseline_revision"
+    return 0
+  fi
+
+  return 1
 }
 
 read_bundle_executable() {
@@ -453,16 +490,16 @@ prepare_legacy_upgrade_baseline_dmg() {
     return 0
   fi
 
-  local baseline_tag="v${LEGACY_UPGRADE_BASELINE_VERSION}"
+  local baseline_ref
   local worktree_dir="$TMP_DIR/legacy-upgrade-baseline"
   local release_dir="$worktree_dir/sbobino_desktop"
   local candidate_feed_url="https://github.com/$REPO_SLUG/releases/download/$TAG/latest.json"
 
-  if ! git -C "$REPO_ROOT" rev-parse "$baseline_tag" >/dev/null 2>&1; then
-    fail_validation "Legacy baseline tag '$baseline_tag' is not available locally and no public DMG was found."
+  if ! baseline_ref=$(resolve_legacy_upgrade_baseline_git_ref); then
+    fail_validation "Legacy baseline v${LEGACY_UPGRADE_BASELINE_VERSION} is unavailable: no public DMG, no local tag, and no fallback git revision were found."
   fi
 
-  git -C "$REPO_ROOT" worktree add --detach "$worktree_dir" "$baseline_tag" >/dev/null
+  git -C "$REPO_ROOT" worktree add --detach "$worktree_dir" "$baseline_ref" >/dev/null
   python3 - <<'PY' "$release_dir/apps/desktop/src-tauri/tauri.conf.json" "$candidate_feed_url"
 import json
 import sys
@@ -480,7 +517,7 @@ PY
     ./scripts/prepare_local_release.sh "$LEGACY_UPGRADE_BASELINE_VERSION"
   ); then
     git -C "$REPO_ROOT" worktree remove --force "$worktree_dir" >/dev/null 2>&1 || true
-    fail_validation "Failed to build the validation baseline app from $baseline_tag."
+    fail_validation "Failed to build the validation baseline app from git ref '$baseline_ref'."
   fi
 
   local built_dmg="$release_dir/dist/local-release/v${LEGACY_UPGRADE_BASELINE_VERSION}/Sbobino_${LEGACY_UPGRADE_BASELINE_VERSION}_aarch64.dmg"
@@ -885,14 +922,17 @@ PY
 }
 
 find_previous_stable_version() {
-  python3 - <<'PY' "$REPO_SLUG" "$TAG"
+  python3 - <<'PY' "$REPO_SLUG" "$TAG" "${GITHUB_API_TOKEN:-}"
 import json
 import sys
 import urllib.request
 
-repo_slug, current_tag = sys.argv[1:3]
+repo_slug, current_tag, api_token = sys.argv[1:4]
 url = f"https://api.github.com/repos/{repo_slug}/releases"
-request = urllib.request.Request(url, headers={"User-Agent": "sbobino-machine-validation"})
+headers = {"User-Agent": "sbobino-machine-validation"}
+if api_token.strip():
+    headers["Authorization"] = f"Bearer {api_token.strip()}"
+request = urllib.request.Request(url, headers=headers)
 with urllib.request.urlopen(request) as response:
     releases = json.load(response)
 
@@ -915,7 +955,9 @@ validate_intel_primary() {
     fail_validation "INTEL-PRIMARY validation must run on an x86_64 Mac."
   fi
 
-  "$ROOT_DIR/scripts/distribution_readiness.sh" "$VERSION" "$REPO_SLUG"
+  if ! "$ROOT_DIR/scripts/distribution_readiness.sh" "$VERSION" "$REPO_SLUG"; then
+    fail_validation "Intel runner failed distribution readiness for v${VERSION}."
+  fi
   SCENARIO_RELEASE_METADATA_VALIDATION="passed"
 
   local dmg_path="$TMP_DIR/Sbobino_${VERSION}_aarch64.dmg"
