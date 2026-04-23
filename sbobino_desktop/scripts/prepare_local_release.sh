@@ -21,6 +21,7 @@ Optional environment variables:
   TAURI_SIGNING_PRIVATE_KEY             If present, signs Sbobino.app.tar.gz for updater use.
   TAURI_SIGNING_PRIVATE_KEY_PATH        If present, signs Sbobino.app.tar.gz from a private key file.
   TAURI_SIGNING_PRIVATE_KEY_PASSWORD    Password for the Tauri updater private key.
+  LOCAL_RELEASES_TO_KEEP                Local dist/local-release versions kept after prepare. Default: 2.
 EOF
 }
 
@@ -61,6 +62,7 @@ RELEASE_NOTES_SHORT=${SBOBINO_RELEASE_NOTES_SHORT:-$DEFAULT_RELEASE_NOTES_SHORT}
 RELEASE_IMPROVEMENTS_MD=${SBOBINO_RELEASE_IMPROVEMENTS_MD:-$DEFAULT_RELEASE_IMPROVEMENTS_MD}
 RELEASE_FIXES_MD=${SBOBINO_RELEASE_FIXES_MD:-$DEFAULT_RELEASE_FIXES_MD}
 RELEASE_SETUP_MD=${SBOBINO_RELEASE_SETUP_MD:-$DEFAULT_RELEASE_SETUP_MD}
+LOCAL_RELEASES_TO_KEEP=${LOCAL_RELEASES_TO_KEEP:-2}
 
 cleanup() {
   if [[ -f "$TAURI_CONF_BACKUP" ]]; then
@@ -387,10 +389,11 @@ Nothing in this folder has been published automatically.
 
 ## Recommended flow
 
-1. Create or reuse the Git tag locally: \`git tag -a v$VERSION -m "Sbobino v$VERSION"\`
-2. Push only when you are ready: \`git push origin v$VERSION\`
-3. Publish the GitHub release as a prerelease candidate first. Stable promotion is blocked until Apple Silicon validation reports are uploaded with \`status=passed\`.
-4. Upload these files from \`$OUTPUT_DIR\`:
+1. Run the local Apple Silicon gate first: \`./scripts/verify_local_apple_silicon_release.sh "$VERSION"\`
+2. Create or reuse the Git tag locally: \`git tag -a v$VERSION -m "Sbobino v$VERSION"\`
+3. Push only when you are ready: \`git push origin v$VERSION\`
+4. Publish the GitHub release as a prerelease candidate first. Stable promotion is blocked until Apple Silicon validation reports are uploaded with \`status=passed\`.
+5. Upload these files from \`$OUTPUT_DIR\`:
    - \`Sbobino_${VERSION}_aarch64.dmg\`
    - \`Sbobino.app.tar.gz\`
    - \`Sbobino.app.tar.gz.sig\` (if present)
@@ -404,25 +407,22 @@ Nothing in this folder has been published automatically.
    - \`release-readiness-proof.json\`
    - \`AS-PRIMARY.validation-report.json\`
    - \`AS-THIRD.validation-report.json\`
-   - \`INTEL-PRIMARY.validation-report.json\`
    - \`release-notes.md\` (use this exact file as the GitHub release body)
-5. Run \`./scripts/distribution_readiness.sh "$VERSION"\` from \`sbobino_desktop/\`.
-6. Generate \`distribution-readiness-proof.json\` after the remote integrity gate passes.
-7. Validate that exact GitHub release against \`docs/distribution-validation-plan.md\` on:
+6. Run \`./scripts/distribution_readiness.sh "$VERSION"\` from \`sbobino_desktop/\`.
+7. Generate \`distribution-readiness-proof.json\` after the remote integrity gate passes.
+8. Validate that exact GitHub release against \`docs/distribution-validation-plan.md\` on:
    - \`AS-PRIMARY\`
    - \`AS-THIRD\`
-   - \`INTEL-PRIMARY\`
-8. Update all machine validation report JSON files with:
+9. Update all machine validation report JSON files with:
    - the GitHub release URL
    - tester name
    - OS name/version
    - \`tested_at_utc\`
    - per-scenario results
    - top-level \`status\` set to \`passed\` only when every mandatory scenario passed
-   - use \`soft_pass\` only for \`INTEL-PRIMARY\` when the arm64 binary is intentionally marked \`not_applicable\`
-9. Re-upload \`distribution-readiness-proof.json\` plus all three machine validation JSON files to the same GitHub prerelease with \`gh release upload --clobber\`.
-10. Promote to stable only with \`./scripts/promote_candidate_release.sh "$VERSION"\`.
-11. If validation fails, retire the prerelease and cut a new patch version. Do not overwrite a stable release in place.
+10. Re-upload \`distribution-readiness-proof.json\` plus both Apple Silicon validation JSON files to the same GitHub prerelease with \`gh release upload --clobber\`.
+11. Promote to stable only with \`./scripts/promote_candidate_release.sh "$VERSION"\`.
+12. If validation fails, retire the prerelease and cut a new patch version. Do not overwrite a stable release in place.
 
 ## gh CLI example
 
@@ -439,7 +439,6 @@ gh release upload "v$VERSION" \
   "$OUTPUT_DIR/distribution-readiness-proof.json" \
   "$OUTPUT_DIR/AS-PRIMARY.validation-report.json" \
   "$OUTPUT_DIR/AS-THIRD.validation-report.json" \
-  "$OUTPUT_DIR/INTEL-PRIMARY.validation-report.json" \
   --clobber
 
 ./scripts/promote_candidate_release.sh "$VERSION"
@@ -535,6 +534,11 @@ content = content.replace("___VERSION___", version)
 path.write_text(content)
 PY
 
+"$ROOT_DIR/scripts/prune_local_releases.sh" \
+  "$(dirname "$OUTPUT_DIR")" \
+  "$LOCAL_RELEASES_TO_KEEP" \
+  "v$VERSION"
+
 cat <<EOF
 Local release prepared successfully in:
   $OUTPUT_DIR
@@ -551,7 +555,6 @@ Artifacts:
   - release-readiness-proof.json
   - AS-PRIMARY.validation-report.json
   - AS-THIRD.validation-report.json
-  - INTEL-PRIMARY.validation-report.json
 EOF
 
 if [[ -f "$OUTPUT_DIR/Sbobino.app.tar.gz.sig" ]]; then
@@ -561,3 +564,5 @@ fi
 if (( LATEST_JSON_CREATED == 1 )); then
   echo "  - latest.json"
 fi
+
+echo "  - run ./scripts/verify_local_apple_silicon_release.sh $VERSION before dispatching GitHub candidate validation"

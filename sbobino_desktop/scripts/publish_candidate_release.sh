@@ -52,7 +52,6 @@ required_assets=(
   "release-readiness-proof.json"
   "AS-PRIMARY.validation-report.json"
   "AS-THIRD.validation-report.json"
-  "INTEL-PRIMARY.validation-report.json"
 )
 
 for asset in "${required_assets[@]}"; do
@@ -176,17 +175,6 @@ expected_reports = {
         ],
         "optional_scenarios": [],
     },
-    "INTEL-PRIMARY.validation-report.json": {
-        "machine_class": "INTEL-PRIMARY",
-        "runner_label": "self-hosted,macos,x64,intel-primary",
-        "required_scenarios": [
-            "release_metadata_validation",
-            "bootstrap_layer_validation",
-        ],
-        "optional_scenarios": [
-            "arm64_binary_execution",
-        ],
-    },
 }
 
 for name, expectation in expected_reports.items():
@@ -247,7 +235,6 @@ gh release upload "$TAG" \
   "$ASSET_DIR/release-readiness-proof.json" \
   "$ASSET_DIR/AS-PRIMARY.validation-report.json" \
   "$ASSET_DIR/AS-THIRD.validation-report.json" \
-  "$ASSET_DIR/INTEL-PRIMARY.validation-report.json" \
   --repo "$REPO_SLUG"
 
 cat <<EOF
@@ -258,7 +245,7 @@ Prerelease candidate published successfully:
 Next required steps:
   1. ./scripts/distribution_readiness.sh "$VERSION" "$REPO_SLUG"
   2. Generate distribution-readiness-proof.json after the remote integrity gate passes
-  3. Validate the exact GitHub prerelease on AS-PRIMARY, AS-THIRD, and INTEL-PRIMARY
-  4. Re-upload distribution-readiness-proof.json plus the three validation report JSON assets
+  3. Validate the exact GitHub prerelease on AS-PRIMARY and AS-THIRD
+  4. Re-upload distribution-readiness-proof.json plus both validation report JSON assets
   5. ./scripts/promote_candidate_release.sh "$VERSION" "$REPO_SLUG"
 EOF

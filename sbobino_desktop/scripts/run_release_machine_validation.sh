@@ -15,6 +15,13 @@ Environment variables:
   SBOBINO_VALIDATION_DATA_DIR        Override app data dir
   SBOBINO_VALIDATION_APP_PATH        Override installed app path
   SBOBINO_VALIDATION_FIXTURE_AUDIO   Audio fixture used for diarization smoke on Apple Silicon
+  SBOBINO_VALIDATION_LOCAL_RELEASE_DIR
+                                    Optional local candidate asset directory for
+                                    prepublish Apple Silicon validation.
+  SBOBINO_VALIDATION_ASSET_BASE_URL  Override candidate asset base URL used by
+                                    runtime/model downloads.
+  SBOBINO_VALIDATION_FEED_URL        Override updater latest.json URL used by
+                                    the legacy baseline during native upgrade tests.
   SBOBINO_VALIDATION_LEGACY_UPGRADE_BASELINE_VERSION
                                     Baseline app version used for native in-app
                                     update validation on AS-PRIMARY
@@ -50,8 +57,9 @@ NATIVE_UPDATE_TIMEOUT_SECONDS=${SBOBINO_VALIDATION_NATIVE_UPDATE_TIMEOUT_SECONDS
 TIMEOUT_SECONDS=${SBOBINO_VALIDATION_TIMEOUT_SECONDS:-2400}
 PRIVACY_POLICY_VERSION=${SBOBINO_VALIDATION_PRIVACY_VERSION:-2026-04-03}
 TAG="v$VERSION"
-RELEASE_URL="https://github.com/$REPO_SLUG/releases/tag/$TAG"
-BASE_DOWNLOAD_URL="https://github.com/$REPO_SLUG/releases/download/$TAG"
+LOCAL_RELEASE_DIR=${SBOBINO_VALIDATION_LOCAL_RELEASE_DIR:-}
+RELEASE_URL=${SBOBINO_VALIDATION_RELEASE_URL:-"https://github.com/$REPO_SLUG/releases/tag/$TAG"}
+BASE_DOWNLOAD_URL=${SBOBINO_VALIDATION_ASSET_BASE_URL:-"https://github.com/$REPO_SLUG/releases/download/$TAG"}
 SETUP_REPORT_PATH="$DATA_DIR/setup-report.json"
 SETTINGS_PATH="$DATA_DIR/settings.json"
 TMP_DIR=$(mktemp -d)
@@ -251,7 +259,14 @@ download_asset() {
   local version_arg=$1
   local asset_name=$2
   local destination=$3
-  local url="https://github.com/$REPO_SLUG/releases/download/v${version_arg}/${asset_name}"
+  if [[ -n "${LOCAL_RELEASE_DIR// }" && "$version_arg" == "$VERSION" && -f "$LOCAL_RELEASE_DIR/$asset_name" ]]; then
+    cp "$LOCAL_RELEASE_DIR/$asset_name" "$destination"
+    return 0
+  fi
+  local url="${BASE_DOWNLOAD_URL%/}/${asset_name}"
+  if [[ "$version_arg" != "$VERSION" ]]; then
+    url="https://github.com/$REPO_SLUG/releases/download/v${version_arg}/${asset_name}"
+  fi
   local curl_args=()
   if [[ -n "${GITHUB_API_TOKEN// }" ]]; then
     curl_args+=(-H "Authorization: Bearer $GITHUB_API_TOKEN")
@@ -272,7 +287,14 @@ try_download_asset() {
   local version_arg=$1
   local asset_name=$2
   local destination=$3
-  local url="https://github.com/$REPO_SLUG/releases/download/v${version_arg}/${asset_name}"
+  if [[ -n "${LOCAL_RELEASE_DIR// }" && "$version_arg" == "$VERSION" && -f "$LOCAL_RELEASE_DIR/$asset_name" ]]; then
+    cp "$LOCAL_RELEASE_DIR/$asset_name" "$destination"
+    return 0
+  fi
+  local url="${BASE_DOWNLOAD_URL%/}/${asset_name}"
+  if [[ "$version_arg" != "$VERSION" ]]; then
+    url="https://github.com/$REPO_SLUG/releases/download/v${version_arg}/${asset_name}"
+  fi
   local curl_args=()
   if [[ -n "${GITHUB_API_TOKEN// }" ]]; then
     curl_args+=(-H "Authorization: Bearer $GITHUB_API_TOKEN")
@@ -507,7 +529,7 @@ prepare_legacy_upgrade_baseline_dmg() {
   local baseline_ref
   local worktree_dir="$TMP_DIR/legacy-upgrade-baseline"
   local release_dir="$worktree_dir/sbobino_desktop"
-  local candidate_feed_url="https://github.com/$REPO_SLUG/releases/download/$TAG/latest.json"
+  local candidate_feed_url="${SBOBINO_VALIDATION_FEED_URL:-https://github.com/$REPO_SLUG/releases/download/$TAG/latest.json}"
   local baseline_app_dir="$release_dir/target/aarch64-apple-darwin/release/bundle/macos"
   local baseline_app_path="$baseline_app_dir/Sbobino.app"
   local baseline_dmg_dir="$release_dir/target/aarch64-apple-darwin/release/bundle/dmg"

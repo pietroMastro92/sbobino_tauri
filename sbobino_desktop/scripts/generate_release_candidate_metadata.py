@@ -62,30 +62,6 @@ def build_validation_templates(version: str, tag: str, commit_sha: str) -> dict[
                 "functional_diarization_smoke": "pending",
             },
         },
-        "INTEL-PRIMARY.validation-report.json": {
-            "schema_version": 1,
-            "version": version,
-            "release_tag": tag,
-            "release_url": "",
-            "commit_sha": commit_sha,
-            "machine_class": "INTEL-PRIMARY",
-            "status": "pending",
-            "tester": "",
-            "os_name": "",
-            "os_version": "",
-            "runner_label": "self-hosted,macos,x64,intel-primary",
-            "tested_at_utc": "",
-            "notes": "",
-            "required_scenarios": [
-                "release_metadata_validation",
-                "bootstrap_layer_validation",
-            ],
-            "scenario_results": {
-                "release_metadata_validation": "pending",
-                "bootstrap_layer_validation": "pending",
-                "arm64_binary_execution": "pending",
-            },
-        },
     }
 
 

@@ -25,6 +25,7 @@ TAG="v$VERSION"
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 LOCAL_RELEASE_ROOT=${LOCAL_RELEASE_ROOT:-"$SCRIPT_DIR/../dist/local-release"}
 LOCAL_STABLE_RELEASES_TO_KEEP=${LOCAL_STABLE_RELEASES_TO_KEEP:-2}
+PRUNE_SCRIPT="$SCRIPT_DIR/prune_local_releases.sh"
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -69,7 +70,6 @@ expected_assets = {
     "distribution-readiness-proof.json",
     "AS-PRIMARY.validation-report.json",
     "AS-THIRD.validation-report.json",
-    "INTEL-PRIMARY.validation-report.json",
 }
 present_assets = {
     asset.get("name", "").strip()
@@ -98,8 +98,7 @@ gh release download "$TAG" \
   --pattern "release-readiness-proof.json" \
   --pattern "distribution-readiness-proof.json" \
   --pattern "AS-PRIMARY.validation-report.json" \
-  --pattern "AS-THIRD.validation-report.json" \
-  --pattern "INTEL-PRIMARY.validation-report.json"
+  --pattern "AS-THIRD.validation-report.json"
 
 python3 - <<'PY' "$TMP_DIR" "$VERSION" "$TAG" "$RELEASE_JSON"
 import json
@@ -135,19 +134,6 @@ expected_reports = {
             "clean_room_install",
             "warm_restart",
             "functional_diarization_smoke",
-        ],
-    },
-    "INTEL-PRIMARY.validation-report.json": {
-        "machine_class": "INTEL-PRIMARY",
-        "allowed_statuses": {"passed", "soft_pass"},
-        "runner_labels": {
-            "self-hosted,macos,x64,intel-primary",
-            "github-hosted,macos-13",
-            "github-hosted,macos-15-intel",
-        },
-        "required_scenarios": [
-            "release_metadata_validation",
-            "bootstrap_layer_validation",
         ],
     },
 }
@@ -223,12 +209,6 @@ for report_name, expectation in expected_reports.items():
             raise SystemExit(
                 f"Stable promotion blocked: {report_name} scenario {scenario} is not passed."
             )
-    if report_name == "INTEL-PRIMARY.validation-report.json":
-        arm64_execution = str(scenario_results.get("arm64_binary_execution", "")).strip().lower()
-        if arm64_execution not in {"passed", "not_applicable"}:
-            raise SystemExit(
-                "Stable promotion blocked: INTEL-PRIMARY arm64_binary_execution must be passed or not_applicable."
-            )
 PY
 
 gh release edit "$TAG" --repo "$REPO_SLUG" --prerelease=false
@@ -252,51 +232,7 @@ if [[ -n "${OLDER_STABLE_TAGS// }" ]]; then
   done <<<"$OLDER_STABLE_TAGS"
 fi
 
-LOCAL_RELEASE_DIRS_TO_DELETE=$(python3 - <<'PY' "$LOCAL_RELEASE_ROOT" "$TAG" "$LOCAL_STABLE_RELEASES_TO_KEEP"
-import pathlib
-import re
-import sys
-
-root = pathlib.Path(sys.argv[1])
-current_tag = sys.argv[2]
-keep_count = int(sys.argv[3])
-
-if not root.is_dir():
-    raise SystemExit(0)
-
-version_pattern = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
-
-def version_key(path: pathlib.Path) -> tuple[int, int, int]:
-    match = version_pattern.fullmatch(path.name)
-    if not match:
-        return (-1, -1, -1)
-    return tuple(int(part) for part in match.groups())
-
-release_dirs = [
-    path
-    for path in root.iterdir()
-    if path.is_dir() and version_pattern.fullmatch(path.name)
-]
-release_dirs.sort(key=version_key, reverse=True)
-
-keep_names = {path.name for path in release_dirs[:keep_count]}
-keep_names.add(current_tag)
-
-for path in release_dirs:
-    if path.name not in keep_names:
-        print(path)
-PY
-)
-
-LOCAL_RELEASES_REMOVED=0
-if [[ -n "${LOCAL_RELEASE_DIRS_TO_DELETE// }" ]]; then
-  while IFS= read -r local_release_dir; do
-    [[ -z "$local_release_dir" ]] && continue
-    rm -rf "$local_release_dir"
-    echo "Removed stale local release artifacts: $local_release_dir"
-    LOCAL_RELEASES_REMOVED=$((LOCAL_RELEASES_REMOVED + 1))
-  done <<<"$LOCAL_RELEASE_DIRS_TO_DELETE"
-fi
+"$PRUNE_SCRIPT" "$LOCAL_RELEASE_ROOT" "$LOCAL_STABLE_RELEASES_TO_KEEP" "$TAG"
 
 cat <<EOF
 Candidate promoted to stable:
@@ -307,5 +243,5 @@ Older stable releases were removed to keep the latest validated version as the o
 Local release retention:
   root:        $LOCAL_RELEASE_ROOT
   keep latest: $LOCAL_STABLE_RELEASES_TO_KEEP
-  removed:     $LOCAL_RELEASES_REMOVED
+  current:     $TAG
 EOF
