@@ -285,8 +285,11 @@ jobs:
           ./scripts/publish_candidate_release.sh "$VERSION" "$GITHUB_REPOSITORY" "$PWD/dist/github-release/v$VERSION"
 
   distribution-readiness:
+    # macos-14 is required: distribution_readiness.sh extracts the pyannote
+    # runtime zip and runs its bundled aarch64 python3 to smoke-test imports.
+    # ubuntu cannot exec the Mach-O binary.
     needs: publish-candidate
-    runs-on: ubuntu-latest
+    runs-on: macos-14
     env:
       TAG_NAME: ${{ inputs.tag_name }}
     steps:
