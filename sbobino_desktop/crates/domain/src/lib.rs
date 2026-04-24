@@ -16,14 +16,14 @@ pub use emotion_analysis::{
 pub use error::DomainError;
 pub use job::{JobProgress, JobStage, JobStatus, TranscriptionJob};
 pub use settings::{
-    default_prompt_templates, AiProvider, AiSettings, AppLanguage, AppSettings,
-    AppearanceMode, AutomaticImportActivityEntry, AutomaticImportActivityLevel,
-    AutomaticImportPostProcessingSettings, AutomaticImportPreset,
-    AutomaticImportQuarantineItem, AutomaticImportSettings, AutomaticImportSource,
-    AutomaticImportSourceHealth, AutomaticImportSourceStatus, GeneralSettings, LanguageCode,
-    OrganizationSettings, PromptBindings, PromptCategory, PromptSettings, PromptTask,
-    PromptTemplate, RemoteServiceConfig, RemoteServiceKind, SpeakerDiarizationSettings,
-    SpeechModel, TranscriptionEngine, TranscriptionSettings, WhisperOptions, WorkspaceConfig,
+    default_prompt_templates, AiProvider, AiSettings, AppLanguage, AppSettings, AppearanceMode,
+    AutomaticImportActivityEntry, AutomaticImportActivityLevel,
+    AutomaticImportPostProcessingSettings, AutomaticImportPreset, AutomaticImportQuarantineItem,
+    AutomaticImportSettings, AutomaticImportSource, AutomaticImportSourceHealth,
+    AutomaticImportSourceStatus, GeneralSettings, LanguageCode, OrganizationSettings,
+    PromptBindings, PromptCategory, PromptSettings, PromptTask, PromptTemplate,
+    RemoteServiceConfig, RemoteServiceKind, SpeakerDiarizationSettings, SpeechModel,
+    TranscriptionEngine, TranscriptionSettings, WhisperOptions, WorkspaceConfig,
 };
 pub use transcript_cleanup::{
     collapse_consecutive_repeated_segments, constrain_transcript_edit,

@@ -19,10 +19,9 @@ use sbobino_domain::{
 
 use crate::{
     dto::{RunTranscriptionRequest, SummaryFaq},
-    is_retryable_ai_provider_error, summarize_and_faq_adaptive,
-    summarize_transcript_adaptive, ApplicationError,
-    ArtifactRepository, AudioTranscoder, SpeakerDiarizationEngine, SpeechToTextEngine,
-    TranscriptEnhancer,
+    is_retryable_ai_provider_error, summarize_and_faq_adaptive, summarize_transcript_adaptive,
+    ApplicationError, ArtifactRepository, AudioTranscoder, SpeakerDiarizationEngine,
+    SpeechToTextEngine, TranscriptEnhancer,
 };
 
 const HAS_OPTIMIZED_TRANSCRIPT_METADATA_KEY: &str = "has_optimized_transcript";
@@ -30,12 +29,10 @@ const STUDY_PACK_METADATA_KEY: &str = "study_pack_v1";
 const MEETING_PACK_METADATA_KEY: &str = "meeting_intelligence_v1";
 const AUTO_IMPORT_GENERATE_SUMMARY_METADATA_KEY: &str = "auto_import_generate_summary";
 const AUTO_IMPORT_GENERATE_FAQS_METADATA_KEY: &str = "auto_import_generate_faqs";
-const AUTO_IMPORT_GENERATE_PRESET_OUTPUT_METADATA_KEY: &str =
-    "auto_import_generate_preset_output";
+const AUTO_IMPORT_GENERATE_PRESET_OUTPUT_METADATA_KEY: &str = "auto_import_generate_preset_output";
 const AUTO_POST_SUMMARY_STATUS_METADATA_KEY: &str = "auto_post_summary_status";
 const AUTO_POST_FAQS_STATUS_METADATA_KEY: &str = "auto_post_faqs_status";
-const AUTO_POST_PRESET_OUTPUT_STATUS_METADATA_KEY: &str =
-    "auto_post_preset_output_status";
+const AUTO_POST_PRESET_OUTPUT_STATUS_METADATA_KEY: &str = "auto_post_preset_output_status";
 
 #[derive(Clone)]
 pub struct TranscriptionService {
@@ -246,8 +243,9 @@ impl TranscriptionService {
                 }
             }
 
-            let (optimized, summary_faq, has_optimized_transcript, generated_outputs) =
-                if request.enable_ai {
+            let (optimized, summary_faq, has_optimized_transcript, generated_outputs) = if request
+                .enable_ai
+            {
                 self.emit(
                     &emit_progress,
                     &request.job_id,
@@ -595,7 +593,11 @@ impl TranscriptionService {
         language_code: &str,
         request: &RunTranscriptionRequest,
     ) -> Result<BTreeMap<String, String>, ApplicationError> {
-        let Some(preset) = request.metadata.get("auto_import_preset").map(|value| value.trim()) else {
+        let Some(preset) = request
+            .metadata
+            .get("auto_import_preset")
+            .map(|value| value.trim())
+        else {
             return Ok(BTreeMap::new());
         };
         if transcript.trim().is_empty() {

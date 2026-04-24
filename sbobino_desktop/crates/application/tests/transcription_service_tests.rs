@@ -1182,8 +1182,7 @@ async fn run_file_transcription_transcodes_wav_inputs_unconditionally() {
     let enhancer = Arc::new(MockEnhancer::default());
     let repo = Arc::new(InMemoryArtifactRepository::default());
 
-    let service =
-        TranscriptionService::new(transcoder.clone(), speech, enhancer, repo);
+    let service = TranscriptionService::new(transcoder.clone(), speech, enhancer, repo);
 
     let _ = service
         .run_file_transcription(

@@ -139,9 +139,11 @@ async fn save_then_load_preserves_automatic_import_and_workspace_settings() {
         Some("work")
     );
     assert!(loaded.automation.watched_sources[0].enable_ai_post_processing);
-    assert!(loaded.automation.watched_sources[0]
-        .post_processing
-        .generate_summary);
+    assert!(
+        loaded.automation.watched_sources[0]
+            .post_processing
+            .generate_summary
+    );
     assert_eq!(loaded.organization.workspaces.len(), 1);
     assert_eq!(loaded.organization.workspaces[0].label, "Work");
 }

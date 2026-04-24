@@ -16,8 +16,7 @@ use sbobino_application::ArtifactQuery;
 use sbobino_domain::{
     AppSettings, ArtifactKind, ArtifactSourceOrigin, AutomaticImportActivityEntry,
     AutomaticImportActivityLevel, AutomaticImportPreset, AutomaticImportQuarantineItem,
-    AutomaticImportSource,
-    AutomaticImportSourceHealth, AutomaticImportSourceStatus,
+    AutomaticImportSource, AutomaticImportSourceHealth, AutomaticImportSourceStatus,
 };
 
 use crate::{
@@ -487,7 +486,11 @@ async fn persist_scan_state(
     let mut automation = settings.automation.clone();
     let mut next_statuses = Vec::with_capacity(automation.watched_sources.len());
 
-    for source in automation.watched_sources.iter().filter(|source| source.enabled) {
+    for source in automation
+        .watched_sources
+        .iter()
+        .filter(|source| source.enabled)
+    {
         let previous = automation
             .source_statuses
             .iter()
@@ -564,7 +567,10 @@ async fn persist_scan_state(
         } else {
             format!(
                 "{}: scanned {}, queued {}, skipped {}",
-                summary.source_label, summary.scanned_files, summary.queued_jobs, summary.skipped_existing
+                summary.source_label,
+                summary.scanned_files,
+                summary.queued_jobs,
+                summary.skipped_existing
             )
         };
         activity.push(AutomaticImportActivityEntry {
@@ -620,18 +626,20 @@ async fn increment_quarantine_retry_count(
     {
         item.retry_count = item.retry_count.saturating_add(1);
         item.last_detected_at = now.clone();
-        automation.recent_activity.push(AutomaticImportActivityEntry {
-            id: Uuid::new_v4().to_string(),
-            timestamp: now,
-            source_id: item.source_id.clone(),
-            level: AutomaticImportActivityLevel::Info,
-            message: format!(
-                "Retry requested for quarantined file {}",
-                item.source_label
-                    .clone()
-                    .unwrap_or_else(|| file_label(&item.file_path))
-            ),
-        });
+        automation
+            .recent_activity
+            .push(AutomaticImportActivityEntry {
+                id: Uuid::new_v4().to_string(),
+                timestamp: now,
+                source_id: item.source_id.clone(),
+                level: AutomaticImportActivityLevel::Info,
+                message: format!(
+                    "Retry requested for quarantined file {}",
+                    item.source_label
+                        .clone()
+                        .unwrap_or_else(|| file_label(&item.file_path))
+                ),
+            });
     }
     trim_automatic_import_activity(&mut automation.recent_activity);
     state
@@ -716,20 +724,22 @@ pub(crate) async fn record_automatic_import_failure(
             status.last_error = Some(reason.to_string());
         }
     }
-    automation.recent_activity.push(AutomaticImportActivityEntry {
-        id: Uuid::new_v4().to_string(),
-        timestamp: timestamp.clone(),
-        source_id: metadata.get(IMPORT_SOURCE_ID_METADATA_KEY).cloned(),
-        level: AutomaticImportActivityLevel::Error,
-        message: format!(
-            "{}: {}",
-            metadata
-                .get(IMPORT_SOURCE_LABEL_METADATA_KEY)
-                .cloned()
-                .unwrap_or_else(|| file_label(&file_path)),
-            reason
-        ),
-    });
+    automation
+        .recent_activity
+        .push(AutomaticImportActivityEntry {
+            id: Uuid::new_v4().to_string(),
+            timestamp: timestamp.clone(),
+            source_id: metadata.get(IMPORT_SOURCE_ID_METADATA_KEY).cloned(),
+            level: AutomaticImportActivityLevel::Error,
+            message: format!(
+                "{}: {}",
+                metadata
+                    .get(IMPORT_SOURCE_LABEL_METADATA_KEY)
+                    .cloned()
+                    .unwrap_or_else(|| file_label(&file_path)),
+                reason
+            ),
+        });
     trim_automatic_import_activity(&mut automation.recent_activity);
     state
         .settings_service

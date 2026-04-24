@@ -2483,10 +2483,7 @@ fn localized_export_faq_title(language: &str) -> &'static str {
     }
 }
 
-fn localized_generated_pack_title(
-    language: &str,
-    kind: GeneratedArtifactPackKind,
-) -> &'static str {
+fn localized_generated_pack_title(language: &str, kind: GeneratedArtifactPackKind) -> &'static str {
     match kind {
         GeneratedArtifactPackKind::StudyPack => match language {
             "it" => "Pacchetto studio",
@@ -2520,7 +2517,10 @@ fn build_generated_pack_sections(
     metadata: &BTreeMap<String, String>,
 ) -> Vec<ExportDocumentSection> {
     [
-        (STUDY_PACK_METADATA_KEY, GeneratedArtifactPackKind::StudyPack),
+        (
+            STUDY_PACK_METADATA_KEY,
+            GeneratedArtifactPackKind::StudyPack,
+        ),
         (
             MEETING_PACK_METADATA_KEY,
             GeneratedArtifactPackKind::MeetingIntelligence,
