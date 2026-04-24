@@ -278,7 +278,7 @@ download_asset() {
     --retry-delay 2 \
     --silent \
     --show-error \
-    "${curl_args[@]}" \
+    ${curl_args[@]+"${curl_args[@]}"} \
     --output "$destination" \
     "$url"
 }
@@ -306,7 +306,7 @@ try_download_asset() {
     --retry-delay 1 \
     --silent \
     --show-error \
-    "${curl_args[@]}" \
+    ${curl_args[@]+"${curl_args[@]}"} \
     --output "$destination" \
     "$url" >/dev/null 2>&1
 }
@@ -579,7 +579,7 @@ PY
       -format UDZO \
       "$baseline_dmg_path" >/dev/null
     rm -rf "$staging_dir"
-  ); then
+  ) >&2; then
     git -C "$REPO_ROOT" worktree remove --force "$worktree_dir" >/dev/null 2>&1 || true
     fail_validation "Failed to build the validation baseline app from git ref '$baseline_ref'."
   fi

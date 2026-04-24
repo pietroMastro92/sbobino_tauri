@@ -5,8 +5,9 @@ usage() {
   cat >&2 <<'EOF'
 Usage: verify_local_apple_silicon_release.sh <version> [repo-slug]
 
-Builds the local Apple Silicon release, serves the exact local candidate assets,
-and validates the native in-app update path locally before any GitHub publish.
+Builds and verifies the local Apple Silicon release assets before any GitHub
+publish. Native updater validation must run after prerelease publication because
+Tauri updater endpoints must use HTTPS.
 
 Outputs:
   dist/local-release/v<version>/AS-PRIMARY.local-prepublish-report.json
@@ -28,7 +29,6 @@ ROOT_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 RELEASE_DIR="$ROOT_DIR/dist/local-release/v$VERSION"
 REPORT_PATH="$RELEASE_DIR/AS-PRIMARY.local-prepublish-report.json"
 SERVER_LOG=$(mktemp)
-PORT_FILE=$(mktemp)
 SERVER_PID=""
 
 need_cmd() {
@@ -43,7 +43,7 @@ cleanup() {
     kill "$SERVER_PID" >/dev/null 2>&1 || true
     wait "$SERVER_PID" >/dev/null 2>&1 || true
   fi
-  rm -f "$SERVER_LOG" "$PORT_FILE"
+  rm -f "$SERVER_LOG"
 }
 trap cleanup EXIT
 
@@ -56,57 +56,73 @@ elif [[ ! -d "$RELEASE_DIR" ]]; then
   exit 1
 fi
 
-python3 - <<'PY' "$RELEASE_DIR" "$PORT_FILE" >"$SERVER_LOG" 2>&1 &
-import functools
-import http.server
+python3 - <<'PY' "$RELEASE_DIR" "$REPORT_PATH" "$VERSION" "$REPO_SLUG"
+import json
 import pathlib
-import socketserver
 import sys
+from datetime import datetime, timezone
 
-directory = pathlib.Path(sys.argv[1]).resolve()
-port_file = pathlib.Path(sys.argv[2])
+release_dir = pathlib.Path(sys.argv[1]).resolve()
+report_path = pathlib.Path(sys.argv[2]).resolve()
+version = sys.argv[3]
+repo_slug = sys.argv[4]
+tag = f"v{version}"
 
-handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(directory))
+required = [
+    f"Sbobino_{version}_aarch64.dmg",
+    "Sbobino.app.tar.gz",
+    "Sbobino.app.tar.gz.sig",
+    "latest.json",
+    "setup-manifest.json",
+    "runtime-manifest.json",
+    "speech-runtime-macos-aarch64.zip",
+    "pyannote-manifest.json",
+    "pyannote-runtime-macos-aarch64.zip",
+    "pyannote-model-community-1.zip",
+    "release-readiness-proof.json",
+]
+missing = [name for name in required if not (release_dir / name).is_file()]
+if missing:
+    raise SystemExit("Missing local release assets: " + ", ".join(missing))
 
-class ReusableTCPServer(socketserver.TCPServer):
-    allow_reuse_address = True
+proof = json.loads((release_dir / "release-readiness-proof.json").read_text(encoding="utf-8"))
+if proof.get("version") != version:
+    raise SystemExit("release-readiness-proof.json version mismatch.")
+if str(proof.get("status", "")).strip().lower() != "passed":
+    raise SystemExit("release-readiness-proof.json is not passed.")
+if proof.get("gate") != "release_readiness.sh":
+    raise SystemExit("release-readiness-proof.json gate mismatch.")
 
-with ReusableTCPServer(("127.0.0.1", 0), handler) as httpd:
-    port_file.write_text(str(httpd.server_address[1]), encoding="utf-8")
-    httpd.serve_forever()
+latest = json.loads((release_dir / "latest.json").read_text(encoding="utf-8"))
+if latest.get("version") != version:
+    raise SystemExit("latest.json version mismatch.")
+platform = latest.get("platforms", {}).get("darwin-aarch64", {})
+url = str(platform.get("url", "")).strip()
+if not url.endswith(f"/releases/download/{tag}/Sbobino.app.tar.gz"):
+    raise SystemExit("latest.json updater URL is not tied to the expected GitHub release tag.")
+
+report = {
+    "schema_version": 1,
+    "version": version,
+    "release_tag": tag,
+    "release_url": f"https://github.com/{repo_slug}/releases/tag/{tag}",
+    "machine_class": "AS-PRIMARY",
+    "status": "passed",
+    "tester": "local-prepublish",
+    "os_name": "macOS",
+    "os_version": "",
+    "runner_label": "local,macos,apple-silicon,prepublish",
+    "tested_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "notes": "Local Apple Silicon asset preflight passed. Native updater validation must run against the HTTPS GitHub prerelease.",
+    "required_scenarios": ["local_release_assets_prepared"],
+    "scenario_results": {"local_release_assets_prepared": "passed"},
+}
+report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 PY
-SERVER_PID=$!
-
-for _ in $(seq 1 50); do
-  if [[ -s "$PORT_FILE" ]]; then
-    break
-  fi
-  sleep 0.2
-done
-
-if [[ ! -s "$PORT_FILE" ]]; then
-  echo "Failed to start local release asset server." >&2
-  cat "$SERVER_LOG" >&2 || true
-  exit 1
-fi
-
-PORT=$(cat "$PORT_FILE")
-LOCAL_FEED_URL="http://127.0.0.1:${PORT}/latest.json"
-LOCAL_ASSET_BASE_URL="http://127.0.0.1:${PORT}"
-
-SBOBINO_VALIDATION_LOCAL_RELEASE_DIR="$RELEASE_DIR" \
-SBOBINO_VALIDATION_FEED_URL="$LOCAL_FEED_URL" \
-SBOBINO_VALIDATION_ASSET_BASE_URL="$LOCAL_ASSET_BASE_URL" \
-bash "$SCRIPT_DIR/run_release_machine_validation.sh" \
-  AS-PRIMARY \
-  "$VERSION" \
-  "$REPO_SLUG" \
-  "$REPORT_PATH"
 
 cat <<EOF
-Local Apple Silicon prepublish validation passed:
+Local Apple Silicon prepublish asset validation passed:
   version: $VERSION
   assets:  $RELEASE_DIR
   report:  $REPORT_PATH
-  feed:    $LOCAL_FEED_URL
 EOF
