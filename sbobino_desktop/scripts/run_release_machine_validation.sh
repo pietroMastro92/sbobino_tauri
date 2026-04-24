@@ -49,6 +49,7 @@ REPORT_PATH=${4:-"$(pwd)/${MACHINE_CLASS}.validation-report.json"}
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 DATA_DIR=${SBOBINO_VALIDATION_DATA_DIR:-"$HOME/Library/Application Support/com.sbobino.desktop"}
 APP_PATH=${SBOBINO_VALIDATION_APP_PATH:-"/Applications/Sbobino.app"}
+BUNDLE_ID=${SBOBINO_VALIDATION_BUNDLE_ID:-"com.sbobino.desktop"}
 FIXTURE_AUDIO=${SBOBINO_VALIDATION_FIXTURE_AUDIO:-}
 LEGACY_UPGRADE_BASELINE_VERSION=${SBOBINO_VALIDATION_LEGACY_UPGRADE_BASELINE_VERSION:-0.1.16}
 LEGACY_UPGRADE_BASELINE_REVISION=${SBOBINO_VALIDATION_LEGACY_UPGRADE_BASELINE_REVISION:-}
@@ -393,6 +394,32 @@ PY
   rm -rf "$stage_dir"
 }
 
+install_release_speech_runtime_baseline() {
+  local asset_version=$1
+  local runtime_dir="$DATA_DIR"
+  local runtime_download="$TMP_DIR/speech-runtime-${asset_version}.zip"
+  local stage_dir
+
+  download_asset "$asset_version" "speech-runtime-macos-aarch64.zip" "$runtime_download"
+  stage_dir=$(mktemp -d "$TMP_DIR/speech-runtime.XXXXXX")
+
+  if ! /usr/bin/ditto -x -k "$runtime_download" "$stage_dir"; then
+    rm -rf "$stage_dir"
+    fail_validation "Failed to extract speech runtime archive '$runtime_download'."
+  fi
+
+  if [[ ! -d "$stage_dir/runtime/bin" || ! -d "$stage_dir/runtime/lib" ]]; then
+    rm -rf "$stage_dir"
+    fail_validation "Speech runtime archive '$runtime_download' is missing expected runtime/bin or runtime/lib directories."
+  fi
+
+  rm -rf "$runtime_dir/bin" "$runtime_dir/lib"
+  mkdir -p "$runtime_dir"
+  mv "$stage_dir/runtime/bin" "$runtime_dir/bin"
+  mv "$stage_dir/runtime/lib" "$runtime_dir/lib"
+  rm -rf "$stage_dir"
+}
+
 install_release_pyannote_baseline() {
   local asset_version=$1
   local manifest_version=$2
@@ -506,6 +533,9 @@ clear_install_state() {
   quit_app
   rm -rf "$APP_PATH"
   rm -rf "$DATA_DIR"
+  rm -rf "$HOME/Library/WebKit/$BUNDLE_ID"
+  rm -rf "$HOME/Library/Caches/$BUNDLE_ID"
+  rm -f "$HOME/Library/Preferences/$BUNDLE_ID.plist"
 }
 
 prepare_legacy_upgrade_baseline_dmg() {
@@ -596,13 +626,16 @@ PY
 
 trigger_update_menu_refresh() {
   osascript <<'APPLESCRIPT' >/dev/null 2>&1
+set menuNames to {"Check for Updates...", "Check for Updates…", "Verifica disponibilita aggiornamenti...", "Verifica disponibilità aggiornamenti...", "Verifica disponibilità aggiornamenti…"}
 tell application "Sbobino" to activate
 tell application "System Events"
   tell process "Sbobino"
-    try
-      click menu item "Verifica disponibilita aggiornamenti..." of menu 1 of menu bar item 1 of menu bar 1
-      return
-    end try
+    repeat with wantedName in menuNames
+      try
+        click menu item wantedName of menu 1 of menu bar item 1 of menu bar 1
+        return
+      end try
+    end repeat
   end tell
 end tell
 APPLESCRIPT
@@ -1097,9 +1130,10 @@ validate_as_primary() {
   install_app_from_dmg_path "$baseline_dmg"
   seed_privacy_acceptance
   set_speaker_diarization_enabled 1
+  install_release_speech_runtime_baseline "$VERSION"
   install_release_pyannote_baseline "$VERSION" "$LEGACY_UPGRADE_BASELINE_VERSION"
   launch_app
-  wait_for_setup_report_success "$TIMEOUT_SECONDS"
+  wait_for_runtime_health_ready "$TIMEOUT_SECONDS" 1
   local baseline_snapshot="$TMP_DIR/as-primary-baseline-health.json"
   capture_runtime_health "$baseline_snapshot"
   if [[ "$(capture_runtime_health_ready_flag "$baseline_snapshot")" != "1" ]]; then

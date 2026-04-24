@@ -105,7 +105,7 @@ download_asset() {
     --silent \
     --show-error \
     --user-agent "sbobino-distribution-readiness" \
-    "${curl_args[@]}" \
+    ${curl_args[@]+"${curl_args[@]}"} \
     --output "$destination" \
     "$url"
 }
