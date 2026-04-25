@@ -299,13 +299,21 @@ def parse_otool_dependencies(output: str) -> list[str]:
 
 
 def parse_otool_rpaths(output: str) -> list[str]:
+    # otool -l prints LC_RPATH as a 3-line block (cmd / cmdsize / path).
+    # The previous parser only inspected the line directly after
+    # `cmd LC_RPATH`, which is `cmdsize`, so it silently skipped every
+    # rpath and let scipy ship with a Homebrew gcc@13 LC_RPATH on a
+    # third-party Mac.
     refs: list[str] = []
-    previous = ""
+    in_rpath = False
     for line in output.splitlines():
         stripped = line.strip()
-        if previous == "cmd LC_RPATH" and stripped.startswith("path "):
+        if stripped == "cmd LC_RPATH":
+            in_rpath = True
+            continue
+        if in_rpath and stripped.startswith("path "):
             refs.append(stripped.split("path ", 1)[1].split(" (offset ", 1)[0])
-        previous = stripped
+            in_rpath = False
     return refs
 
 

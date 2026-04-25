@@ -280,13 +280,19 @@ def parse_otool_dependencies(output: str) -> list[str]:
 
 
 def parse_otool_rpaths(output: str) -> list[str]:
+    # See setup_bundled_pyannote.sh: the line after `cmd LC_RPATH` is
+    # `cmdsize NN`, not `path ...`, so the previous parser missed every
+    # rpath and let host-managed Homebrew rpaths slip into the release.
     refs: list[str] = []
-    previous = ""
+    in_rpath = False
     for line in output.splitlines():
         stripped = line.strip()
-        if previous == "cmd LC_RPATH" and stripped.startswith("path "):
+        if stripped == "cmd LC_RPATH":
+            in_rpath = True
+            continue
+        if in_rpath and stripped.startswith("path "):
             refs.append(stripped.split("path ", 1)[1].split(" (offset ", 1)[0])
-        previous = stripped
+            in_rpath = False
     return refs
 
 

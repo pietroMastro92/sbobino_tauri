@@ -304,13 +304,24 @@ def parse_otool_dependencies(output: str) -> list[str]:
 
 
 def parse_otool_rpaths(output: str) -> list[str]:
+    # otool -l prints a multi-line block per LC_RPATH command:
+    #     cmd LC_RPATH
+    #     cmdsize 88
+    #     path /opt/homebrew/... (offset 12)
+    # The previous version of this parser only looked at the line
+    # immediately following `cmd LC_RPATH`, which is `cmdsize NN`, so it
+    # silently skipped every rpath. Use a sticky flag instead and clear it
+    # the moment we consume the matching `path` line.
     refs: list[str] = []
-    previous = ""
+    in_rpath = False
     for line in output.splitlines():
         stripped = line.strip()
-        if previous == "cmd LC_RPATH" and stripped.startswith("path "):
+        if stripped == "cmd LC_RPATH":
+            in_rpath = True
+            continue
+        if in_rpath and stripped.startswith("path "):
             refs.append(stripped.split("path ", 1)[1].split(" (offset ", 1)[0])
-        previous = stripped
+            in_rpath = False
     return refs
 
 
@@ -467,13 +478,19 @@ def parse_otool_dependencies(output: str) -> list[str]:
 
 
 def parse_otool_rpaths(output: str) -> list[str]:
+    # See bundle_portable_python_native_dependencies for why a sticky flag
+    # is required: the line immediately after `cmd LC_RPATH` is `cmdsize`,
+    # not `path`, and the previous parser missed every rpath as a result.
     refs: list[str] = []
-    previous = ""
+    in_rpath = False
     for line in output.splitlines():
         stripped = line.strip()
-        if previous == "cmd LC_RPATH" and stripped.startswith("path "):
+        if stripped == "cmd LC_RPATH":
+            in_rpath = True
+            continue
+        if in_rpath and stripped.startswith("path "):
             refs.append(stripped.split("path ", 1)[1].split(" (offset ", 1)[0])
-        previous = stripped
+            in_rpath = False
     return refs
 
 
