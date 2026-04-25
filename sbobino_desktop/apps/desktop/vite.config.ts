@@ -9,6 +9,13 @@ export default defineConfig({
     strictPort: true
   },
   envPrefix: ["VITE_", "TAURI_"],
+  build: {
+    // Ship source maps with the release bundle so React's minified
+    // production errors (e.g. "Minified React error #185") map back to
+    // real component names and line numbers in DevTools instead of
+    // anonymous `Nb` / `Tb` frames.
+    sourcemap: true,
+  },
   test: {
     environment: "jsdom",
     setupFiles: "./src/test/setup.ts",
