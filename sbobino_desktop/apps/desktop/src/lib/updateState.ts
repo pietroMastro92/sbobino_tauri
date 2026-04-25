@@ -141,14 +141,22 @@ export function shouldShowUpdateBanner(
   checking: boolean,
   dismissedVersion: string | null,
 ): boolean {
-  if (installing) {
-    return true;
-  }
-  if (checking && !updateInfo?.has_update) {
-    return false;
-  }
+  // Banner is purely informational. It only shows when a newer version is
+  // actually available and the user has not dismissed it. The `installing`
+  // flag alone must never re-open the banner — historically a stale
+  // `installing: true` snapshot persisted in localStorage would leave the
+  // banner stuck even when the running app already matched the latest
+  // release.
   if (!updateInfo?.has_update || !updateInfo.latest_version) {
     return false;
   }
-  return dismissedVersion !== updateInfo.latest_version;
+  if (checking && !updateInfo.has_update) {
+    return false;
+  }
+  if (dismissedVersion === updateInfo.latest_version) {
+    // Keep the banner visible only while the user is actively driving an
+    // install they kicked off before dismissing.
+    return installing;
+  }
+  return true;
 }

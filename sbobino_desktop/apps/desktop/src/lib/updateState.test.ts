@@ -143,4 +143,42 @@ describe("updateState", () => {
       ),
     ).toBe(true);
   });
+
+  it("does not resurrect the banner from a stale installing flag", () => {
+    // Regression: a stale shared snapshot used to leave the banner stuck on
+    // "Installing update" even when the running app already matched the
+    // latest release (no update available).
+    expect(
+      shouldShowUpdateBanner(
+        {
+          has_update: false,
+          current_version: "0.1.31",
+          latest_version: "0.1.31",
+          download_url: null,
+        },
+        true,
+        false,
+        null,
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps the banner while a user-triggered install runs even if dismissed", () => {
+    // Once the user kicked off the install we keep the progress banner
+    // visible so they know the app is about to restart, but only as long as
+    // an actual update is in flight.
+    expect(
+      shouldShowUpdateBanner(
+        {
+          has_update: true,
+          current_version: "0.1.16",
+          latest_version: "0.1.17",
+          download_url: null,
+        },
+        true,
+        false,
+        "0.1.17",
+      ),
+    ).toBe(true);
+  });
 });

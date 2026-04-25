@@ -3046,9 +3046,13 @@ export function App({
   const [checkingUpdates, setCheckingUpdates] = useState(
     () => readSharedUpdateSnapshot()?.checking ?? false,
   );
-  const [installingUpdate, setInstallingUpdate] = useState(
-    () => readSharedUpdateSnapshot()?.installing ?? false,
-  );
+  const [installingUpdate, setInstallingUpdate] = useState(() => {
+    // Never resume an "installing" state from a previous session. The user
+    // must explicitly press the Install button each time, otherwise a stale
+    // localStorage snapshot would resurrect the "installing update" banner
+    // even when the running app is already up to date.
+    return false;
+  });
   const [updateDownloadPercent, setUpdateDownloadPercent] = useState<
     number | null
   >(() => readSharedUpdateSnapshot()?.downloadPercent ?? null);
@@ -3817,7 +3821,12 @@ export function App({
       setUpdateSource(snapshot.updateSource);
       setUpdateStatusMessage(snapshot.statusMessage);
       setCheckingUpdates(snapshot.checking);
-      setInstallingUpdate(snapshot.installing);
+      // Only mirror `installing` from secondary windows that report an
+      // actual update in flight. A stale snapshot with installing=true
+      // and has_update=false would otherwise pin the banner open.
+      setInstallingUpdate(
+        Boolean(snapshot.installing && snapshot.updateInfo?.has_update),
+      );
       setUpdateDownloadPercent(snapshot.downloadPercent);
 
       if (snapshot.updateSource === "native" && snapshot.updateInfo?.has_update) {
@@ -12245,7 +12254,7 @@ export function App({
         : installingUpdate
           ? t(
               "updates.banner.installingBody",
-              "The update is being downloaded and applied automatically.",
+              "Installing the update you started. The app will restart when it finishes.",
             )
           : updateInfo?.has_update
             ? t(
@@ -12254,43 +12263,15 @@ export function App({
                 { version: latestVersion },
               )
             : "");
-    const canInstallFromBanner = Boolean(
-      updateInfo?.has_update &&
-        nativeUpdate &&
-        !installingUpdate &&
-        !checkingUpdates,
-    );
-    const canDismissBanner = Boolean(updateInfo?.has_update && !installingUpdate);
-
-    const onBannerClick = (event: ReactMouseEvent<HTMLDivElement>) => {
-      const target = event.target as HTMLElement | null;
-      if (target?.closest("button, a")) {
-        return;
-      }
-      if (!canInstallFromBanner) {
-        return;
-      }
-      void onInstallUpdate();
-    };
-
-    const onBannerKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-      if (!canInstallFromBanner) {
-        return;
-      }
-      if (event.key !== "Enter" && event.key !== " ") {
-        return;
-      }
-      event.preventDefault();
-      void onInstallUpdate();
-    };
+    // The banner is informational only. Dismissing it is always allowed —
+    // even while a user-initiated install is in progress — so the user can
+    // hide the visual without cancelling the download. A separate explicit
+    // "Install" button is the only way to start the download/install flow.
+    const canDismissBanner = Boolean(updateInfo?.has_update);
 
     return (
       <div
-        className={`app-update-banner ${installingUpdate ? "is-progress" : "is-available"} ${canInstallFromBanner ? "is-clickable" : ""}`}
-        onClick={onBannerClick}
-        onKeyDown={onBannerKeyDown}
-        role={canInstallFromBanner ? "button" : undefined}
-        tabIndex={canInstallFromBanner ? 0 : undefined}
+        className={`app-update-banner ${installingUpdate ? "is-progress" : "is-available"}`}
       >
         <div className="app-update-banner-copy">
           <strong>{bannerTitle}</strong>
