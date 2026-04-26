@@ -5654,13 +5654,14 @@ body.sidebar-resizing {
   display: grid;
   gap: 14px;
   width: 100%;
-  max-width: 880px;
+  /* Always single-column (no regression to the 5-column auto-fit layout
+     that cropped each panel to ~360px on wide windows). The previous fix
+     capped width at 880px which left the right half of any wide window
+     empty; allow filling the available area up to a comfortable reading
+     width. The min(...) keeps line length sane on ultra-wide screens. */
+  max-width: min(1280px, 100%);
+  margin: 0 auto;
   align-content: start;
-  /* Single column. The previous auto-fit rule turned panes with several
-     sections (Automatic Import: 5 panels) into a 5-column row on wide
-     windows, with each panel cropped to ~360px and unreadable. Settings
-     panes should always stack vertically; horizontal density is the
-     sidebar's job. */
   grid-template-columns: minmax(0, 1fr);
 }
 
