@@ -1,3 +1,5 @@
+import { t } from "../i18n";
+
 type StatusBadgeVariant = "warning" | "ready" | "error";
 
 export function StatusBadge({
@@ -19,10 +21,10 @@ export function StatusBadge({
         }
       >
         {variant === "ready"
-          ? "Ready"
+          ? t("status.ready", "Ready")
           : variant === "warning"
-            ? "Warning"
-            : "Error"}
+            ? t("status.warning", "Warning")
+            : t("status.error", "Error")}
       </span>
       <span>{message}</span>
     </div>
