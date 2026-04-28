@@ -90,7 +90,7 @@ describe("updateState", () => {
 
   it("does not match expired or failed pyannote auto-action markers", () => {
     const candidate = {
-      appVersion: "0.1.38",
+      appVersion: "0.1.39",
       trigger: "startup" as const,
       reasonCode: "pyannote_repair_required",
       expiresAt: Date.now() + 60_000,

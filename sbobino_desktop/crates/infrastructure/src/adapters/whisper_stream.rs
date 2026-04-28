@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
@@ -10,6 +11,8 @@ use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
 
 use sbobino_application::{ApplicationError, RealtimeDelta, RealtimeDeltaKind};
+
+static SESSION_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Default)]
 struct StreamState {
@@ -49,16 +52,30 @@ impl WhisperStreamEngine {
     fn create_session_dir() -> Result<PathBuf, ApplicationError> {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_millis())
+            .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let session_dir = std::env::temp_dir().join(format!("sbobino-live-{timestamp}"));
-        fs::create_dir_all(&session_dir).map_err(|error| {
-            ApplicationError::SpeechToText(format!(
-                "failed to create realtime audio session directory at {}: {error}",
-                session_dir.display()
-            ))
-        })?;
-        Ok(session_dir)
+        let process_id = std::process::id();
+        let counter = SESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
+
+        for attempt in 0..16_u8 {
+            let session_dir = std::env::temp_dir().join(format!(
+                "sbobino-live-{timestamp}-{process_id}-{counter}-{attempt}"
+            ));
+            match fs::create_dir(&session_dir) {
+                Ok(()) => return Ok(session_dir),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    return Err(ApplicationError::SpeechToText(format!(
+                        "failed to create realtime audio session directory at {}: {error}",
+                        session_dir.display()
+                    )));
+                }
+            }
+        }
+
+        Err(ApplicationError::SpeechToText(
+            "failed to create a unique realtime audio session directory".to_string(),
+        ))
     }
 
     fn find_saved_audio_path(session_dir: &Path) -> Option<PathBuf> {
