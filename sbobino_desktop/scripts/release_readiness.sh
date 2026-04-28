@@ -513,6 +513,7 @@ PY
 mkdir -p "$ASSET_DIR"
 
 "$SCRIPTS_DIR/check_release_versions.sh" "$VERSION"
+"$SCRIPTS_DIR/check_no_skipped_tests.sh"
 "$SCRIPTS_DIR/setup_bundled_pyannote.sh" --force
 
 "$SCRIPTS_DIR/package_macos_runtime_asset.sh" "$RUNTIME_ZIP"
@@ -532,34 +533,11 @@ smoke_test_pyannote_runtime_asset "$PYANNOTE_RUNTIME_ZIP"
 export SBOBINO_LOCAL_RELEASE_ASSETS_DIR="$ASSET_DIR"
 
 pushd "$DESKTOP_DIR" >/dev/null
-npm test -- initialSetup provisioningUi appBootstrap updateState
+npm test
 popd >/dev/null
 
 pushd "$ROOT_DIR" >/dev/null
-cargo test -p sbobino-infrastructure runtime_health_reports_compatibility_level_mismatch_as_repair_required
-cargo test -p sbobino-infrastructure runtime_health_backfills_legacy_pyannote_manifest_compat_level
-cargo test -p sbobino-infrastructure load_settings_migrates_legacy_pyannote_runtime_directory_when_current_is_missing
-cargo test -p sbobino-infrastructure load_settings_recovers_pyannote_runtime_from_interrupted_backup_swap
-cargo test -p sbobino-infrastructure runtime_health_reports_install_incomplete_when_python_stdlib_is_missing
-cargo test -p sbobino-infrastructure runtime_health_self_heals_missing_manifest_and_status_from_bundled_override
-cargo test -p sbobino-infrastructure runnable_ffmpeg_probe_accepts_slow_cold_start
-cargo test -p sbobino-infrastructure managed_runtime_accepts_slow_whisper_cli_cold_start
-cargo test -p sbobino-infrastructure managed_runtime_accepts_slow_whisper_stream_cold_start
-cargo test -p sbobino-infrastructure public_runtime_health_requires_managed_runtime_binaries
-cargo test -p sbobino-infrastructure public_runtime_health_ignores_configured_host_binaries
-cargo test -p sbobino-infrastructure runtime_health_trusts_cached_ready_pyannote_status_on_warm_start
-cargo test -p sbobino-desktop plan_pyannote_background_action_skips_missing_install_when_diarization_disabled
-cargo test -p sbobino-desktop plan_pyannote_background_action_installs_missing_runtime_when_diarization_enabled
-cargo test -p sbobino-desktop plan_pyannote_background_action_reports_real_compat_mismatch_as_asset_migration
-cargo test -p sbobino-desktop plan_pyannote_background_action_self_heals_stale_incomplete_status
-cargo test -p sbobino-desktop plan_pyannote_background_action_requests_manifest_only_migration_on_patch_update
-cargo test -p sbobino-desktop plan_pyannote_background_action_requests_asset_migration_on_checksum_mismatch
-cargo test -p sbobino-desktop install_pyannote_archive_extracts_expected_root
-cargo test -p sbobino-desktop promote_staged_pyannote_runtime_swaps_only_after_staging_finishes
-cargo test -p sbobino-desktop pyannote_runtime_swap_rolls_back_previous_install_on_failure
-cargo test -p sbobino-desktop verify_file_sha256_rejects_wrong_checksum
-cargo test -p sbobino-desktop validate_setup_manifest_rejects_mismatched_release_tag
-cargo test -p sbobino-desktop validate_manifest_asset_descriptor_rejects_checksum_mismatch
+cargo test --workspace
 popd >/dev/null
 
 if [[ -n "$APP_PATH" ]]; then

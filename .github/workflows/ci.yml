@@ -51,6 +51,10 @@ jobs:
         run: ../../scripts/check_release_versions.sh
       - name: Install dependencies
         run: npm ci
+      - name: Check skipped test declarations
+        run: ../../scripts/check_no_skipped_tests.sh
+      - name: Run frontend tests
+        run: npm test
       - name: Build frontend
         run: npm run build
 
