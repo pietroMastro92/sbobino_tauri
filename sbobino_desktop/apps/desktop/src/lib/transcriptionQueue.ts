@@ -29,6 +29,31 @@ export function replaceQueuedTranscriptionJob(
   return items.map((item) => (item.job_id === queuedJobId ? startedJob : item));
 }
 
+export function upsertQueueItem(
+  items: JobProgress[],
+  incoming: JobProgress,
+): JobProgress[] {
+  const existing = items.find((entry) => entry.job_id === incoming.job_id);
+  if (!existing) {
+    return [...items, incoming];
+  }
+  return items.map((entry) =>
+    entry.job_id === incoming.job_id ? incoming : entry,
+  );
+}
+
+export function shouldQueueTranscriptionStart({
+  activeJobId,
+  isStarting,
+  startInFlight,
+}: {
+  activeJobId: string | null;
+  isStarting: boolean;
+  startInFlight: boolean;
+}): boolean {
+  return Boolean(activeJobId || isStarting || startInFlight);
+}
+
 export function shouldFocusStartedTranscription({
   queuedPromotion,
   preserveCurrentArtifact,

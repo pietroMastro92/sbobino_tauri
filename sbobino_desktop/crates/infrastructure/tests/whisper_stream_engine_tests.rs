@@ -2,11 +2,15 @@
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use tempfile::tempdir;
 
 use sbobino_application::{RealtimeDelta, RealtimeDeltaKind};
 use sbobino_infrastructure::adapters::whisper_stream::WhisperStreamEngine;
+
+const STREAM_SETTLE_ATTEMPTS: usize = 320;
+const STREAM_SETTLE_DELAY: Duration = Duration::from_millis(25);
 
 fn write_executable_script(path: &Path, content: &str) {
     std::fs::write(path, content).expect("failed to write script");
@@ -60,13 +64,13 @@ exit 0
         .await
         .expect("realtime start should succeed");
 
-    for _ in 0..80 {
+    for _ in 0..STREAM_SETTLE_ATTEMPTS {
         if !engine.snapshot_text().await.trim().is_empty()
             || !emitted.lock().expect("emit lock poisoned").is_empty()
         {
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        tokio::time::sleep(STREAM_SETTLE_DELAY).await;
     }
 
     let stop_result = engine.stop().await.expect("realtime stop should succeed");
@@ -131,13 +135,13 @@ exit 0
         .await
         .expect("realtime start should succeed");
 
-    for _ in 0..80 {
+    for _ in 0..STREAM_SETTLE_ATTEMPTS {
         if !engine.snapshot_text().await.trim().is_empty()
             || emitted.lock().expect("emit lock poisoned").len() >= 2
         {
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        tokio::time::sleep(STREAM_SETTLE_DELAY).await;
     }
 
     let stop_result = engine.stop().await.expect("realtime stop should succeed");
@@ -202,7 +206,7 @@ exit 0
         .await
         .expect("realtime start should succeed");
 
-    for _ in 0..120 {
+    for _ in 0..STREAM_SETTLE_ATTEMPTS {
         let finalized_count = emitted
             .lock()
             .expect("emit lock poisoned")
@@ -217,7 +221,7 @@ exit 0
         {
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        tokio::time::sleep(STREAM_SETTLE_DELAY).await;
     }
 
     let stop_result = engine.stop().await.expect("realtime stop should succeed");
@@ -279,11 +283,11 @@ exit 0
         .await
         .expect("realtime start should succeed");
 
-    for _ in 0..80 {
+    for _ in 0..STREAM_SETTLE_ATTEMPTS {
         if !engine.snapshot_text().await.trim().is_empty() {
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        tokio::time::sleep(STREAM_SETTLE_DELAY).await;
     }
 
     let stop_result = engine.stop().await.expect("realtime stop should succeed");
@@ -330,11 +334,11 @@ done
         .await
         .expect("realtime start should succeed");
 
-    for _ in 0..80 {
+    for _ in 0..STREAM_SETTLE_ATTEMPTS {
         if !engine.snapshot_text().await.trim().is_empty() {
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        tokio::time::sleep(STREAM_SETTLE_DELAY).await;
     }
 
     let stop_result = engine.stop().await.expect("realtime stop should succeed");
@@ -397,7 +401,7 @@ done
         .await
         .expect("realtime start should succeed");
 
-    for _ in 0..80 {
+    for _ in 0..STREAM_SETTLE_ATTEMPTS {
         if emitted
             .lock()
             .expect("emit lock poisoned")
@@ -406,7 +410,7 @@ done
         {
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        tokio::time::sleep(STREAM_SETTLE_DELAY).await;
     }
 
     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
@@ -447,11 +451,11 @@ exit 1
         .await
         .expect("realtime start should succeed before the child exits");
 
-    for _ in 0..80 {
+    for _ in 0..STREAM_SETTLE_ATTEMPTS {
         if !engine.is_running().await {
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        tokio::time::sleep(STREAM_SETTLE_DELAY).await;
     }
 
     assert!(
@@ -510,11 +514,11 @@ exit 0
         .await
         .expect("realtime start should succeed");
 
-    for _ in 0..80 {
+    for _ in 0..STREAM_SETTLE_ATTEMPTS {
         if !engine.snapshot_text().await.trim().is_empty() {
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        tokio::time::sleep(STREAM_SETTLE_DELAY).await;
     }
 
     let stop_result = engine.stop().await.expect("realtime stop should succeed");

@@ -259,7 +259,7 @@ import sys
 
 root = pathlib.Path(sys.argv[1]) / "python"
 python = root / "bin" / "python3"
-host_prefixes = ("/opt/homebrew", "/usr/local")
+host_prefixes = ("/opt/homebrew", "/usr/local", "/Library/Frameworks")
 if not python.is_file():
     raise SystemExit(f"Pyannote runtime asset is missing expected binary: {python}")
 
@@ -439,7 +439,7 @@ probe = subprocess.run(
     [
         str(python),
         "-c",
-        "import collections.abc,ctypes,csv,encodings,traceback,types; import torch; from pyannote.audio import Pipeline; print('ok')",
+        "import collections.abc,ctypes,csv,encodings,ssl,sqlite3,traceback,types; import torch; from pyannote.audio import Pipeline; print('ok')",
     ],
     stdout=subprocess.PIPE,
     stderr=subprocess.STDOUT,
@@ -501,7 +501,7 @@ PY
     fi
 
     local bad_refs
-    bad_refs=$(otool -L "$candidate" | tail -n +2 | awk '{print $1}' | grep -E '^(/opt/homebrew|/usr/local)' || true)
+    bad_refs=$(otool -L "$candidate" | tail -n +2 | awk '{print $1}' | grep -E '^(/opt/homebrew|/usr/local|/Library/Frameworks)' || true)
     if [[ -n "$bad_refs" ]]; then
       echo "$binary still links against non-portable host paths:" >&2
       printf ' - %s\n' $bad_refs >&2

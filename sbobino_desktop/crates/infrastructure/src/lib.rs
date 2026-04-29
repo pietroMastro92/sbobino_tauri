@@ -102,6 +102,8 @@ pub struct ManagedPyannoteStatus {
     pub reason_code: String,
     pub message: String,
     pub updated_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validated_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1426,10 +1428,17 @@ impl RuntimeTranscriptionFactory {
         let runtime_dir = self.managed_pyannote_runtime_dir();
         std::fs::create_dir_all(&runtime_dir)
             .map_err(|e| format!("failed to create pyannote runtime directory: {e}"))?;
+        let reason_code = reason_code.trim().to_string();
+        let now = Utc::now().to_rfc3339();
         let status = ManagedPyannoteStatus {
+            validated_at: if reason_code == "ok" {
+                Some(now.clone())
+            } else {
+                None
+            },
             reason_code: reason_code.trim().to_string(),
             message: message.trim().to_string(),
-            updated_at: Utc::now().to_rfc3339(),
+            updated_at: now,
         };
         let body = serde_json::to_string_pretty(&status)
             .map_err(|e| format!("failed to serialize pyannote status: {e}"))?;
@@ -1612,6 +1621,15 @@ impl RuntimeTranscriptionFactory {
                 // Skip bundled overrides that still reference an external Python.framework.
                 // A stale or machine-specific bundled runtime must not overwrite a valid managed install.
                 if pyannote_external_framework_reference(&source).is_none() {
+                    let destination = self.managed_pyannote_python_dir();
+                    if destination.exists() {
+                        std::fs::remove_dir_all(&destination).map_err(|e| {
+                            format!(
+                                "failed to remove stale pyannote runtime at '{}': {e}",
+                                destination.display()
+                            )
+                        })?;
+                    }
                     copy_directory_recursive(&source, &self.managed_pyannote_python_dir())
                         .map_err(|e| {
                             format!(
@@ -1722,6 +1740,10 @@ impl RuntimeTranscriptionFactory {
             .as_ref()
             .map(|value| value.reason_code.trim().to_string())
             .unwrap_or_default();
+        let status_validated_ready = status
+            .as_ref()
+            .and_then(|value| value.validated_at.as_deref())
+            .is_some_and(|value| !value.trim().is_empty());
 
         let status_override = status.as_ref().and_then(|value| {
             let code = value.reason_code.trim();
@@ -1745,7 +1767,8 @@ impl RuntimeTranscriptionFactory {
             && model_installed
             && cached_runtime_layout_ready
             && manifest_matches_host
-            && status_reason_code == "ok";
+            && status_reason_code == "ok"
+            && status_validated_ready;
         let runtime_validation_error = if mode == RuntimeHealthMode::Full
             && runtime_installed
             && !should_trust_cached_ready_status
@@ -1780,6 +1803,7 @@ impl RuntimeTranscriptionFactory {
         }
 
         if status_override.is_some()
+            && mode == RuntimeHealthMode::Full
             && runtime_installed
             && model_installed
             && runtime_validation_error.is_none()
@@ -1848,6 +1872,24 @@ impl RuntimeTranscriptionFactory {
             )
         } else if let Some(error) = runtime_validation_error {
             (false, "pyannote_repair_required".to_string(), error)
+        } else if mode == RuntimeHealthMode::Preflight
+            && runtime_installed
+            && model_installed
+            && cached_runtime_layout_ready
+            && manifest_matches_host
+        {
+            let (reason_code, message) = if status_reason_code == "ok" {
+                (
+                    "pyannote_validation_required",
+                    "Pyannote runtime needs validation before speaker diarization can be used.",
+                )
+            } else {
+                (
+                    "pyannote_repair_required",
+                    "Pyannote installation status is incomplete. Validate or repair it from Settings > Local Models.",
+                )
+            };
+            (false, reason_code.to_string(), message.to_string())
         } else if let Some(manifest) = manifest.as_ref() {
             if !pyannote_runtime_arch_matches_host(manifest.runtime_arch.trim()) {
                 (
@@ -1872,6 +1914,15 @@ impl RuntimeTranscriptionFactory {
                     ),
                 )
             } else {
+                if mode == RuntimeHealthMode::Full
+                    && status_reason_code == "ok"
+                    && !status_validated_ready
+                {
+                    let _ = self.write_managed_pyannote_status(
+                        "ok",
+                        "Pyannote diarization runtime is ready.",
+                    );
+                }
                 (
                     true,
                     "ok".to_string(),
@@ -3186,7 +3237,9 @@ fn pyannote_torchcodec_dir(runtime_root: &Path) -> Option<PathBuf> {
 }
 
 fn is_host_managed_reference(value: &str) -> bool {
-    value.starts_with("/opt/homebrew") || value.starts_with("/usr/local")
+    value.starts_with("/opt/homebrew")
+        || value.starts_with("/usr/local")
+        || value.starts_with("/Library/Frameworks")
 }
 
 fn pyannote_native_binary_paths(runtime_root: &Path) -> Vec<PathBuf> {
@@ -3775,7 +3828,7 @@ fn pyannote_runtime_validation_script() -> &'static str {
     concat!(
         "import sys, traceback\n",
         "try:\n",
-        "    import collections.abc, ctypes, csv, encodings, traceback as _traceback, types\n",
+        "    import collections.abc, ctypes, csv, encodings, ssl, sqlite3, traceback as _traceback, types\n",
         "    import torch\n",
         "    from pyannote.audio import Pipeline\n",
         "except Exception:\n",
@@ -4157,6 +4210,48 @@ mod tests {
     }
 
     #[test]
+    fn runtime_health_does_not_trust_legacy_unvalidated_pyannote_ok_status() {
+        let (_temp, factory) = build_factory();
+        persist_enabled_diarization(&factory);
+
+        write_executable_file(
+            &factory
+                .managed_pyannote_python_dir()
+                .join("bin")
+                .join("python3"),
+            "#!/bin/sh\nif [ \"$1\" = \"--help\" ]; then\n  exit 0\nfi\nexit 1\n",
+        );
+        write_fake_pyannote_stdlib(&factory.managed_pyannote_python_dir(), "python3.11");
+        let model_dir = factory.managed_pyannote_model_dir();
+        std::fs::create_dir_all(&model_dir).expect("model dir should exist");
+        std::fs::write(model_dir.join("config.yaml"), "name: test\n").expect("config should write");
+        factory
+            .write_managed_pyannote_manifest(&ManagedPyannoteManifest {
+                source: "release_asset".to_string(),
+                app_version: env!("CARGO_PKG_VERSION").to_string(),
+                compat_level: PYANNOTE_COMPAT_LEVEL,
+                runtime_asset: "pyannote-runtime-macos-aarch64.zip".to_string(),
+                runtime_sha256: "abc".to_string(),
+                model_asset: "pyannote-model-community-1.zip".to_string(),
+                model_sha256: "def".to_string(),
+                runtime_arch: super::target_triple_suffix().to_string(),
+                installed_at: "2026-03-13T00:00:00Z".to_string(),
+            })
+            .expect("manifest should write");
+        std::fs::write(
+            factory.managed_pyannote_status_path(),
+            r#"{"reason_code":"ok","message":"ready","updated_at":"2026-03-13T00:00:00Z"}"#,
+        )
+        .expect("legacy status should write");
+
+        let health = factory
+            .runtime_health()
+            .expect("runtime health should load");
+        assert!(!health.pyannote.ready);
+        assert_eq!(health.pyannote.reason_code, "pyannote_repair_required");
+    }
+
+    #[test]
     fn runtime_health_accepts_legacy_macos_arch_label_when_otherwise_ready() {
         let (_temp, factory) = build_factory();
         persist_enabled_diarization(&factory);
@@ -4308,6 +4403,56 @@ mod tests {
             .managed_pyannote_model_dir()
             .join("config.yaml")
             .is_file());
+    }
+
+    #[test]
+    fn bundled_pyannote_override_replaces_stale_invalid_python_tree() {
+        let (_temp, factory, resources_dir) = build_dev_factory_with_bundle_resources();
+        persist_enabled_diarization(&factory);
+
+        let bundled_python = resources_dir
+            .join("pyannote")
+            .join("python")
+            .join(target_triple_suffix());
+        write_executable_file(
+            &bundled_python.join("bin").join("python3"),
+            "#!/bin/sh\nexit 0\n",
+        );
+        write_fake_pyannote_stdlib(&bundled_python, "python3.11");
+        std::fs::create_dir_all(resources_dir.join("pyannote").join("model"))
+            .expect("model directory should exist");
+        std::fs::write(
+            resources_dir
+                .join("pyannote")
+                .join("model")
+                .join("config.yaml"),
+            "name: bundled\n",
+        )
+        .expect("config should write");
+
+        let managed_python = factory.managed_pyannote_python_dir();
+        write_executable_file(
+            &managed_python.join("bin").join("python3"),
+            "#!/bin/sh\nexit 1\n",
+        );
+        write_fake_pyannote_stdlib(&managed_python, "python3.11");
+        let stale_native = managed_python
+            .join("lib")
+            .join("python3.11")
+            .join("lib-dynload")
+            .join("_tkinter.cpython-311-darwin.so");
+        std::fs::write(&stale_native, b"stale host-linked native module")
+            .expect("stale native module should write");
+
+        let health = factory
+            .runtime_health()
+            .expect("runtime health should load");
+        assert!(health.pyannote.ready);
+        assert_eq!(health.pyannote.reason_code, "ok");
+        assert!(
+            !stale_native.exists(),
+            "stale native modules must not survive bundled runtime repair"
+        );
     }
 
     #[test]
@@ -4919,6 +5064,9 @@ Load command 14
         assert!(super::is_host_managed_reference(
             "/usr/local/opt/ffmpeg/lib/libavutil.60.dylib"
         ));
+        assert!(super::is_host_managed_reference(
+            "/Library/Frameworks/Python.framework/Versions/3.11/lib/libssl.3.dylib"
+        ));
         assert!(!super::is_host_managed_reference(
             "@rpath/libavutil.60.dylib"
         ));
@@ -5139,7 +5287,7 @@ Load command 14
     fn pyannote_runtime_validation_script_has_indented_try_block() {
         let script = pyannote_runtime_validation_script();
         assert!(script.contains(
-            "try:\n    import collections.abc, ctypes, csv, encodings, traceback as _traceback, types\n"
+            "try:\n    import collections.abc, ctypes, csv, encodings, ssl, sqlite3, traceback as _traceback, types\n"
         ));
         assert!(script.contains("except Exception:\n    traceback.print_exc()\n"));
         assert!(script.ends_with("    raise\n"));

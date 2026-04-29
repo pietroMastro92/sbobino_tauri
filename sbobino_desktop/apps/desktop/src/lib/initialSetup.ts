@@ -49,6 +49,7 @@ const PYANNOTE_REPAIR_REASON_CODES = new Set([
   "pyannote_arch_mismatch",
   "pyannote_version_mismatch",
   "pyannote_repair_required",
+  "pyannote_validation_required",
   "pyannote_install_incomplete",
   "pyannote_checksum_invalid",
 ]);

@@ -138,6 +138,7 @@ impl SpeakerDiarizationEngine for PyannoteSpeakerDiarizationEngine {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        command.kill_on_drop(true);
         if let Some(path_env) = self.build_path_env() {
             command.env("PATH", path_env);
         }

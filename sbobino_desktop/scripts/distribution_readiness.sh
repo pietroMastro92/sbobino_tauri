@@ -264,7 +264,7 @@ import pathlib
 import subprocess
 
 root = pathlib.Path(os.environ["PYANNOTE_RUNTIME_ROOT"])
-host_prefixes = ("/opt/homebrew", "/usr/local")
+host_prefixes = ("/opt/homebrew", "/usr/local", "/Library/Frameworks")
 
 
 def parse_otool_dependencies(output: str) -> list[str]:
@@ -400,6 +400,8 @@ import collections.abc
 import ctypes
 import csv
 import encodings
+import ssl
+import sqlite3
 import traceback
 import types
 import torch

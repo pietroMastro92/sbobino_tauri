@@ -233,7 +233,7 @@ assert_torchcodec_runtime_is_portable() {
   local binary
   while IFS= read -r binary; do
     local host_refs
-    host_refs=$(otool -L "$binary" | tail -n +2 | awk '{print $1}' | grep -E '^(/opt/homebrew|/usr/local)' || true)
+    host_refs=$(otool -L "$binary" | tail -n +2 | awk '{print $1}' | grep -E '^(/opt/homebrew|/usr/local|/Library/Frameworks)' || true)
     if [[ -n "$host_refs" ]]; then
       echo "Torchcodec binary still links against host paths: $binary" >&2
       printf ' - %s\n' $host_refs >&2
@@ -244,7 +244,7 @@ assert_torchcodec_runtime_is_portable() {
     host_rpaths=$(otool -l "$binary" | awk '
       /LC_RPATH/ { flag=1; next }
       flag && /path / { print $2; flag=0 }
-    ' | grep -E '^(/opt/homebrew|/usr/local)' || true)
+    ' | grep -E '^(/opt/homebrew|/usr/local|/Library/Frameworks)' || true)
     if [[ -n "$host_rpaths" ]]; then
       echo "Torchcodec binary still exposes host rpaths: $binary" >&2
       printf ' - %s\n' $host_rpaths >&2
@@ -277,7 +277,7 @@ from pathlib import Path
 
 runtime_root = Path(sys.argv[1]).resolve()
 embedded_dir = runtime_root / "lib" / "embedded-dylibs"
-host_prefixes = ("/opt/homebrew", "/usr/local")
+host_prefixes = ("/opt/homebrew", "/usr/local", "/Library/Frameworks")
 
 
 def run_command(args: list[str], *, check: bool = True) -> str:
@@ -462,7 +462,7 @@ import sys
 from pathlib import Path
 
 runtime_root = Path(sys.argv[1]).resolve()
-host_prefixes = ("/opt/homebrew", "/usr/local")
+host_prefixes = ("/opt/homebrew", "/usr/local", "/Library/Frameworks")
 
 
 def parse_otool_dependencies(output: str) -> list[str]:
@@ -781,6 +781,8 @@ env -i \
 import ctypes
 import csv
 import encodings
+import ssl
+import sqlite3
 from pyannote.audio import Pipeline
 Pipeline.from_pretrained(r"$STAGE_MODEL_DIR")
 print("pyannote pipeline loaded successfully")

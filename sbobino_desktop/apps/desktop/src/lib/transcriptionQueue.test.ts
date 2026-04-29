@@ -6,6 +6,8 @@ import {
   isQueuedTranscriptionJobId,
   replaceQueuedTranscriptionJob,
   shouldFocusStartedTranscription,
+  shouldQueueTranscriptionStart,
+  upsertQueueItem,
 } from "./transcriptionQueue";
 
 describe("transcriptionQueue helpers", () => {
@@ -37,6 +39,50 @@ describe("transcriptionQueue helpers", () => {
       startedJob,
       buildQueuedTranscriptionJob("queued-start:2", "Queued transcription job."),
     ]);
+  });
+
+  it("appends new jobs in FIFO order and replaces existing jobs in place", () => {
+    const first = buildQueuedTranscriptionJob("queued-start:1", "Queued A");
+    const second = buildQueuedTranscriptionJob("queued-start:2", "Queued B");
+    const updatedFirst = {
+      ...first,
+      stage: "preparing_audio" as const,
+      message: "Preparing A",
+      percentage: 12,
+    };
+
+    expect(upsertQueueItem(upsertQueueItem([], first), second)).toEqual([
+      first,
+      second,
+    ]);
+    expect(upsertQueueItem([first, second], updatedFirst)).toEqual([
+      updatedFirst,
+      second,
+    ]);
+  });
+
+  it("queues starts while a backend start request is synchronously in flight", () => {
+    expect(
+      shouldQueueTranscriptionStart({
+        activeJobId: null,
+        isStarting: false,
+        startInFlight: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldQueueTranscriptionStart({
+        activeJobId: "job-1",
+        isStarting: false,
+        startInFlight: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldQueueTranscriptionStart({
+        activeJobId: null,
+        isStarting: false,
+        startInFlight: false,
+      }),
+    ).toBe(false);
   });
 
   it("focuses manual starts but keeps queued promotions in the background", () => {

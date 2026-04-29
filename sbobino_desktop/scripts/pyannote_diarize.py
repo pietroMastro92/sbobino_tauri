@@ -7,21 +7,21 @@ import wave
 from typing import Dict, List
 
 
-def resolve_device(requested: str):
+def resolve_device_candidates(requested: str):
     import torch
 
     value = (requested or "cpu").strip().lower()
     if value == "auto":
         if torch.backends.mps.is_available():
-            return torch.device("mps")
+            return [torch.device("mps"), torch.device("cpu")]
         if torch.cuda.is_available():
-            return torch.device("cuda")
-        return torch.device("cpu")
+            return [torch.device("cuda"), torch.device("cpu")]
+        return [torch.device("cpu")]
     if value == "mps" and torch.backends.mps.is_available():
-        return torch.device("mps")
+        return [torch.device("mps"), torch.device("cpu")]
     if value == "cuda" and torch.cuda.is_available():
-        return torch.device("cuda")
-    return torch.device("cpu")
+        return [torch.device("cuda"), torch.device("cpu")]
+    return [torch.device("cpu")]
 
 
 def resolve_annotation(diarization):
@@ -101,12 +101,27 @@ def main() -> int:
         sys.stderr.write(f"{error}\n")
         return 1
 
-    try:
-        pipeline = Pipeline.from_pretrained(args.model_path)
-        pipeline.to(resolve_device(args.device))
-        diarization = pipeline(load_wav_input(args.audio_path))
-    except Exception as error:
-        sys.stderr.write(f"pyannote inference failed: {error}\n")
+    input_payload = None
+    last_error = None
+    for device in resolve_device_candidates(args.device):
+        try:
+            if input_payload is None:
+                input_payload = load_wav_input(args.audio_path)
+            pipeline = Pipeline.from_pretrained(args.model_path)
+            pipeline.to(device)
+            diarization = pipeline(input_payload)
+            break
+        except Exception as error:
+            last_error = error
+            if str(device) != "cpu":
+                sys.stderr.write(
+                    f"pyannote inference on {device} failed; retrying on cpu: {error}\n"
+                )
+                continue
+            sys.stderr.write(f"pyannote inference failed: {error}\n")
+            return 1
+    else:
+        sys.stderr.write(f"pyannote inference failed: {last_error}\n")
         return 1
 
     annotation = resolve_annotation(diarization)

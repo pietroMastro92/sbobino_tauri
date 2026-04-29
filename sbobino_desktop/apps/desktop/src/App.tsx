@@ -14,6 +14,7 @@ import {
   save,
 } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   check as checkAppUpdate,
   type Update as TauriUpdate,
@@ -187,6 +188,8 @@ import {
   isQueuedTranscriptionJobId,
   replaceQueuedTranscriptionJob,
   shouldFocusStartedTranscription,
+  shouldQueueTranscriptionStart,
+  upsertQueueItem,
 } from "./lib/transcriptionQueue";
 import { stripAnsi } from "./lib/ansiText";
 import { buildConfidenceTranscript } from "./lib/whisperConfidence";
@@ -571,6 +574,7 @@ const PYANNOTE_AUTO_ACTION_FAILURE_REASON_CODES = new Set([
   "pyannote_runtime_missing",
   "pyannote_model_missing",
   "pyannote_repair_required",
+  "pyannote_validation_required",
   "pyannote_version_mismatch",
   "pyannote_arch_mismatch",
 ]);
@@ -1538,19 +1542,6 @@ function readSegmentEndSeconds(
   return null;
 }
 
-function pushOrReplaceQueueItem(
-  items: JobProgress[],
-  incoming: JobProgress,
-): JobProgress[] {
-  const existing = items.find((entry) => entry.job_id === incoming.job_id);
-  if (!existing) {
-    return [incoming, ...items];
-  }
-  return items.map((entry) =>
-    entry.job_id === incoming.job_id ? incoming : entry,
-  );
-}
-
 function formatShortDuration(seconds: number): string {
   const mm = String(Math.floor(seconds / 60));
   const ss = String(seconds % 60).padStart(2, "0");
@@ -2353,6 +2344,7 @@ type DetailToolbarProps = {
   showRetranscribe?: boolean;
   isStartingTrimmedAudioRetranscription?: boolean;
   onRetranscribeTrimmedAudio?: () => void;
+  updateButton?: JSX.Element | null;
   realtimeControls?: {
     state: "idle" | "running" | "paused";
     isStopping: boolean;
@@ -2387,6 +2379,7 @@ function DetailToolbar({
   showRetranscribe,
   isStartingTrimmedAudioRetranscription,
   onRetranscribeTrimmedAudio,
+  updateButton,
   realtimeControls,
 }: DetailToolbarProps): JSX.Element {
   const { t } = useTranslation();
@@ -2462,6 +2455,7 @@ function DetailToolbar({
         </div>
 
         <div className="detail-toolbar-actions">
+          {updateButton}
           {realtimeControls ? (
             <>
               <button
@@ -2998,6 +2992,7 @@ export function App({
       initialBootstrap?.setupReport?.runtime_health ??
       null,
   );
+  const [isWindowFullscreen, setIsWindowFullscreen] = useState(false);
   const currentBuildVersion =
     runtimeHealth?.app_version ?? initialBootstrap?.setupReport?.build_version ?? null;
   const platformIsAppleSilicon =
@@ -3176,6 +3171,7 @@ export function App({
     useState<ActiveDetailContext | null>(null);
 
   const activeJobIdRef = useRef<string | null>(activeJobId);
+  const transcriptionStartInFlightRef = useRef(false);
   const segmentElementMapRef = useRef<Map<number, HTMLElement>>(new Map());
   const windowFrameRef = useRef<HTMLElement | null>(null);
   const detailLayoutRef = useRef<HTMLDivElement | null>(null);
@@ -3373,6 +3369,48 @@ export function App({
   useEffect(() => {
     focusedJobIdRef.current = focusedJobId;
   }, [focusedJobId]);
+
+  useEffect(() => {
+    const appWindow = getCurrentWindow();
+    let disposed = false;
+    let unlistenResize: (() => void) | null = null;
+
+    const refreshFullscreenState = () => {
+      void appWindow
+        .isFullscreen()
+        .then((fullscreen) => {
+          if (!disposed) {
+            setIsWindowFullscreen(fullscreen);
+          }
+        })
+        .catch(() => {
+          if (!disposed) {
+            setIsWindowFullscreen(false);
+          }
+        });
+    };
+
+    refreshFullscreenState();
+    window.addEventListener("focus", refreshFullscreenState);
+    window.addEventListener("resize", refreshFullscreenState);
+    void appWindow
+      .onResized(() => refreshFullscreenState())
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+        } else {
+          unlistenResize = unlisten;
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      disposed = true;
+      window.removeEventListener("focus", refreshFullscreenState);
+      window.removeEventListener("resize", refreshFullscreenState);
+      unlistenResize?.();
+    };
+  }, []);
 
   useEffect(() => {
     if (!settings) {
@@ -4306,7 +4344,7 @@ export function App({
         };
         updateTranscriptionJobSnapshot(event.job_id, { progress: queueEvent });
         setQueueItems((previous) =>
-          pushOrReplaceQueueItem(previous, queueEvent),
+          upsertQueueItem(previous, queueEvent),
         );
         if (event.job_id === activeJobIdRef.current) {
           clearStartupWatchdog();
@@ -4676,6 +4714,7 @@ export function App({
                 : event.reason_code === "pyannote_runtime_missing" ||
                     event.reason_code === "pyannote_model_missing" ||
                     event.reason_code === "pyannote_repair_required" ||
+                    event.reason_code === "pyannote_validation_required" ||
                     event.reason_code === "pyannote_version_mismatch" ||
                     event.reason_code === "pyannote_arch_mismatch"
                   ? t("settings.pyannote.desc")
@@ -4693,6 +4732,9 @@ export function App({
 
         if (event.state === "completed") {
           void refreshProvisioningModels();
+          if (wasPyannoteProvisioning && !pyannoteProvisioningFailed) {
+            void refreshRuntimeHealth();
+          }
         }
       });
       if (unmounted) {
@@ -7087,10 +7129,31 @@ export function App({
       },
     }));
 
-    if (!previousDiarization.enabled && nextDiarization.enabled) {
+    if (
+      !previousDiarization.enabled &&
+      nextDiarization.enabled &&
+      !pyannoteProvisioningActiveRef.current
+    ) {
       void maybeStartPyannoteBackgroundAction("enable_diarization");
     }
     void refreshRuntimeHealth();
+  }
+
+  function preferredPyannoteDeviceForEnable(
+    current: SpeakerDiarizationSettings,
+  ): SpeakerDiarizationSettings["device"] {
+    if (platformIsAppleSilicon && current.device === "cpu") {
+      return "auto";
+    }
+    return current.device || (platformIsAppleSilicon ? "auto" : "cpu");
+  }
+
+  async function enablePyannoteForTranscriptions(): Promise<void> {
+    await onPatchSpeakerDiarizationSettings((current) => ({
+      ...current,
+      enabled: true,
+      device: preferredPyannoteDeviceForEnable(current),
+    }));
   }
 
   async function onPatchSpeakerDiarizationPreferences(
@@ -7188,8 +7251,20 @@ export function App({
           setActiveDetailContext(null);
         }
       };
+      const reportStartFailure = (
+        message: string,
+        context: ActiveDetailContext | null = nextDetailContext,
+      ) => {
+        if (!shouldFocusOnStart) {
+          setError(message);
+          return;
+        }
+        clearOptimisticFocus();
+        presentTranscriptionFailure(message, context);
+      };
 
       clearStartupWatchdog();
+      transcriptionStartInFlightRef.current = true;
       setIsStarting(true);
       setError(null);
       setTrimRetranscriptionError(null);
@@ -7198,11 +7273,7 @@ export function App({
           request.trimValidationSnapshot ?? null,
         );
         if (trimValidationError) {
-          if (preserveCurrentArtifact) {
-            setError(trimValidationError);
-          } else {
-            presentTranscriptionFailure(trimValidationError, nextDetailContext);
-          }
+          reportStartFailure(trimValidationError);
           if (options?.queuedJobId) {
             setQueueItems((previous) =>
               previous.filter((entry) => entry.job_id !== options.queuedJobId),
@@ -7248,8 +7319,7 @@ export function App({
           if (preserveCurrentArtifact) {
             setError(failureMessage);
           } else {
-            clearOptimisticFocus();
-            presentTranscriptionFailure(failureMessage, nextDetailContext);
+            reportStartFailure(failureMessage);
           }
           if (options?.queuedJobId) {
             setQueueItems((previous) =>
@@ -7271,15 +7341,7 @@ export function App({
               "Pyannote install failed",
               pyannoteError,
             );
-            if (preserveCurrentArtifact) {
-              setError(failureMessage);
-            } else {
-              clearOptimisticFocus();
-              presentTranscriptionFailure(
-                failureMessage,
-                nextDetailContext,
-              );
-            }
+            reportStartFailure(failureMessage);
             if (options?.queuedJobId) {
               setQueueItems((previous) =>
                 previous.filter((entry) => entry.job_id !== options.queuedJobId),
@@ -7338,12 +7400,7 @@ export function App({
               state: "error",
               message: failureMessage,
             });
-            if (preserveCurrentArtifact) {
-              setError(failureMessage);
-            } else {
-              clearOptimisticFocus();
-              presentTranscriptionFailure(failureMessage, nextDetailContext);
-            }
+            reportStartFailure(failureMessage);
             if (options?.queuedJobId) {
               setQueueItems((previous) =>
                 previous.filter((entry) => entry.job_id !== options.queuedJobId),
@@ -7420,7 +7477,7 @@ export function App({
               previous.filter((entry) => entry.job_id !== options.queuedJobId),
             );
           }
-          if (preserveCurrentArtifact) {
+          if (!shouldFocusOnStart) {
             setError(earlyFailure);
           } else {
             setFocusedJobId(null);
@@ -7450,12 +7507,12 @@ export function App({
             );
             return replaced.some((entry) => entry.job_id === job_id)
               ? replaced
-              : pushOrReplaceQueueItem(replaced, startedJob);
+              : upsertQueueItem(replaced, startedJob);
           }
           if (previous.some((entry) => entry.job_id === job_id)) {
             return previous;
           }
-          return pushOrReplaceQueueItem(previous, startedJob);
+          return upsertQueueItem(previous, startedJob);
         });
         setActiveJobTitle(requestedTitle ?? fileLabel(targetFile));
 
@@ -7509,17 +7566,9 @@ export function App({
             previous.filter((entry) => entry.job_id !== options.queuedJobId),
           );
         }
-        if (preserveCurrentArtifact) {
-          setError(formatAppError(startError));
-        } else {
-          clearOptimisticFocus();
-          setActiveDetailContext(null);
-          presentTranscriptionFailure(
-            formatAppError(startError),
-            nextDetailContext,
-          );
-        }
+        reportStartFailure(formatAppError(startError));
       } finally {
+        transcriptionStartInFlightRef.current = false;
         setIsStarting(false);
       }
     },
@@ -7586,7 +7635,13 @@ export function App({
       setTrimRegions([]);
     }
 
-    if (activeJobId || isStarting) {
+    if (
+      shouldQueueTranscriptionStart({
+        activeJobId: activeJobIdRef.current,
+        isStarting,
+        startInFlight: transcriptionStartInFlightRef.current,
+      })
+    ) {
       const queueId = buildQueuedTranscriptionJobId(
         ++queuedTranscriptionSequenceRef.current,
       );
@@ -7595,7 +7650,7 @@ export function App({
         { ...request, queueId },
       ]);
       setQueueItems((previous) =>
-        pushOrReplaceQueueItem(
+        upsertQueueItem(
           previous,
           buildQueuedTranscriptionJob(
             queueId,
@@ -7612,7 +7667,14 @@ export function App({
   }
 
   useEffect(() => {
-    if (activeJobId || isStarting || queuedTranscriptionStarts.length === 0) {
+    if (
+      shouldQueueTranscriptionStart({
+        activeJobId: activeJobIdRef.current,
+        isStarting,
+        startInFlight: transcriptionStartInFlightRef.current,
+      }) ||
+      queuedTranscriptionStarts.length === 0
+    ) {
       return;
     }
 
@@ -9327,6 +9389,7 @@ export function App({
             ),
       }));
       await provisioningInstallPyannote(force);
+      await enablePyannoteForTranscriptions();
     } catch (installError) {
       pyannoteProvisioningActiveRef.current = false;
       setProvisioning((previous) => ({
@@ -10352,22 +10415,23 @@ export function App({
             focusedQueueJob,
             progress,
           );
+          const statusMessage =
+            jobProgress?.message ??
+            t(
+              "detail.transcriptionPreparing",
+              "Preparing transcription...",
+            );
+          const statusDescription =
+            percentage > 0
+              ? `${statusMessage} (${formatProgressPercentageLabel(percentage)})`
+              : statusMessage;
           return (
-            <div className="detail-empty transcription-status-view">
-              <div className="center-empty-icon">
-                <ProgressRing percentage={percentage} size={32} />
-              </div>
-              <h2>
-                {formatJobStageLabel(jobProgress?.stage ?? "preparing_audio")}
-              </h2>
-              <p>
-                {jobProgress?.message ??
-                  t(
-                    "detail.transcriptionPreparing",
-                    "Preparing transcription...",
-                  )}
-              </p>
-            </div>
+            <LoadingAnimation
+              icon={AudioLines}
+              title={formatJobStageLabel(jobProgress?.stage ?? "preparing_audio")}
+              description={statusDescription}
+              variant="transcribing"
+            />
           );
         }
         return (
@@ -12083,6 +12147,13 @@ export function App({
 
     if (!activeArtifact) {
       if (focusedJobId) {
+        const snapshot =
+          transcriptionJobSnapshotsRef.current.get(focusedJobId) ?? null;
+        const focusedJobProgress =
+          focusedQueueJob ??
+          (progress?.job_id === focusedJobId ? progress : null) ??
+          snapshot?.progress ??
+          null;
         return (
           <div className="inspector-body">
             <button
@@ -12099,7 +12170,7 @@ export function App({
             <div className="inspector-block">
               <h4>{t("inspector.transcribingTitle")}</h4>
               <p className="muted">
-                {progress?.message ??
+                {focusedJobProgress?.message ??
                   t(
                     "inspector.whisperRunning",
                     "Running Whisper transcription...",
@@ -12193,6 +12264,7 @@ export function App({
             isStartingTrimmedAudioRetranscription={
               isTrimRetranscriptionStarting
             }
+            updateButton={renderCompactUpdateButton()}
             onRetranscribeTrimmedAudio={() => {
               if (effectiveTrimmedAudioDraft) {
                 void onStartTranscription(effectiveTrimmedAudioDraft.path, {
@@ -12536,94 +12608,48 @@ export function App({
     );
   }
 
-  const showGlobalUpdateBanner = shouldShowUpdateBanner(
+  const updatePromptVisible = shouldShowUpdateBanner(
     updateInfo,
     installingUpdate,
     checkingUpdates,
     dismissedUpdateVersion,
   );
 
-  function renderGlobalUpdateBanner(): JSX.Element | null {
-    if (!showGlobalUpdateBanner) {
+  function renderCompactUpdateButton(): JSX.Element | null {
+    if (!updatePromptVisible || !updateInfo?.has_update) {
       return null;
     }
 
-    const latestVersion = updateInfo?.latest_version ?? "";
-    const bannerTitle = checkingUpdates
-      ? t("updates.banner.checkingTitle", "Checking for updates")
-      : installingUpdate
-        ? t("updates.banner.installingTitle", "Installing update")
-        : updateInfo?.has_update
-          ? t("updates.banner.availableTitle", "Update {version} available", {
-              version: latestVersion,
-            })
-          : t("updates.banner.readyTitle", "Updater active");
-    const bannerMessage = updateStatusMessage ??
-      (checkingUpdates
-        ? t(
-            "updates.banner.checkingBody",
-            "Sbobino is checking for a newer version in the background.",
-          )
-        : installingUpdate
-          ? t(
-              "updates.banner.installingBody",
-              "Installing the update you started. The app will restart when it finishes.",
-            )
-          : updateInfo?.has_update
-            ? t(
-                "updates.banner.availableBody",
-                "Install version {version} now or download it manually.",
-                { version: latestVersion },
-              )
-            : "");
-    // The banner is informational only. Dismissing it is always allowed —
-    // even while a user-initiated install is in progress — so the user can
-    // hide the visual without cancelling the download. A separate explicit
-    // "Install" button is the only way to start the download/install flow.
-    const canDismissBanner = Boolean(updateInfo?.has_update);
+    const label = installingUpdate
+      ? t("updates.topbar.installing", "Updating...")
+      : t("updates.topbar.update", "Update");
 
-    return (
-      <div
-        className={`app-update-banner ${installingUpdate ? "is-progress" : "is-available"}`}
-      >
-        <div className="app-update-banner-copy">
-          <strong>{bannerTitle}</strong>
-          <span>{bannerMessage}</span>
-        </div>
-        <div className="app-update-banner-actions">
-          {updateInfo?.has_update && nativeUpdate ? (
-            <button
-              className="primary-button"
-              onClick={() => void onInstallUpdate()}
-              disabled={installingUpdate || checkingUpdates}
-            >
-              {installingUpdate
-                ? t("updates.banner.installingAction", "Installing...")
-                : t("settings.general.downloadAndInstall", "Download & Install")}
-            </button>
-          ) : null}
-          {updateInfo?.has_update && updateInfo.download_url ? (
-            <a
-              className="secondary-button"
-              href={updateInfo.download_url}
-              target="_blank"
-              rel="noreferrer"
-            >
-              {t("settings.general.manualDownload", "Manual Download")}
-            </a>
-          ) : null}
-          {canDismissBanner ? (
-            <button
-              className="update-banner-close"
-              onClick={dismissUpdateBanner}
-              title={t("action.dismiss", "Dismiss")}
-            >
-              <X size={14} />
-            </button>
-          ) : null}
-        </div>
-      </div>
-    );
+    if (nativeUpdate) {
+      return (
+        <button
+          className="topbar-update-button"
+          onClick={() => void onInstallUpdate()}
+          disabled={installingUpdate || checkingUpdates}
+        >
+          {label}
+        </button>
+      );
+    }
+
+    if (updateInfo.download_url) {
+      return (
+        <a
+          className="topbar-update-button"
+          href={updateInfo.download_url}
+          target="_blank"
+          rel="noreferrer"
+        >
+          {t("updates.topbar.update", "Update")}
+        </a>
+      );
+    }
+
+    return null;
   }
 
   function renderSettingsGeneral(): JSX.Element {
@@ -13790,6 +13816,9 @@ export function App({
                   void onPatchSpeakerDiarizationSettings((current) => ({
                     ...current,
                     enabled: !current.enabled,
+                    device: !current.enabled
+                      ? preferredPyannoteDeviceForEnable(current)
+                      : current.device,
                   }));
                 }}
               >
@@ -13808,7 +13837,7 @@ export function App({
               <small>
                 {t(
                   "settings.transcription.pyannoteDeviceDesc",
-                  "Use CPU by default for best Intel/Apple Silicon compatibility. `auto` will try MPS when available in the managed local runtime.",
+                  "Auto uses Apple acceleration when available and falls back to CPU when the managed local runtime needs it.",
                 )}
               </small>
             </div>
@@ -14372,6 +14401,10 @@ export function App({
       );
     }
     const pyannoteHealth = runtimeHealth?.pyannote ?? provisioning.pyannote;
+    const speakerDiarization = sanitizeSpeakerDiarizationSettings(
+      settings.transcription.speaker_diarization ??
+        getDefaultSpeakerDiarizationSettings(),
+    );
     const runtimeBusy =
       provisioning.running &&
       provisioning.progress?.asset_kind === "speech_runtime";
@@ -14767,6 +14800,26 @@ export function App({
                   </span>
                   <code>{pyannoteHealth.source}</code>
                 </div>
+                <div className="settings-health-row">
+                  <span className="settings-health-label">
+                    {t("settings.pyannote.usage", "Transcriptions")}
+                  </span>
+                  <span
+                    className={
+                      speakerDiarization.enabled ? "kind-chip" : "missing-chip"
+                    }
+                  >
+                    {speakerDiarization.enabled
+                      ? t(
+                          "settings.pyannote.enabledForTranscriptions",
+                          "Enabled",
+                        )
+                      : t(
+                          "settings.pyannote.disabledForTranscriptions",
+                          "Disabled",
+                        )}
+                  </span>
+                </div>
               </div>
               <small className="muted">
                 {formatPyannoteHealthMessage(pyannoteHealth)}
@@ -14782,6 +14835,18 @@ export function App({
             >
               {t("settings.pyannote.install", "Install Pyannote")}
             </button>
+            {pyannoteHealth?.ready && !speakerDiarization.enabled ? (
+              <button
+                className="primary-button"
+                onClick={() => void enablePyannoteForTranscriptions()}
+                disabled={provisioning.running}
+              >
+                {t(
+                  "settings.pyannote.enableForTranscriptions",
+                  "Enable for Transcriptions",
+                )}
+              </button>
+            ) : null}
             <button
               className="secondary-button"
               onClick={() => void onInstallPyannote(true)}
@@ -16124,8 +16189,14 @@ export function App({
     return (
       <main className="settings-window-shell">
         <section className="settings-window-frame">
-          <header className="settings-window-header" data-tauri-drag-region />
-          {renderGlobalUpdateBanner()}
+          <header className="settings-window-header" data-tauri-drag-region>
+            <div
+              className="settings-window-drag-spacer"
+              data-tauri-drag-region
+              aria-hidden="true"
+            />
+            {renderCompactUpdateButton()}
+          </header>
           {renderSettings()}
           {error ? (
             <div className="error-banner settings-window-error">
@@ -16185,7 +16256,9 @@ export function App({
       <section
         ref={windowFrameRef}
         className={
-          leftSidebarOpen ? "window-frame" : "window-frame left-collapsed"
+          `${leftSidebarOpen ? "window-frame" : "window-frame left-collapsed"}${
+            isWindowFullscreen ? " is-fullscreen" : ""
+          }`
         }
         style={windowFrameStyle}
       >
@@ -16352,6 +16425,8 @@ export function App({
                 />
               </div>
 
+              {renderCompactUpdateButton()}
+
               {section === "home" ||
               section === "queue" ||
               section === "realtime" ? (
@@ -16446,7 +16521,6 @@ export function App({
             </header>
           ) : null}
 
-          {renderGlobalUpdateBanner()}
           <div className="main-content">{renderContent()}</div>
 
           {error ? (
