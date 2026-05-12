@@ -2426,7 +2426,7 @@ code {
 }
 
 .detail-body {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
   overflow: auto;
@@ -3863,13 +3863,32 @@ code {
 .detail-audio-stack {
   display: flex;
   flex-direction: column;
+  flex: 0 0 auto;
   gap: 8px;
+  min-height: max-content;
+  min-width: 0;
 }
 
 .detail-audio-player-group {
   display: flex;
   flex-direction: column;
+  flex: 0 0 auto;
   gap: 4px;
+  min-height: max-content;
+  min-width: 0;
+}
+
+.detail-main > .detail-audio-stack {
+  flex: 0 0 auto;
+}
+
+.detail-main > .detail-audio-stack .detail-audio-player-group {
+  flex: 0 0 auto;
+  min-height: max-content;
+}
+
+.detail-main > .detail-audio-stack .audio-player:not(.audio-player--trim) {
+  min-height: 66px;
 }
 
 .detail-audio-player-group--preview {

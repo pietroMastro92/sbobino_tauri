@@ -77,5 +77,17 @@ describe("theme consistency", () => {
     expect(extractBlock(cssSource, ".queue-progress > div")).toContain("var(--accent-strong)");
     expect(extractBlock(cssSource, ".audio-slider")).toContain("var(--accent)");
   });
-});
 
+  it("keeps the detail audio player reserved while the detail body absorbs resize", () => {
+    expect(extractBlock(cssSource, ".detail-body")).toContain("flex: 1 1 auto;");
+    expect(extractBlock(cssSource, ".detail-body")).toContain("min-height: 0;");
+    expect(extractBlock(cssSource, ".detail-body")).toContain("overflow: auto;");
+
+    expect(extractBlock(cssSource, ".detail-audio-stack")).toContain("flex: 0 0 auto;");
+    expect(extractBlock(cssSource, ".detail-audio-stack")).toContain("min-height: max-content;");
+    expect(extractBlock(cssSource, ".detail-main > .detail-audio-stack")).toContain("flex: 0 0 auto;");
+    expect(extractBlock(cssSource, ".detail-main > .detail-audio-stack .detail-audio-player-group")).toContain("flex: 0 0 auto;");
+    expect(extractBlock(cssSource, ".detail-main > .detail-audio-stack .detail-audio-player-group")).toContain("min-height: max-content;");
+    expect(extractBlock(cssSource, ".detail-main > .detail-audio-stack .audio-player:not(.audio-player--trim)")).toContain("min-height: 66px;");
+  });
+});

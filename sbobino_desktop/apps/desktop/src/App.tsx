@@ -230,7 +230,11 @@ import type {
   WorkspaceConfig,
   WhisperOptions,
 } from "./types";
-import { AudioPlayer, type TrimRegion } from "./components/AudioPlayer";
+import {
+  AudioPlayer,
+  type AudioSeekRequest,
+  type TrimRegion,
+} from "./components/AudioPlayer";
 import { ChatComposer } from "./components/chat/ChatComposer";
 import { ChatConversation } from "./components/chat/ChatConversation";
 import type {
@@ -476,6 +480,7 @@ type DetailSegment = {
   speakerLabel: string | null;
   startSeconds: number | null;
   endSeconds: number | null;
+  seekSeconds: number;
 };
 
 type KnownSpeaker = {
@@ -1353,6 +1358,7 @@ function parseTimelineV2Segments(
           speakerLabel,
           startSeconds: resolvedStartSeconds,
           endSeconds: resolvedEndSeconds,
+          seekSeconds: anchorSeconds,
         },
       ];
     });
@@ -2967,6 +2973,8 @@ export function App({
   const [selectedSegmentSourceIndex, setSelectedSegmentSourceIndex] = useState<
     number | null
   >(null);
+  const [detailAudioSeekRequest, setDetailAudioSeekRequest] =
+    useState<AudioSeekRequest | null>(null);
   const [speakerDraft, setSpeakerDraft] = useState("");
   const [mergeSpeakerSourceId, setMergeSpeakerSourceId] = useState("");
   const [mergeSpeakerTargetId, setMergeSpeakerTargetId] = useState("");
@@ -8288,6 +8296,18 @@ export function App({
     await onAssignSpeakerToSegment(sourceIndex, null, false);
   }
 
+  function selectDetailSegment(segment: DetailSegment): void {
+    setSelectedSegmentSourceIndex(segment.sourceIndex);
+    const seconds = segment.startSeconds ?? segment.seekSeconds;
+    if (!Number.isFinite(seconds)) {
+      return;
+    }
+    setDetailAudioSeekRequest((previous) => ({
+      id: (previous?.id ?? 0) + 1,
+      seconds,
+    }));
+  }
+
   function onStartRenameSpeakerLabel(speakerLabel: string): void {
     const normalizedLabel = speakerLabel.trim();
     if (!normalizedLabel) {
@@ -10878,7 +10898,7 @@ export function App({
                   : ""
               } ${segmentContextMenu?.sourceIndex === segment.sourceIndex ? "context-open" : ""}`}
               key={`${segment.time}-${index}`}
-              onClick={() => setSelectedSegmentSourceIndex(segment.sourceIndex)}
+              onClick={() => selectDetailSegment(segment)}
               onContextMenu={(event) =>
                 openSegmentContextMenu(event, segment.sourceIndex)
               }
@@ -10887,7 +10907,7 @@ export function App({
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
-                  setSelectedSegmentSourceIndex(segment.sourceIndex);
+                  selectDetailSegment(segment);
                 }
               }}
             >
@@ -12424,6 +12444,7 @@ export function App({
                     effectiveDetailContext?.sourceArtifact?.source_label ??
                     null
                   }
+                  seekRequest={detailAudioSeekRequest}
                   trimEnabled
                   onMetadataLoaded={(metadata) => {
                     setAudioDurationSeconds(metadata.durationSeconds);

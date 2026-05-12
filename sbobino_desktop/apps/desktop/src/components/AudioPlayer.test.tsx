@@ -110,6 +110,135 @@ describe("AudioPlayer", () => {
     expect(container.querySelector(".audio-time")?.getAttribute("title")).toBe("34 min 13 s / 2 h 7 min 49 s");
   });
 
+  it("seeks to an external request and updates the displayed time", async () => {
+    const { container, rerender } = render(
+      <AudioPlayer inputPath="/tmp/sample.mp3" seekRequest={null} />,
+    );
+    const audio = container.querySelector("audio") as HTMLAudioElement;
+
+    Object.defineProperty(audio, "duration", {
+      configurable: true,
+      value: 32,
+    });
+    Object.defineProperty(audio, "currentTime", {
+      configurable: true,
+      writable: true,
+      value: 0,
+    });
+
+    fireEvent.loadedMetadata(audio);
+    rerender(
+      <AudioPlayer
+        inputPath="/tmp/sample.mp3"
+        seekRequest={{ id: 1, seconds: 12.5 }}
+      />,
+    );
+
+    await vi.waitFor(() => {
+      expect(audio.currentTime).toBeCloseTo(12.5, 3);
+    });
+    expect(container.querySelector(".audio-time")?.textContent).toBe("00:12 / 00:32");
+  });
+
+  it("applies a new external seek request with the same timestamp", async () => {
+    const { container, rerender } = render(
+      <AudioPlayer inputPath="/tmp/sample.mp3" seekRequest={null} />,
+    );
+    const audio = container.querySelector("audio") as HTMLAudioElement;
+
+    Object.defineProperty(audio, "duration", {
+      configurable: true,
+      value: 32,
+    });
+    Object.defineProperty(audio, "currentTime", {
+      configurable: true,
+      writable: true,
+      value: 0,
+    });
+
+    fireEvent.loadedMetadata(audio);
+    rerender(
+      <AudioPlayer
+        inputPath="/tmp/sample.mp3"
+        seekRequest={{ id: 1, seconds: 7 }}
+      />,
+    );
+    await vi.waitFor(() => {
+      expect(audio.currentTime).toBeCloseTo(7, 3);
+    });
+
+    audio.currentTime = 2;
+    rerender(
+      <AudioPlayer
+        inputPath="/tmp/sample.mp3"
+        seekRequest={{ id: 2, seconds: 7 }}
+      />,
+    );
+
+    await vi.waitFor(() => {
+      expect(audio.currentTime).toBeCloseTo(7, 3);
+    });
+  });
+
+  it("clamps an external seek request to the known duration", async () => {
+    const { container, rerender } = render(
+      <AudioPlayer inputPath="/tmp/sample.mp3" seekRequest={null} />,
+    );
+    const audio = container.querySelector("audio") as HTMLAudioElement;
+
+    Object.defineProperty(audio, "duration", {
+      configurable: true,
+      value: 32,
+    });
+    Object.defineProperty(audio, "currentTime", {
+      configurable: true,
+      writable: true,
+      value: 0,
+    });
+
+    fireEvent.loadedMetadata(audio);
+    rerender(
+      <AudioPlayer
+        inputPath="/tmp/sample.mp3"
+        seekRequest={{ id: 1, seconds: 99 }}
+      />,
+    );
+
+    await vi.waitFor(() => {
+      expect(audio.currentTime).toBeCloseTo(32, 3);
+    });
+  });
+
+  it("does not autoplay after an external seek request", async () => {
+    const { container, rerender } = render(
+      <AudioPlayer inputPath="/tmp/sample.mp3" seekRequest={null} />,
+    );
+    const audio = container.querySelector("audio") as HTMLAudioElement;
+
+    Object.defineProperty(audio, "duration", {
+      configurable: true,
+      value: 32,
+    });
+    Object.defineProperty(audio, "currentTime", {
+      configurable: true,
+      writable: true,
+      value: 0,
+    });
+
+    fireEvent.loadedMetadata(audio);
+    rerender(
+      <AudioPlayer
+        inputPath="/tmp/sample.mp3"
+        seekRequest={{ id: 1, seconds: 12 }}
+      />,
+    );
+
+    await vi.waitFor(() => {
+      expect(audio.currentTime).toBeCloseTo(12, 3);
+    });
+    expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
+  });
+
   it("falls back to a blob source after a local media load error", async () => {
     vi.mocked(readAudioFile).mockResolvedValue([1, 2, 3, 4]);
 

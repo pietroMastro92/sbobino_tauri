@@ -13,10 +13,16 @@ export type TrimRegion = {
   endTime: number;
 };
 
+export type AudioSeekRequest = {
+  id: number;
+  seconds: number;
+};
+
 type AudioPlayerProps = {
   inputPath?: string | null;
   artifactId?: string | null;
   sourceLabel?: string | null;
+  seekRequest?: AudioSeekRequest | null;
   trimEnabled?: boolean;
   initialTrimRegions?: TrimRegion[];
   onMetadataLoaded?: (metadata: { durationSeconds: number }) => void;
@@ -355,6 +361,7 @@ export function AudioPlayer({
   inputPath,
   artifactId,
   sourceLabel,
+  seekRequest,
   trimEnabled = true,
   initialTrimRegions,
   onMetadataLoaded,
@@ -377,6 +384,7 @@ export function AudioPlayer({
   const trimPlaybackRegionIndexRef = useRef<number | null>(null);
   const manualTrimStartRef = useRef(false);
   const activePointerCleanupRef = useRef<(() => void) | null>(null);
+  const appliedSeekRequestIdRef = useRef<number | null>(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -622,6 +630,23 @@ export function AudioPlayer({
     setDuration(0);
     setLoadError(null);
   }, [src]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !hasSource || !seekRequest) return;
+    if (appliedSeekRequestIdRef.current === seekRequest.id) return;
+    if (!Number.isFinite(seekRequest.seconds)) return;
+
+    const maxTime = duration > 0 ? duration : Number.POSITIVE_INFINITY;
+    const nextTime = clamp(seekRequest.seconds, 0, maxTime);
+    if (trimMode && regions.length > 0) {
+      manualTrimStartRef.current = true;
+      trimPlaybackRegionIndexRef.current = null;
+    }
+    audio.currentTime = nextTime;
+    setCurrentTime(nextTime);
+    appliedSeekRequestIdRef.current = seekRequest.id;
+  }, [duration, hasSource, regions.length, seekRequest, trimMode]);
 
   useEffect(() => {
     const audio = audioRef.current;
