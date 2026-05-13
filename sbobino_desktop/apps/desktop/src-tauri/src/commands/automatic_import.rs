@@ -16,7 +16,8 @@ use sbobino_application::ArtifactQuery;
 use sbobino_domain::{
     AppSettings, ArtifactKind, ArtifactSourceOrigin, AutomaticImportActivityEntry,
     AutomaticImportActivityLevel, AutomaticImportPreset, AutomaticImportQuarantineItem,
-    AutomaticImportSource, AutomaticImportSourceHealth, AutomaticImportSourceStatus,
+    AutomaticImportSource, AutomaticImportSourceHealth, AutomaticImportSourceStatus, LanguageCode,
+    SpeechModel,
 };
 
 use crate::{
@@ -80,6 +81,8 @@ struct DiscoveredImportCandidate {
     source_id: String,
     source_label: String,
     source_preset: AutomaticImportPreset,
+    model: SpeechModel,
+    language: LanguageCode,
     workspace_id: Option<String>,
     folder_path: String,
     file_path: String,
@@ -318,8 +321,8 @@ async fn scan_automatic_import_inner(
             StartTranscriptionPayload {
                 input_path: candidate.file_path.clone(),
                 engine: settings.transcription.engine.clone(),
-                language: settings.transcription.language.clone(),
-                model: settings.transcription.model.clone(),
+                model: candidate.model.clone(),
+                language: candidate.language.clone(),
                 enable_ai: candidate.enable_ai_post_processing,
                 whisper_options: settings.transcription.whisper_options.clone(),
                 title: Some(candidate.title.clone()),
@@ -910,6 +913,8 @@ fn build_candidate(
             source.label.clone()
         },
         source_preset: source.preset.clone(),
+        model: source.model.clone(),
+        language: source.language.clone(),
         workspace_id: source.workspace_id.clone(),
         folder_path: source.folder_path.clone(),
         file_path: normalized_path,
@@ -1026,6 +1031,8 @@ mod tests {
                 folder_path: root.to_string_lossy().to_string(),
                 enabled: true,
                 preset: AutomaticImportPreset::Lecture,
+                model: SpeechModel::Small,
+                language: LanguageCode::It,
                 workspace_id: Some("uni".to_string()),
                 recursive: true,
                 enable_ai_post_processing: false,
@@ -1043,6 +1050,8 @@ mod tests {
         assert_eq!(scan.candidates.len(), 1);
         assert_eq!(scan.candidates[0].source_id, "source_a");
         assert_eq!(scan.candidates[0].workspace_id.as_deref(), Some("uni"));
+        assert_eq!(scan.candidates[0].model, SpeechModel::Small);
+        assert_eq!(scan.candidates[0].language, LanguageCode::It);
         assert!(scan.candidates[0].fingerprint_json.contains("\"sha256\""));
         assert!(scan.candidates[0]
             .fingerprint_json
@@ -1063,6 +1072,8 @@ mod tests {
             source_id: "source_a".to_string(),
             source_label: "Lectures".to_string(),
             source_preset: AutomaticImportPreset::Lecture,
+            model: SpeechModel::Medium,
+            language: LanguageCode::En,
             workspace_id: None,
             folder_path: "/tmp".to_string(),
             file_path: "/tmp/new-path.m4a".to_string(),

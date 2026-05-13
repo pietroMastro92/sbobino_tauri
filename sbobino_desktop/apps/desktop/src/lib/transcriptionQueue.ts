@@ -1,4 +1,4 @@
-import type { JobProgress } from "../types";
+import type { JobProgress, JobStage } from "../types";
 
 export const QUEUED_TRANSCRIPTION_JOB_PREFIX = "queued-start:";
 
@@ -10,7 +10,10 @@ export function isQueuedTranscriptionJobId(jobId: string): boolean {
   return jobId.startsWith(QUEUED_TRANSCRIPTION_JOB_PREFIX);
 }
 
-export function buildQueuedTranscriptionJob(jobId: string, message: string): JobProgress {
+export function buildQueuedTranscriptionJob(
+  jobId: string,
+  message: string,
+): JobProgress {
   return {
     job_id: jobId,
     stage: "queued",
@@ -19,6 +22,13 @@ export function buildQueuedTranscriptionJob(jobId: string, message: string): Job
     current_seconds: 0,
     total_seconds: null,
   };
+}
+
+export function buildQueuedTranscriptionJobs(
+  jobIds: string[],
+  message: string,
+): JobProgress[] {
+  return jobIds.map((jobId) => buildQueuedTranscriptionJob(jobId, message));
 }
 
 export function replaceQueuedTranscriptionJob(
@@ -40,6 +50,35 @@ export function upsertQueueItem(
   return items.map((entry) =>
     entry.job_id === incoming.job_id ? incoming : entry,
   );
+}
+
+export function isTerminalJobStage(stage: JobStage): boolean {
+  return stage === "completed" || stage === "cancelled" || stage === "failed";
+}
+
+export function clearFinishedQueueItems(items: JobProgress[]): JobProgress[] {
+  return items.filter((item) => !isTerminalJobStage(item.stage));
+}
+
+export function markQueueItemTerminal(
+  items: JobProgress[],
+  jobId: string,
+  stage: Extract<JobStage, "completed" | "failed" | "cancelled">,
+  message: string,
+): JobProgress[] {
+  const existing = items.find((entry) => entry.job_id === jobId);
+  return upsertQueueItem(items, {
+    ...(existing ?? {
+      job_id: jobId,
+      current_seconds: null,
+      total_seconds: null,
+      percentage: 0,
+    }),
+    job_id: jobId,
+    stage,
+    message,
+    percentage: 100,
+  });
 }
 
 export function shouldQueueTranscriptionStart({

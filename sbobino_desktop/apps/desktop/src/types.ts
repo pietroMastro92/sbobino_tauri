@@ -117,6 +117,8 @@ export type AutomaticImportSource = {
   folder_path: string;
   enabled: boolean;
   preset: AutomaticImportPreset;
+  model: SpeechModel;
+  language: LanguageCode;
   workspace_id?: string | null;
   recursive: boolean;
   enable_ai_post_processing: boolean;

@@ -223,7 +223,7 @@ const translations: AllTranslations = {
 
     // Home
     "home.audioFilePlaceholder": "Audio file",
-    "home.openLocalFile": "Open Local File",
+    "home.openLocalFile": "Open audio files",
     "home.startTranscription": "Start Transcription",
     "home.starting": "Starting...",
     "home.startLive": "Start Live",
@@ -719,7 +719,7 @@ const translations: AllTranslations = {
     "topbar.hideSidebar": "Nascondi barra laterale",
     "topbar.showSidebar": "Mostra barra laterale",
     "home.audioFilePlaceholder": "File audio",
-    "home.openLocalFile": "Apri file locale",
+    "home.openLocalFile": "Apri file audio",
     "home.startTranscription": "Avvia trascrizione",
     "home.starting": "Avvio in corso...",
     "home.startLive": "Avvia live",
@@ -1201,7 +1201,7 @@ const translations: AllTranslations = {
 
     // Home
     "home.audioFilePlaceholder": "Archivo de audio",
-    "home.openLocalFile": "Abrir archivo local",
+    "home.openLocalFile": "Abrir archivos de audio",
     "home.startTranscription": "Iniciar Transcripción",
     "home.starting": "Iniciando...",
     "home.startLive": "Iniciar En Vivo",
@@ -1719,7 +1719,7 @@ const translations: AllTranslations = {
 
     // Home
     "home.audioFilePlaceholder": "Audiodatei",
-    "home.openLocalFile": "Lokale Datei öffnen",
+    "home.openLocalFile": "Audiodateien öffnen",
     "home.startTranscription": "Transkription starten",
     "home.starting": "Startet...",
     "home.startLive": "Live starten",
@@ -2061,9 +2061,9 @@ const translationAdditions: AllTranslations = {
     "settings.automaticImport.voiceMemosHint":
       "Use this for a Voice Memos folder already synced to your Mac through Apple services.",
     "settings.automaticImport.voiceMemosLabel": "Voice Memos",
-    "settings.automaticImport.exclusions": "Excluded folders",
+    "settings.automaticImport.exclusions": "Folders to ignore",
     "settings.automaticImport.exclusionsDesc":
-      "Ignore sensitive folders even if they contain supported audio files.",
+      "Skip sensitive or noisy folders inside watched folders, such as archives, caches, or already processed exports.",
     "settings.automaticImport.pickExcludedFolder":
       "Choose a folder to exclude",
     "settings.automaticImport.addExclusion": "Add Exclusion",
@@ -2076,9 +2076,9 @@ const translationAdditions: AllTranslations = {
     "settings.automaticImport.statusCounts":
       "Scanned {scanned}, queued {queued}, skipped {skipped}.",
     "settings.automaticImport.statusLastError": "Last error",
-    "settings.automaticImport.activity": "Recent activity",
+    "settings.automaticImport.activity": "Last scans",
     "settings.automaticImport.activityDesc":
-      "Review recent scan results, warnings, and retry guidance.",
+      "Review recent scan results and warnings when you need to diagnose automatic imports.",
     "settings.automaticImport.emptyActivity":
       "No automatic-import activity recorded yet.",
     "settings.automaticImport.health.idle": "Idle",
@@ -2090,13 +2090,21 @@ const translationAdditions: AllTranslations = {
     "settings.automaticImport.activityLevel.error": "Error",
     "settings.automaticImport.lastScanStatus":
       "Last scan: {queued} queued, {existing} already known, {errors} errors.",
-    "settings.automaticImport.sources": "Watched Sources",
+    "settings.automaticImport.sources": "Watched folders",
     "settings.automaticImport.sourcesDesc":
-      "Map each folder to a preset and optional workspace.",
+      "Each folder can use its own model, language, preset, and workspace.",
     "settings.automaticImport.emptySources": "No watched folders configured yet.",
     "settings.automaticImport.sourceLabel": "Label",
     "settings.automaticImport.sourceFolder": "Folder",
     "settings.automaticImport.preset": "Preset",
+    "settings.automaticImport.sourceModel": "Model",
+    "settings.automaticImport.sourceModelDesc":
+      "Used for new files found in this folder.",
+    "settings.automaticImport.useDefaultModel": "Use default ({model})",
+    "settings.automaticImport.sourceLanguage": "Language",
+    "settings.automaticImport.sourceLanguageDesc":
+      "Used for new files found in this folder.",
+    "settings.automaticImport.useDefaultLanguage": "Use default ({language})",
     "settings.automaticImport.workspace": "Workspace",
     "settings.automaticImport.noWorkspace": "No workspace",
     "settings.automaticImport.sourceEnabled": "Enabled",
@@ -2108,9 +2116,9 @@ const translationAdditions: AllTranslations = {
     "settings.automaticImport.generatePresetOutput": "Generate preset output",
     "settings.automaticImport.replaceFolder": "Replace Folder",
     "settings.automaticImport.removeFolder": "Remove Folder",
-    "settings.automaticImport.quarantine": "Quarantine",
+    "settings.automaticImport.quarantine": "Files needing attention",
     "settings.automaticImport.quarantineDesc":
-      "Problematic files stay out of the queue until you retry or clear them.",
+      "Files that could not be inspected stay out of the queue so the app does not retry them forever.",
     "settings.automaticImport.emptyQuarantine":
       "No quarantined automatic-import files.",
     "settings.automaticImport.unknownSource": "Unknown source",
@@ -2230,6 +2238,7 @@ const translationAdditions: AllTranslations = {
     "error.assignSpeakerFailed": "Failed to assign speaker",
     "error.bootstrapFailed": "Bootstrap failed",
     "error.cancelTranscriptionFailed": "Failed to cancel transcription",
+    "error.closeActionFailed": "Could not complete the close action",
     "error.cannotStartOnMachine": "Transcription cannot start on this machine.",
     "error.chatFailed": "Chat failed",
     "error.copyBeforeExportSync": "Could not sync changes before export",
@@ -2339,7 +2348,22 @@ const translationAdditions: AllTranslations = {
     "setup.firstLaunch.runtimeIntro": "Sbobino is finishing the local setup required to run completely on your Mac.",
     "setup.firstLaunch.setupError": "Setup could not finish",
     "setup.firstLaunch.title": "Sbobino is preparing your Mac",
+    "appClose.title": "Close Sbobino?",
+    "appClose.message":
+      "Do you want to quit Sbobino or keep it available from the Dock?",
+    "appClose.messageWithTranscription":
+      "A transcription is running. Quit Sbobino to stop it, or minimize the window so it can continue in the Dock.",
+    "appClose.quitButton": "Quit Sbobino",
+    "appClose.minimizeButton": "Minimize to Dock",
+    "transcriptionCancel.title": "Cancel transcription?",
+    "transcriptionCancel.message": "Stop the current transcription?",
+    "transcriptionCancel.messageWithTitle":
+      "Stop the current transcription for {title}?",
+    "transcriptionCancel.confirmButton": "Cancel transcription",
+    "transcriptionCancel.keepRunning": "Keep running",
     "queue.activeJobFallback": "Transcription in progress",
+    "queue.sessionCounts":
+      "Waiting {waiting} · Running {running} · Finished {finished}",
     "queue.stage.queued": "Queued",
     "queue.stage.preparingAudio": "Preparing audio",
     "queue.stage.transcribing": "Transcribing",
@@ -2502,9 +2526,9 @@ const translationAdditions: AllTranslations = {
     "settings.automaticImport.voiceMemosHint":
       "Usa questa opzione per una cartella Memo Vocali gia sincronizzata sul Mac tramite i servizi Apple.",
     "settings.automaticImport.voiceMemosLabel": "Memo Vocali",
-    "settings.automaticImport.exclusions": "Cartelle escluse",
+    "settings.automaticImport.exclusions": "Cartelle da ignorare",
     "settings.automaticImport.exclusionsDesc":
-      "Ignora cartelle sensibili anche se contengono audio supportati.",
+      "Salta cartelle sensibili o rumorose dentro le cartelle controllate, per esempio archivi, cache o esportazioni gia elaborate.",
     "settings.automaticImport.pickExcludedFolder":
       "Scegli una cartella da escludere",
     "settings.automaticImport.addExclusion": "Aggiungi esclusione",
@@ -2517,9 +2541,9 @@ const translationAdditions: AllTranslations = {
     "settings.automaticImport.statusCounts":
       "Scansionati {scanned}, in coda {queued}, saltati {skipped}.",
     "settings.automaticImport.statusLastError": "Ultimo errore",
-    "settings.automaticImport.activity": "Attivita recenti",
+    "settings.automaticImport.activity": "Ultime scansioni",
     "settings.automaticImport.activityDesc":
-      "Controlla risultati recenti, avvisi e indicazioni di retry.",
+      "Controlla risultati e avvisi recenti quando devi diagnosticare l'import automatico.",
     "settings.automaticImport.emptyActivity":
       "Nessuna attivita di import automatico registrata.",
     "settings.automaticImport.health.idle": "In attesa",
@@ -2531,13 +2555,21 @@ const translationAdditions: AllTranslations = {
     "settings.automaticImport.activityLevel.error": "Errore",
     "settings.automaticImport.lastScanStatus":
       "Ultima scansione: {queued} in coda, {existing} già noti, {errors} errori.",
-    "settings.automaticImport.sources": "Sorgenti controllate",
+    "settings.automaticImport.sources": "Cartelle controllate",
     "settings.automaticImport.sourcesDesc":
-      "Associa ogni cartella a un preset e a un eventuale spazio di lavoro.",
+      "Ogni cartella puo usare modello, lingua, preset e spazio di lavoro dedicati.",
     "settings.automaticImport.emptySources": "Nessuna cartella controllata configurata.",
     "settings.automaticImport.sourceLabel": "Etichetta",
     "settings.automaticImport.sourceFolder": "Cartella",
     "settings.automaticImport.preset": "Preset",
+    "settings.automaticImport.sourceModel": "Modello",
+    "settings.automaticImport.sourceModelDesc":
+      "Usato per i nuovi file trovati in questa cartella.",
+    "settings.automaticImport.useDefaultModel": "Usa predefinito ({model})",
+    "settings.automaticImport.sourceLanguage": "Lingua",
+    "settings.automaticImport.sourceLanguageDesc":
+      "Usata per i nuovi file trovati in questa cartella.",
+    "settings.automaticImport.useDefaultLanguage": "Usa predefinita ({language})",
     "settings.automaticImport.workspace": "Spazio di lavoro",
     "settings.automaticImport.noWorkspace": "Nessuno spazio di lavoro",
     "settings.automaticImport.sourceEnabled": "Attiva",
@@ -2549,9 +2581,9 @@ const translationAdditions: AllTranslations = {
     "settings.automaticImport.generatePresetOutput": "Genera output del preset",
     "settings.automaticImport.replaceFolder": "Sostituisci cartella",
     "settings.automaticImport.removeFolder": "Rimuovi cartella",
-    "settings.automaticImport.quarantine": "Quarantena",
+    "settings.automaticImport.quarantine": "File da controllare",
     "settings.automaticImport.quarantineDesc":
-      "I file problematici restano fuori dalla coda finché non li ritenti o li rimuovi.",
+      "I file che non possono essere ispezionati restano fuori dalla coda, cosi l'app non li ritenta all'infinito.",
     "settings.automaticImport.emptyQuarantine":
       "Nessun file in quarantena per l'import automatico.",
     "settings.automaticImport.unknownSource": "Sorgente sconosciuta",
@@ -2674,6 +2706,7 @@ const translationAdditions: AllTranslations = {
     "error.assignSpeakerFailed": "Assegnazione del parlante non riuscita",
     "error.bootstrapFailed": "Avvio dell'app non riuscito",
     "error.cancelTranscriptionFailed": "Annullamento della trascrizione non riuscito",
+    "error.closeActionFailed": "Impossibile completare l'azione di chiusura",
     "error.cannotStartOnMachine": "La trascrizione non può essere avviata su questa macchina.",
     "error.chatFailed": "Chat non riuscita",
     "error.copyBeforeExportSync": "Impossibile sincronizzare le modifiche prima dell'esportazione",
@@ -2783,7 +2816,22 @@ const translationAdditions: AllTranslations = {
     "setup.firstLaunch.runtimeIntro": "Sbobino sta completando la configurazione locale necessaria per funzionare interamente sul tuo Mac.",
     "setup.firstLaunch.setupError": "La configurazione non è stata completata",
     "setup.firstLaunch.title": "Sbobino sta preparando il tuo Mac",
+    "appClose.title": "Chiudere Sbobino?",
+    "appClose.message":
+      "Vuoi chiudere Sbobino o lasciarlo disponibile dal Dock?",
+    "appClose.messageWithTranscription":
+      "Una trascrizione è in corso. Chiudi Sbobino per interromperla, oppure minimizza la finestra per lasciarla continuare dal Dock.",
+    "appClose.quitButton": "Chiudi Sbobino",
+    "appClose.minimizeButton": "Minimizza nel Dock",
+    "transcriptionCancel.title": "Annullare la trascrizione?",
+    "transcriptionCancel.message": "Interrompere la trascrizione in corso?",
+    "transcriptionCancel.messageWithTitle":
+      "Interrompere la trascrizione di {title}?",
+    "transcriptionCancel.confirmButton": "Annulla trascrizione",
+    "transcriptionCancel.keepRunning": "Continua",
     "queue.activeJobFallback": "Trascrizione in corso",
+    "queue.sessionCounts":
+      "In attesa {waiting} · In corso {running} · Concluse {finished}",
     "queue.stage.queued": "In coda",
     "queue.stage.preparingAudio": "Preparazione audio",
     "queue.stage.transcribing": "Trascrizione",
@@ -2946,9 +2994,9 @@ const translationAdditions: AllTranslations = {
     "settings.automaticImport.voiceMemosHint":
       "Usa esto para una carpeta de Notas de Voz ya sincronizada en tu Mac mediante los servicios de Apple.",
     "settings.automaticImport.voiceMemosLabel": "Notas de Voz",
-    "settings.automaticImport.exclusions": "Carpetas excluidas",
+    "settings.automaticImport.exclusions": "Carpetas que ignorar",
     "settings.automaticImport.exclusionsDesc":
-      "Ignora carpetas sensibles aunque contengan audio compatible.",
+      "Omite carpetas sensibles o ruidosas dentro de las carpetas supervisadas, como archivos, cachés o exportaciones ya procesadas.",
     "settings.automaticImport.pickExcludedFolder":
       "Elige una carpeta para excluir",
     "settings.automaticImport.addExclusion": "Añadir exclusion",
@@ -2961,9 +3009,9 @@ const translationAdditions: AllTranslations = {
     "settings.automaticImport.statusCounts":
       "Analizados {scanned}, en cola {queued}, omitidos {skipped}.",
     "settings.automaticImport.statusLastError": "Ultimo error",
-    "settings.automaticImport.activity": "Actividad reciente",
+    "settings.automaticImport.activity": "Últimos análisis",
     "settings.automaticImport.activityDesc":
-      "Revisa resultados recientes, avisos e indicaciones para reintentar.",
+      "Revisa resultados y avisos recientes cuando necesites diagnosticar importaciones automáticas.",
     "settings.automaticImport.emptyActivity":
       "Todavia no hay actividad de importacion automatica.",
     "settings.automaticImport.health.idle": "En espera",
@@ -2975,13 +3023,22 @@ const translationAdditions: AllTranslations = {
     "settings.automaticImport.activityLevel.error": "Error",
     "settings.automaticImport.lastScanStatus":
       "Último análisis: {queued} en cola, {existing} ya conocidos, {errors} errores.",
-    "settings.automaticImport.sources": "Orígenes supervisados",
+    "settings.automaticImport.sources": "Carpetas supervisadas",
     "settings.automaticImport.sourcesDesc":
-      "Asocia cada carpeta a un preset y a un espacio de trabajo opcional.",
+      "Cada carpeta puede usar su propio modelo, idioma, preset y espacio de trabajo.",
     "settings.automaticImport.emptySources": "Todavía no hay carpetas supervisadas configuradas.",
     "settings.automaticImport.sourceLabel": "Etiqueta",
     "settings.automaticImport.sourceFolder": "Carpeta",
     "settings.automaticImport.preset": "Preset",
+    "settings.automaticImport.sourceModel": "Modelo",
+    "settings.automaticImport.sourceModelDesc":
+      "Se usa para los archivos nuevos encontrados en esta carpeta.",
+    "settings.automaticImport.useDefaultModel": "Usar predeterminado ({model})",
+    "settings.automaticImport.sourceLanguage": "Idioma",
+    "settings.automaticImport.sourceLanguageDesc":
+      "Se usa para los archivos nuevos encontrados en esta carpeta.",
+    "settings.automaticImport.useDefaultLanguage":
+      "Usar predeterminado ({language})",
     "settings.automaticImport.workspace": "Espacio de trabajo",
     "settings.automaticImport.noWorkspace": "Sin espacio de trabajo",
     "settings.automaticImport.sourceEnabled": "Activado",
@@ -2995,9 +3052,9 @@ const translationAdditions: AllTranslations = {
       "Generar salida del preset",
     "settings.automaticImport.replaceFolder": "Sustituir carpeta",
     "settings.automaticImport.removeFolder": "Quitar carpeta",
-    "settings.automaticImport.quarantine": "Cuarentena",
+    "settings.automaticImport.quarantine": "Archivos que requieren atención",
     "settings.automaticImport.quarantineDesc":
-      "Los archivos problemáticos quedan fuera de la cola hasta que los reintentes o los limpies.",
+      "Los archivos que no se pudieron inspeccionar quedan fuera de la cola para que la app no los reintente indefinidamente.",
     "settings.automaticImport.emptyQuarantine":
       "No hay archivos en cuarentena de importación automática.",
     "settings.automaticImport.unknownSource": "Origen desconocido",
@@ -3121,6 +3178,7 @@ const translationAdditions: AllTranslations = {
     "error.assignSpeakerFailed": "No se pudo asignar el hablante",
     "error.bootstrapFailed": "Falló el arranque de la app",
     "error.cancelTranscriptionFailed": "No se pudo cancelar la transcripción",
+    "error.closeActionFailed": "No se pudo completar la acción de cierre",
     "error.cannotStartOnMachine": "La transcripción no puede iniciarse en esta máquina.",
     "error.chatFailed": "El chat falló",
     "error.copyBeforeExportSync": "No se pudieron sincronizar los cambios antes de exportar",
@@ -3230,7 +3288,22 @@ const translationAdditions: AllTranslations = {
     "setup.firstLaunch.runtimeIntro": "Sbobino está finalizando la configuración local necesaria para ejecutarse completamente en tu Mac.",
     "setup.firstLaunch.setupError": "La configuración no pudo completarse",
     "setup.firstLaunch.title": "Sbobino está preparando tu Mac",
+    "appClose.title": "¿Cerrar Sbobino?",
+    "appClose.message":
+      "¿Quieres salir de Sbobino o mantenerlo disponible desde el Dock?",
+    "appClose.messageWithTranscription":
+      "Hay una transcripción en curso. Sal de Sbobino para detenerla, o minimiza la ventana para que continúe desde el Dock.",
+    "appClose.quitButton": "Salir de Sbobino",
+    "appClose.minimizeButton": "Minimizar al Dock",
+    "transcriptionCancel.title": "¿Cancelar transcripción?",
+    "transcriptionCancel.message": "¿Detener la transcripción en curso?",
+    "transcriptionCancel.messageWithTitle":
+      "¿Detener la transcripción de {title}?",
+    "transcriptionCancel.confirmButton": "Cancelar transcripción",
+    "transcriptionCancel.keepRunning": "Seguir ejecutando",
     "queue.activeJobFallback": "Transcripción en curso",
+    "queue.sessionCounts":
+      "En espera {waiting} · En curso {running} · Terminadas {finished}",
     "queue.stage.queued": "En cola",
     "queue.stage.preparingAudio": "Preparando audio",
     "queue.stage.transcribing": "Transcribiendo",
@@ -3393,9 +3466,9 @@ const translationAdditions: AllTranslations = {
     "settings.automaticImport.voiceMemosHint":
       "Verwenden Sie dies fuer einen Sprachnotizen-Ordner, der bereits ueber Apple-Dienste mit Ihrem Mac synchronisiert ist.",
     "settings.automaticImport.voiceMemosLabel": "Sprachnotizen",
-    "settings.automaticImport.exclusions": "Ausgeschlossene Ordner",
+    "settings.automaticImport.exclusions": "Zu ignorierende Ordner",
     "settings.automaticImport.exclusionsDesc":
-      "Ignoriert sensible Ordner auch dann, wenn sie unterstuetzte Audiodateien enthalten.",
+      "Ueberspringt sensible oder laute Ordner innerhalb ueberwachter Ordner, z. B. Archive, Caches oder bereits verarbeitete Exporte.",
     "settings.automaticImport.pickExcludedFolder":
       "Ordner zum Ausschliessen waehlen",
     "settings.automaticImport.addExclusion": "Ausschluss hinzufuegen",
@@ -3408,9 +3481,9 @@ const translationAdditions: AllTranslations = {
     "settings.automaticImport.statusCounts":
       "Gescannt {scanned}, eingereiht {queued}, uebersprungen {skipped}.",
     "settings.automaticImport.statusLastError": "Letzter Fehler",
-    "settings.automaticImport.activity": "Letzte Aktivitaet",
+    "settings.automaticImport.activity": "Letzte Scans",
     "settings.automaticImport.activityDesc":
-      "Zeigt aktuelle Scan-Ergebnisse, Warnungen und Hinweise zum Wiederholen.",
+      "Zeigt aktuelle Scan-Ergebnisse und Warnungen, wenn Sie automatische Importe diagnostizieren muessen.",
     "settings.automaticImport.emptyActivity":
       "Noch keine Aktivitaet fuer den automatischen Import vorhanden.",
     "settings.automaticImport.health.idle": "Leerlauf",
@@ -3422,13 +3495,22 @@ const translationAdditions: AllTranslations = {
     "settings.automaticImport.activityLevel.error": "Fehler",
     "settings.automaticImport.lastScanStatus":
       "Letzter Scan: {queued} in Warteschlange, {existing} bereits bekannt, {errors} Fehler.",
-    "settings.automaticImport.sources": "Überwachte Quellen",
+    "settings.automaticImport.sources": "Überwachte Ordner",
     "settings.automaticImport.sourcesDesc":
-      "Ordnen Sie jedem Ordner ein Preset und optional einen Arbeitsbereich zu.",
+      "Jeder Ordner kann sein eigenes Modell, seine eigene Sprache, sein Preset und seinen Arbeitsbereich verwenden.",
     "settings.automaticImport.emptySources": "Es sind noch keine überwachten Ordner konfiguriert.",
     "settings.automaticImport.sourceLabel": "Bezeichnung",
     "settings.automaticImport.sourceFolder": "Ordner",
     "settings.automaticImport.preset": "Preset",
+    "settings.automaticImport.sourceModel": "Modell",
+    "settings.automaticImport.sourceModelDesc":
+      "Wird fuer neue Dateien verwendet, die in diesem Ordner gefunden werden.",
+    "settings.automaticImport.useDefaultModel": "Standard verwenden ({model})",
+    "settings.automaticImport.sourceLanguage": "Sprache",
+    "settings.automaticImport.sourceLanguageDesc":
+      "Wird fuer neue Dateien verwendet, die in diesem Ordner gefunden werden.",
+    "settings.automaticImport.useDefaultLanguage":
+      "Standard verwenden ({language})",
     "settings.automaticImport.workspace": "Arbeitsbereich",
     "settings.automaticImport.noWorkspace": "Kein Arbeitsbereich",
     "settings.automaticImport.sourceEnabled": "Aktiviert",
@@ -3442,9 +3524,9 @@ const translationAdditions: AllTranslations = {
       "Preset-Ausgabe erzeugen",
     "settings.automaticImport.replaceFolder": "Ordner ersetzen",
     "settings.automaticImport.removeFolder": "Ordner entfernen",
-    "settings.automaticImport.quarantine": "Quarantäne",
+    "settings.automaticImport.quarantine": "Dateien mit Handlungsbedarf",
     "settings.automaticImport.quarantineDesc":
-      "Problematische Dateien bleiben aus der Warteschlange, bis Sie sie erneut versuchen oder entfernen.",
+      "Dateien, die nicht geprueft werden konnten, bleiben ausserhalb der Warteschlange, damit die App sie nicht endlos erneut versucht.",
     "settings.automaticImport.emptyQuarantine":
       "Keine Dateien in der Quarantäne des automatischen Imports.",
     "settings.automaticImport.unknownSource": "Unbekannte Quelle",
@@ -3569,6 +3651,7 @@ const translationAdditions: AllTranslations = {
     "error.assignSpeakerFailed": "Sprecherzuweisung fehlgeschlagen",
     "error.bootstrapFailed": "Start der App fehlgeschlagen",
     "error.cancelTranscriptionFailed": "Abbrechen der Transkription fehlgeschlagen",
+    "error.closeActionFailed": "Schließaktion konnte nicht abgeschlossen werden",
     "error.cannotStartOnMachine": "Die Transkription kann auf diesem Gerät nicht gestartet werden.",
     "error.chatFailed": "Chat fehlgeschlagen",
     "error.copyBeforeExportSync": "Änderungen konnten vor dem Export nicht synchronisiert werden",
@@ -3678,7 +3761,22 @@ const translationAdditions: AllTranslations = {
     "setup.firstLaunch.runtimeIntro": "Sbobino schließt die lokale Einrichtung ab, die für den vollständigen Betrieb auf Ihrem Mac erforderlich ist.",
     "setup.firstLaunch.setupError": "Einrichtung konnte nicht abgeschlossen werden",
     "setup.firstLaunch.title": "Sbobino bereitet Ihren Mac vor",
+    "appClose.title": "Sbobino schließen?",
+    "appClose.message":
+      "Moechten Sie Sbobino beenden oder im Dock verfuegbar lassen?",
+    "appClose.messageWithTranscription":
+      "Eine Transkription laeuft. Beenden Sie Sbobino, um sie zu stoppen, oder minimieren Sie das Fenster, damit sie im Dock weiterlaufen kann.",
+    "appClose.quitButton": "Sbobino beenden",
+    "appClose.minimizeButton": "Ins Dock minimieren",
+    "transcriptionCancel.title": "Transkription abbrechen?",
+    "transcriptionCancel.message": "Laufende Transkription stoppen?",
+    "transcriptionCancel.messageWithTitle":
+      "Transkription fuer {title} stoppen?",
+    "transcriptionCancel.confirmButton": "Transkription abbrechen",
+    "transcriptionCancel.keepRunning": "Weiterlaufen lassen",
     "queue.activeJobFallback": "Transkription in Arbeit",
+    "queue.sessionCounts":
+      "Wartend {waiting} · Laufend {running} · Fertig {finished}",
     "queue.stage.queued": "In Warteschlange",
     "queue.stage.preparingAudio": "Audio wird vorbereitet",
     "queue.stage.transcribing": "Transkribieren",

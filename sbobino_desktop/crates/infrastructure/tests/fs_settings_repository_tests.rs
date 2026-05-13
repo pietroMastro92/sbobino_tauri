@@ -111,6 +111,8 @@ async fn save_then_load_preserves_automatic_import_and_workspace_settings() {
         folder_path: "/Users/test/Voice Memos".to_string(),
         enabled: true,
         preset: sbobino_domain::AutomaticImportPreset::VoiceMemo,
+        model: sbobino_domain::SpeechModel::LargeTurbo,
+        language: sbobino_domain::LanguageCode::It,
         workspace_id: Some("work".to_string()),
         recursive: false,
         enable_ai_post_processing: true,
@@ -137,6 +139,14 @@ async fn save_then_load_preserves_automatic_import_and_workspace_settings() {
     assert_eq!(
         loaded.automation.watched_sources[0].workspace_id.as_deref(),
         Some("work")
+    );
+    assert_eq!(
+        loaded.automation.watched_sources[0].model,
+        sbobino_domain::SpeechModel::LargeTurbo
+    );
+    assert_eq!(
+        loaded.automation.watched_sources[0].language,
+        sbobino_domain::LanguageCode::It
     );
     assert!(loaded.automation.watched_sources[0].enable_ai_post_processing);
     assert!(

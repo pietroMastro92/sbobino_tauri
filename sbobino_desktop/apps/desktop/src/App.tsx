@@ -10,6 +10,7 @@ import React, {
 } from "react";
 import {
   confirm as confirmDialog,
+  message as messageDialog,
   open,
   save,
 } from "@tauri-apps/plugin-dialog";
@@ -19,7 +20,7 @@ import {
   check as checkAppUpdate,
   type Update as TauriUpdate,
 } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
+import { exit as exitProcess, relaunch } from "@tauri-apps/plugin-process";
 import {
   ArrowLeft,
   AudioLines,
@@ -185,7 +186,11 @@ import {
 import {
   buildQueuedTranscriptionJob,
   buildQueuedTranscriptionJobId,
+  buildQueuedTranscriptionJobs,
+  clearFinishedQueueItems,
   isQueuedTranscriptionJobId,
+  isTerminalJobStage,
+  markQueueItemTerminal,
   replaceQueuedTranscriptionJob,
   shouldFocusStartedTranscription,
   shouldQueueTranscriptionStart,
@@ -1009,6 +1014,8 @@ function createDefaultAutomaticImportSource(
     folder_path: folderPath,
     enabled: true,
     preset: "general",
+    model: "base",
+    language: "auto",
     workspace_id: null,
     recursive: true,
     enable_ai_post_processing: false,
@@ -1023,6 +1030,8 @@ function createPresetAutomaticImportSource(
     Pick<
       AutomaticImportSource,
       | "label"
+      | "model"
+      | "language"
       | "workspace_id"
       | "recursive"
       | "enable_ai_post_processing"
@@ -1039,6 +1048,8 @@ function createPresetAutomaticImportSource(
       ...overrides?.post_processing,
     },
     label: overrides?.label ?? base.label,
+    model: overrides?.model ?? base.model,
+    language: overrides?.language ?? base.language,
     workspace_id: overrides?.workspace_id ?? base.workspace_id,
     recursive: overrides?.recursive ?? base.recursive,
     enable_ai_post_processing:
@@ -2074,6 +2085,8 @@ function normalizeSettings(settings: AppSettings): AppSettings {
         folder_path: source.folder_path ?? "",
         enabled: source.enabled ?? true,
         preset: source.preset ?? "general",
+        model: source.model ?? settings.transcription.model ?? "base",
+        language: source.language ?? settings.transcription.language ?? "auto",
         workspace_id: source.workspace_id ?? null,
         recursive: source.recursive ?? true,
         enable_ai_post_processing:
@@ -3180,6 +3193,8 @@ export function App({
 
   const activeJobIdRef = useRef<string | null>(activeJobId);
   const transcriptionStartInFlightRef = useRef(false);
+  const appCloseDialogOpenRef = useRef(false);
+  const appCloseAllowedRef = useRef(false);
   const segmentElementMapRef = useRef<Map<number, HTMLElement>>(new Map());
   const windowFrameRef = useRef<HTMLElement | null>(null);
   const detailLayoutRef = useRef<HTMLDivElement | null>(null);
@@ -3373,6 +3388,91 @@ export function App({
   useEffect(() => {
     activeJobIdRef.current = activeJobId;
   }, [activeJobId]);
+
+  useEffect(() => {
+    if (standaloneSettingsWindow) {
+      return;
+    }
+
+    const appWindow = getCurrentWindow();
+    let disposed = false;
+    let unlistenClose: (() => void) | null = null;
+
+    void appWindow
+      .onCloseRequested((event) => {
+        if (appCloseAllowedRef.current) {
+          return;
+        }
+        event.preventDefault();
+        if (appCloseDialogOpenRef.current) {
+          return;
+        }
+
+        appCloseDialogOpenRef.current = true;
+        void (async () => {
+          const quitLabel = t("appClose.quitButton", "Quit Sbobino");
+          const minimizeLabel = t("appClose.minimizeButton", "Minimize to Dock");
+          const cancelLabel = t("action.cancel", "Cancel");
+          try {
+            const result = await messageDialog(
+              activeJobIdRef.current
+                ? t(
+                    "appClose.messageWithTranscription",
+                    "A transcription is running. Quit Sbobino to stop it, or minimize the window so it can continue in the Dock.",
+                  )
+                : t(
+                    "appClose.message",
+                    "Do you want to quit Sbobino or keep it available from the Dock?",
+                  ),
+              {
+                title: t("appClose.title", "Close Sbobino?"),
+                kind: activeJobIdRef.current ? "warning" : "info",
+                buttons: {
+                  yes: quitLabel,
+                  no: minimizeLabel,
+                  cancel: cancelLabel,
+                },
+              },
+            );
+
+            if (disposed) {
+              return;
+            }
+            if (result === quitLabel || result === "Yes") {
+              appCloseAllowedRef.current = true;
+              await exitProcess(0);
+              return;
+            }
+            if (result === minimizeLabel || result === "No") {
+              await appWindow.minimize();
+            }
+          } catch (closeDialogError) {
+            setError(
+              formatUiError(
+                "error.closeActionFailed",
+                "Could not complete the close action",
+                closeDialogError,
+              ),
+            );
+          } finally {
+            appCloseDialogOpenRef.current = false;
+          }
+        })();
+      })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+        } else {
+          unlistenClose = unlisten;
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      disposed = true;
+      unlistenClose?.();
+    };
+  }, [standaloneSettingsWindow, t]);
 
   useEffect(() => {
     focusedJobIdRef.current = focusedJobId;
@@ -4363,6 +4463,15 @@ export function App({
             const failedContext = pendingTranscriptionContextRef.current.get(
               event.job_id,
             );
+            updateTranscriptionJobSnapshot(event.job_id, {
+              title:
+                failedContext?.title ??
+                (failedContext?.inputPath
+                  ? fileLabel(failedContext.inputPath)
+                  : undefined),
+              context: failedContext?.detailContext ?? null,
+              progress: queueEvent,
+            });
             pendingTranscriptionContextRef.current.delete(event.job_id);
             clearActiveJob();
             activeJobIdRef.current = null;
@@ -4405,7 +4514,6 @@ export function App({
         // start, leaving the user with an empty white window.
         try {
           failedJobMessagesRef.current.delete(artifact.job_id);
-          transcriptionJobSnapshotsRef.current.delete(artifact.job_id);
           const pendingContext = pendingTranscriptionContextRef.current.get(
             artifact.job_id,
           );
@@ -4427,8 +4535,25 @@ export function App({
             : artifact;
 
           prependArtifact(hydratedArtifact);
+          updateTranscriptionJobSnapshot(artifact.job_id, {
+            title: hydratedArtifact.title,
+            context: pendingContext?.detailContext ?? null,
+            progress: {
+              job_id: artifact.job_id,
+              stage: "completed",
+              message: formatJobMessage("completed"),
+              percentage: 100,
+              current_seconds: null,
+              total_seconds: null,
+            },
+          });
           setQueueItems((previous) =>
-            previous.filter((entry) => entry.job_id !== artifact.job_id),
+            markQueueItemTerminal(
+              previous,
+              artifact.job_id,
+              "completed",
+              formatJobMessage("completed"),
+            ),
           );
 
           if (wasRunning) {
@@ -4480,23 +4605,34 @@ export function App({
           payload.job_id,
           resolvedFailureMessage,
         );
-        transcriptionJobSnapshotsRef.current.delete(payload.job_id);
         const failedContext = pendingTranscriptionContextRef.current.get(
           payload.job_id,
         );
         pendingTranscriptionContextRef.current.delete(payload.job_id);
         const wasRunning = payload.job_id === activeJobIdRef.current;
         const wasFocused = payload.job_id === focusedJobIdRef.current;
+        updateTranscriptionJobSnapshot(payload.job_id, {
+          title:
+            failedContext?.title ??
+            (failedContext?.inputPath
+              ? fileLabel(failedContext.inputPath)
+              : undefined),
+          context: failedContext?.detailContext ?? null,
+          progress: {
+            job_id: payload.job_id,
+            stage: "failed",
+            message: resolvedFailureMessage,
+            percentage: 100,
+            current_seconds: null,
+            total_seconds: null,
+          },
+        });
         setQueueItems((previous) =>
-          previous.map((entry) =>
-            entry.job_id === payload.job_id
-              ? {
-                  ...entry,
-                  stage: "failed",
-                  message: resolvedFailureMessage,
-                  percentage: 100,
-                }
-              : entry,
+          markQueueItemTerminal(
+            previous,
+            payload.job_id,
+            "failed",
+            resolvedFailureMessage,
           ),
         );
 
@@ -5597,12 +5733,24 @@ export function App({
   }, [focusedJobId, rawActiveTranscriptionPercentage]);
 
   const queueActiveItems = useMemo(
-    () =>
-      queueItems.filter(
-        (entry) => !["completed", "cancelled", "failed"].includes(entry.stage),
-      ),
+    () => queueItems,
     [queueItems],
   );
+  const queueSessionCounts = useMemo(() => {
+    let waiting = 0;
+    let running = 0;
+    let finished = 0;
+    for (const item of queueItems) {
+      if (item.stage === "queued") {
+        waiting += 1;
+      } else if (isTerminalJobStage(item.stage)) {
+        finished += 1;
+      } else {
+        running += 1;
+      }
+    }
+    return { waiting, running, finished };
+  }, [queueItems]);
 
   const exportPreviewText = useMemo(() => {
     const transcript = visibleTranscript.trim();
@@ -7050,9 +7198,45 @@ export function App({
     setDeletedArtifacts(deletedArtifactsSnapshot);
   }
 
+  function enqueueTranscriptionStartBatch(
+    requests: TranscriptionStartRequest[],
+  ): void {
+    if (requests.length === 0) {
+      return;
+    }
+    const queueMessage = t("queue.queuedJob", "Queued transcription job.");
+    const queuedStarts = requests.map((request) => ({
+      ...request,
+      queueId: buildQueuedTranscriptionJobId(
+        ++queuedTranscriptionSequenceRef.current,
+      ),
+    }));
+    setQueuedTranscriptionStarts((previous) => [...previous, ...queuedStarts]);
+    setQueueItems((previous) => {
+      const queuedJobs = buildQueuedTranscriptionJobs(
+        queuedStarts.map((entry) => entry.queueId),
+        queueMessage,
+      );
+      return queuedJobs.reduce(
+        (items, job) => upsertQueueItem(items, job),
+        previous,
+      );
+    });
+    for (const queuedStart of queuedStarts) {
+      updateTranscriptionJobSnapshot(queuedStart.queueId, {
+        title: queuedStart.title ?? fileLabel(queuedStart.inputPath),
+        context: queuedStart.detailContext ?? null,
+        progress: buildQueuedTranscriptionJob(queuedStart.queueId, queueMessage),
+      });
+    }
+    setSection("queue");
+    setError(null);
+    setTrimRetranscriptionError(null);
+  }
+
   async function onPickFile(): Promise<void> {
     const picked = await open({
-      multiple: false,
+      multiple: true,
       filters: [
         {
           name: t("home.audioVideoFiles", "Audio/Video"),
@@ -7075,7 +7259,30 @@ export function App({
       ],
     });
 
-    if (picked && !Array.isArray(picked)) {
+    if (!picked) {
+      return;
+    }
+
+    if (Array.isArray(picked)) {
+      if (picked.length === 0) {
+        return;
+      }
+      if (picked.length === 1) {
+        primeSelectedFileForHome(picked[0]);
+        return;
+      }
+      enqueueTranscriptionStartBatch(
+        picked.map((inputPath) => ({
+          inputPath,
+          title: fileLabel(inputPath),
+          detailContext: null,
+          trimValidationSnapshot: null,
+        })),
+      );
+      return;
+    }
+
+    if (picked) {
       primeSelectedFileForHome(picked);
     }
   }
@@ -7270,6 +7477,31 @@ export function App({
         clearOptimisticFocus();
         presentTranscriptionFailure(message, context);
       };
+      const markQueuedStartFailed = (message: string) => {
+        if (!options?.queuedJobId) {
+          return;
+        }
+        updateTranscriptionJobSnapshot(options.queuedJobId, {
+          title: requestedTitle ?? fileLabel(targetFile),
+          context: nextDetailContext,
+          progress: {
+            job_id: options.queuedJobId,
+            stage: "failed",
+            message,
+            percentage: 100,
+            current_seconds: null,
+            total_seconds: null,
+          },
+        });
+        setQueueItems((previous) =>
+          markQueueItemTerminal(
+            previous,
+            options.queuedJobId ?? "",
+            "failed",
+            message,
+          ),
+        );
+      };
 
       clearStartupWatchdog();
       transcriptionStartInFlightRef.current = true;
@@ -7282,11 +7514,7 @@ export function App({
         );
         if (trimValidationError) {
           reportStartFailure(trimValidationError);
-          if (options?.queuedJobId) {
-            setQueueItems((previous) =>
-              previous.filter((entry) => entry.job_id !== options.queuedJobId),
-            );
-          }
+          markQueuedStartFailed(trimValidationError);
           return;
         }
 
@@ -7329,11 +7557,7 @@ export function App({
           } else {
             reportStartFailure(failureMessage);
           }
-          if (options?.queuedJobId) {
-            setQueueItems((previous) =>
-              previous.filter((entry) => entry.job_id !== options.queuedJobId),
-            );
-          }
+          markQueuedStartFailed(failureMessage);
           return;
         }
         if (runtimeStatus.did_setup) {
@@ -7350,11 +7574,7 @@ export function App({
               pyannoteError,
             );
             reportStartFailure(failureMessage);
-            if (options?.queuedJobId) {
-              setQueueItems((previous) =>
-                previous.filter((entry) => entry.job_id !== options.queuedJobId),
-              );
-            }
+            markQueuedStartFailed(failureMessage);
             return;
           }
         }
@@ -7409,11 +7629,7 @@ export function App({
               message: failureMessage,
             });
             reportStartFailure(failureMessage);
-            if (options?.queuedJobId) {
-              setQueueItems((previous) =>
-                previous.filter((entry) => entry.job_id !== options.queuedJobId),
-              );
-            }
+            markQueuedStartFailed(failureMessage);
             return;
           }
         }
@@ -7468,6 +7684,9 @@ export function App({
         if (optimisticJobId) {
           transcriptionJobSnapshotsRef.current.delete(optimisticJobId);
         }
+        if (options?.queuedJobId) {
+          transcriptionJobSnapshotsRef.current.delete(options.queuedJobId);
+        }
 
         if (failedJobMessagesRef.current.has(job_id)) {
           const earlyFailure =
@@ -7481,9 +7700,23 @@ export function App({
           activeJobIdRef.current = null;
           setActiveJobTitle("");
           if (options?.queuedJobId) {
-            setQueueItems((previous) =>
-              previous.filter((entry) => entry.job_id !== options.queuedJobId),
-            );
+            setQueueItems((previous) => {
+              const failedJob = buildQueuedTranscriptionJob(
+                job_id,
+                earlyFailure,
+              );
+              const replaced = replaceQueuedTranscriptionJob(
+                previous,
+                options.queuedJobId ?? "",
+                failedJob,
+              );
+              return markQueueItemTerminal(
+                replaced,
+                job_id,
+                "failed",
+                earlyFailure,
+              );
+            });
           }
           if (!shouldFocusOnStart) {
             setError(earlyFailure);
@@ -7569,12 +7802,9 @@ export function App({
           state: "error",
           message: formatAppError(startError),
         });
-        if (options?.queuedJobId) {
-          setQueueItems((previous) =>
-            previous.filter((entry) => entry.job_id !== options.queuedJobId),
-          );
-        }
-        reportStartFailure(formatAppError(startError));
+        const startFailureMessage = formatAppError(startError);
+        markQueuedStartFailed(startFailureMessage);
+        reportStartFailure(startFailureMessage);
       } finally {
         transcriptionStartInFlightRef.current = false;
         setIsStarting(false);
@@ -7702,6 +7932,31 @@ export function App({
 
   async function onCancel(): Promise<void> {
     if (!activeJobId) return;
+
+    const confirmed = await confirmDialog(
+      activeJobTitle
+        ? t(
+            "transcriptionCancel.messageWithTitle",
+            "Stop the current transcription for {title}?",
+            { title: activeJobTitle },
+          )
+        : t(
+            "transcriptionCancel.message",
+            "Stop the current transcription?",
+          ),
+      {
+        title: t("transcriptionCancel.title", "Cancel transcription?"),
+        kind: "warning",
+        okLabel: t(
+          "transcriptionCancel.confirmButton",
+          "Cancel transcription",
+        ),
+        cancelLabel: t("transcriptionCancel.keepRunning", "Keep running"),
+      },
+    );
+    if (!confirmed) {
+      return;
+    }
 
     try {
       await cancelTranscription(activeJobId);
@@ -9873,7 +10128,7 @@ export function App({
           <button
             className="icon-button"
             onClick={() => void onPickFile()}
-            title={t("home.openLocalFile", "Open Local File")}
+            title={t("home.openLocalFile", "Open audio files")}
           >
             <Upload size={16} />
           </button>
@@ -10007,11 +10262,32 @@ export function App({
     return (
       <div className="view-body">
         <div className="view-toolbar">
-          <h2>{t("queue.title")}</h2>
+          <div>
+            <h2>{t("queue.title")}</h2>
+            <p className="muted">
+              {t(
+                "queue.sessionCounts",
+                "Waiting {waiting} · Running {running} · Finished {finished}",
+                queueSessionCounts,
+              )}
+            </p>
+          </div>
           <div className="toolbar-actions">
             <button
               className="secondary-button"
-              onClick={() => setQueueItems([])}
+              onClick={() => {
+                setQueueItems((previous) => {
+                  const next = clearFinishedQueueItems(previous);
+                  const visibleJobIds = new Set(next.map((item) => item.job_id));
+                  for (const item of previous) {
+                    if (!visibleJobIds.has(item.job_id)) {
+                      transcriptionJobSnapshotsRef.current.delete(item.job_id);
+                      pendingTranscriptionContextRef.current.delete(item.job_id);
+                    }
+                  }
+                  return next;
+                });
+              }}
             >
               {t("queue.clearFinished", "Clear Finished")}
             </button>
@@ -10039,10 +10315,16 @@ export function App({
               const isQueuedPlaceholder = isQueuedTranscriptionJobId(
                 item.job_id,
               );
+              const isTerminalQueueItem = isTerminalJobStage(item.stage);
+              const isInteractiveQueueItem =
+                !isQueuedPlaceholder && !isTerminalQueueItem;
               const queuedStart = queuedTranscriptionStarts.find(
                 (entry) => entry.queueId === item.job_id,
               );
               const pendingContext = pendingTranscriptionContextRef.current.get(
+                item.job_id,
+              );
+              const snapshot = transcriptionJobSnapshotsRef.current.get(
                 item.job_id,
               );
               const queueItemTitle =
@@ -10054,6 +10336,7 @@ export function App({
                 (pendingContext?.inputPath
                   ? fileLabel(pendingContext.inputPath)
                   : undefined) ??
+                snapshot?.title ??
                 (item.job_id === activeJobId && activeJobTitle
                   ? activeJobTitle
                   : t("queue.activeJobFallback", "Transcription in progress"));
@@ -10065,23 +10348,21 @@ export function App({
               return (
                 <article
                   key={item.job_id}
-                  className={`queue-card ${isQueuedPlaceholder ? "" : "queue-card-clickable"}`}
+                  className={`queue-card ${isInteractiveQueueItem ? "queue-card-clickable" : ""}`}
                   onClick={
-                    isQueuedPlaceholder
-                      ? undefined
-                      : () => onFocusQueueJob(item)
+                    isInteractiveQueueItem ? () => onFocusQueueJob(item) : undefined
                   }
-                  role={isQueuedPlaceholder ? undefined : "button"}
-                  tabIndex={isQueuedPlaceholder ? undefined : 0}
+                  role={isInteractiveQueueItem ? "button" : undefined}
+                  tabIndex={isInteractiveQueueItem ? 0 : undefined}
                   onKeyDown={
-                    isQueuedPlaceholder
-                      ? undefined
-                      : (event) => {
+                    isInteractiveQueueItem
+                      ? (event) => {
                           if (event.key === "Enter" || event.key === " ") {
                             event.preventDefault();
                             onFocusQueueJob(item);
                           }
                         }
+                      : undefined
                   }
                 >
                   <div className="queue-card-head">
@@ -12858,6 +13139,25 @@ export function App({
     }
 
     const automation = settings.automation;
+    const renderAutomationSwitch = (
+      checked: boolean,
+      label: string,
+      onToggle: () => void,
+    ) => (
+      <button
+        type="button"
+        className={`settings-switch ${checked ? "is-on" : "is-off"}`}
+        role="switch"
+        aria-checked={checked}
+        aria-label={label}
+        title={label}
+        onClick={onToggle}
+      >
+        <span className="settings-switch-track" aria-hidden="true">
+          <span className="settings-switch-thumb" />
+        </span>
+      </button>
+    );
 
     return (
       <div className="settings-stack">
@@ -12884,16 +13184,16 @@ export function App({
                 )}
               </small>
             </div>
-            <input
-              type="checkbox"
-              checked={automation.enabled}
-              onChange={(event) => {
+            {renderAutomationSwitch(
+              automation.enabled,
+              t("settings.automaticImport.enabled", "Enable automatic import"),
+              () => {
                 void patchAutomaticImportSettings((current) => ({
                   ...current,
-                  enabled: event.target.checked,
+                  enabled: !current.enabled,
                 }));
-              }}
-            />
+              },
+            )}
           </div>
 
           <div className="settings-row">
@@ -12911,16 +13211,16 @@ export function App({
                 )}
               </small>
             </div>
-            <input
-              type="checkbox"
-              checked={automation.run_scan_on_app_start}
-              onChange={(event) => {
+            {renderAutomationSwitch(
+              automation.run_scan_on_app_start,
+              t("settings.automaticImport.scanOnStart", "Scan on app start"),
+              () => {
                 void patchAutomaticImportSettings((current) => ({
                   ...current,
-                  run_scan_on_app_start: event.target.checked,
+                  run_scan_on_app_start: !current.run_scan_on_app_start,
                 }));
-              }}
-            />
+              },
+            )}
           </div>
 
           <div className="settings-row settings-row-block">
@@ -13006,12 +13306,14 @@ export function App({
               {t("settings.automaticImport.addVoiceMemos", "Add Voice Memos")}
             </button>
           </div>
-          <div className="inspector-block">
-            <h4>{t("settings.automaticImport.exclusions", "Excluded folders")}</h4>
+          <details className="settings-disclosure">
+            <summary>
+              {t("settings.automaticImport.exclusions", "Folders to ignore")}
+            </summary>
             <small className="muted">
               {t(
                 "settings.automaticImport.exclusionsDesc",
-                "Ignore sensitive folders even if they contain supported audio files.",
+                "Skip sensitive or noisy folders inside watched folders, such as archives, caches, or already processed exports.",
               )}
             </small>
             <div className="settings-actions-row">
@@ -13067,7 +13369,7 @@ export function App({
                 </div>
               ))
             )}
-          </div>
+          </details>
           <small className="muted">
             {t(
               "settings.automaticImport.voiceMemosHint",
@@ -13095,11 +13397,11 @@ export function App({
 
         <section className="settings-panel">
           <header>
-            <h3>{t("settings.automaticImport.sources", "Watched Sources")}</h3>
+            <h3>{t("settings.automaticImport.sources", "Watched folders")}</h3>
             <p>
               {t(
                 "settings.automaticImport.sourcesDesc",
-                "Map each folder to a preset and optional workspace.",
+                "Each folder can use its own model, language, preset, and workspace.",
               )}
             </p>
           </header>
@@ -13115,7 +13417,7 @@ export function App({
             automation.watched_sources.map((source) => {
               const sourceStatus = automaticImportSourceStatusMap.get(source.id);
               return (
-              <div key={source.id} className="settings-panel">
+              <div key={source.id} className="settings-card-block automatic-import-source-card">
                 <div className="settings-row settings-row-block">
                   <div>
                     <strong>
@@ -13207,6 +13509,78 @@ export function App({
                 <div className="settings-row settings-row-block">
                   <div>
                     <strong>
+                      {t("settings.automaticImport.sourceModel", "Model")}
+                    </strong>
+                    <small>
+                      {t(
+                        "settings.automaticImport.sourceModelDesc",
+                        "Used for new files found in this folder.",
+                      )}
+                    </small>
+                  </div>
+                  <select
+                    value={source.model}
+                    onChange={(event) => {
+                      void patchAutomaticImportSettings((current) => ({
+                        ...current,
+                        watched_sources: current.watched_sources.map((entry) =>
+                          entry.id === source.id
+                            ? {
+                                ...entry,
+                                model: event.target.value as SpeechModel,
+                              }
+                            : entry,
+                        ),
+                      }));
+                    }}
+                  >
+                    {modelOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {formatSpeechModelLabel(option.value, option.label)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="settings-row settings-row-block">
+                  <div>
+                    <strong>
+                      {t("settings.automaticImport.sourceLanguage", "Language")}
+                    </strong>
+                    <small>
+                      {t(
+                        "settings.automaticImport.sourceLanguageDesc",
+                        "Used for new files found in this folder.",
+                      )}
+                    </small>
+                  </div>
+                  <select
+                    value={source.language}
+                    onChange={(event) => {
+                      void patchAutomaticImportSettings((current) => ({
+                        ...current,
+                        watched_sources: current.watched_sources.map((entry) =>
+                          entry.id === source.id
+                            ? {
+                                ...entry,
+                                language: event.target.value as LanguageCode,
+                              }
+                            : entry,
+                        ),
+                      }));
+                    }}
+                  >
+                    {languageOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {t(`lang.${option.value}`, option.label)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="settings-row settings-row-block">
+                  <div>
+                    <strong>
                       {t("settings.automaticImport.workspace", "Workspace")}
                     </strong>
                   </div>
@@ -13241,20 +13615,20 @@ export function App({
                   <div>
                     <strong>{t("settings.automaticImport.sourceEnabled", "Enabled")}</strong>
                   </div>
-                  <input
-                    type="checkbox"
-                    checked={source.enabled}
-                    onChange={(event) => {
+                  {renderAutomationSwitch(
+                    source.enabled,
+                    t("settings.automaticImport.sourceEnabled", "Enabled"),
+                    () => {
                       void patchAutomaticImportSettings((current) => ({
                         ...current,
                         watched_sources: current.watched_sources.map((entry) =>
                           entry.id === source.id
-                            ? { ...entry, enabled: event.target.checked }
+                            ? { ...entry, enabled: !entry.enabled }
                             : entry,
                         ),
                       }));
-                    }}
-                  />
+                    },
+                  )}
                 </div>
 
                 <div className="settings-row">
@@ -13263,20 +13637,20 @@ export function App({
                       {t("settings.automaticImport.sourceRecursive", "Recursive scan")}
                     </strong>
                   </div>
-                  <input
-                    type="checkbox"
-                    checked={source.recursive}
-                    onChange={(event) => {
+                  {renderAutomationSwitch(
+                    source.recursive,
+                    t("settings.automaticImport.sourceRecursive", "Recursive scan"),
+                    () => {
                       void patchAutomaticImportSettings((current) => ({
                         ...current,
                         watched_sources: current.watched_sources.map((entry) =>
                           entry.id === source.id
-                            ? { ...entry, recursive: event.target.checked }
+                            ? { ...entry, recursive: !entry.recursive }
                             : entry,
                         ),
                       }));
-                    }}
-                  />
+                    },
+                  )}
                 </div>
 
                 <div className="settings-row">
@@ -13288,23 +13662,27 @@ export function App({
                       )}
                     </strong>
                   </div>
-                  <input
-                    type="checkbox"
-                    checked={source.enable_ai_post_processing}
-                    onChange={(event) => {
+                  {renderAutomationSwitch(
+                    source.enable_ai_post_processing,
+                    t(
+                      "settings.automaticImport.sourceEnableAi",
+                      "Enable AI post-processing",
+                    ),
+                    () => {
                       void patchAutomaticImportSettings((current) => ({
                         ...current,
                         watched_sources: current.watched_sources.map((entry) =>
                           entry.id === source.id
                             ? {
                                 ...entry,
-                                enable_ai_post_processing: event.target.checked,
+                                enable_ai_post_processing:
+                                  !entry.enable_ai_post_processing,
                               }
                             : entry,
                         ),
                       }));
-                    }}
-                  />
+                    },
+                  )}
                 </div>
 
                 <div className="inspector-block">
@@ -13490,15 +13868,16 @@ export function App({
         </section>
 
         <section className="settings-panel">
-          <header>
-            <h3>{t("settings.automaticImport.activity", "Recent activity")}</h3>
-            <p>
+          <details className="settings-disclosure">
+            <summary>
+              {t("settings.automaticImport.activity", "Last scans")}
+            </summary>
+            <p className="settings-help-text">
               {t(
                 "settings.automaticImport.activityDesc",
-                "Review recent scan results, warnings, and retry guidance.",
+                "Review recent scan results and warnings when you need to diagnose automatic imports.",
               )}
             </p>
-          </header>
           {automation.recent_activity.length === 0 ? (
             <p className="muted">
               {t(
@@ -13525,31 +13904,30 @@ export function App({
                 </div>
               ))
           )}
+          </details>
         </section>
 
+        {automation.quarantined_items.length > 0 ? (
         <section className="settings-panel">
           <header>
-            <h3>{t("settings.automaticImport.quarantine", "Quarantine")}</h3>
+            <h3>
+              {t(
+                "settings.automaticImport.quarantine",
+                "Files needing attention",
+              )}
+            </h3>
             <p>
               {t(
                 "settings.automaticImport.quarantineDesc",
-                "Problematic files stay out of the queue until you retry or clear them.",
+                "Files that could not be inspected stay out of the queue so the app does not retry them forever.",
               )}
             </p>
           </header>
-          {automation.quarantined_items.length === 0 ? (
-            <p className="muted">
-              {t(
-                "settings.automaticImport.emptyQuarantine",
-                "No quarantined automatic-import files.",
-              )}
-            </p>
-          ) : (
-            [...automation.quarantined_items]
+          {[...automation.quarantined_items]
               .slice()
               .reverse()
               .map((item) => (
-                <div key={item.id} className="settings-panel">
+                <div key={item.id} className="settings-card-block">
                   <div className="settings-row settings-row-block">
                     <div>
                       <strong>
@@ -13594,9 +13972,9 @@ export function App({
                     </div>
                   </div>
                 </div>
-              ))
-          )}
+              ))}
         </section>
+        ) : null}
 
         <section className="settings-panel">
           <header>
