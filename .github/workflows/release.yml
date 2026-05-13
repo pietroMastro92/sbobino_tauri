@@ -44,17 +44,6 @@ jobs:
         with:
           targets: aarch64-apple-darwin
 
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            sbobino_desktop -> target
-
-      - name: Repair Rust toolchain after cache restore
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin
-
       - name: Verify Rust toolchain
         run: |
           command -v cargo
