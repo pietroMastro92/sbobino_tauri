@@ -62,6 +62,15 @@ const MENU_CHECK_UPDATES_ID: &str = "app_menu_check_updates";
 const MENU_CHECK_UPDATES_EVENT: &str = "app://menu-check-updates";
 
 #[cfg(target_os = "macos")]
+fn show_main_window(app_handle: &tauri::AppHandle) {
+    if let Some(main_window) = app_handle.get_webview_window("main") {
+        let _ = main_window.show();
+        let _ = main_window.unminimize();
+        let _ = main_window.set_focus();
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn setup_macos_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     let menu = Menu::default(app)?;
     let check_updates_item = MenuItem::with_id(
@@ -91,10 +100,8 @@ fn setup_macos_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         if event.id() != MENU_CHECK_UPDATES_ID {
             return;
         }
+        show_main_window(app_handle);
         if let Some(main_window) = app_handle.get_webview_window("main") {
-            let _ = main_window.show();
-            let _ = main_window.unminimize();
-            let _ = main_window.set_focus();
             let _ = main_window.emit(MENU_CHECK_UPDATES_EVENT, ());
         } else {
             let _ = app_handle.emit(MENU_CHECK_UPDATES_EVENT, ());
@@ -111,25 +118,6 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                if window.label() == "main" {
-                    let app = window.app_handle();
-                    let secondary_labels = app
-                        .webview_windows()
-                        .keys()
-                        .filter(|label| label.as_str() != "main")
-                        .cloned()
-                        .collect::<Vec<_>>();
-
-                    for label in secondary_labels {
-                        if let Some(secondary) = app.get_webview_window(label.as_str()) {
-                            let _ = secondary.close();
-                        }
-                    }
-                }
-            }
-        })
         .setup(|app| {
             #[cfg(target_os = "macos")]
             setup_macos_app_menu(&app.handle())
@@ -267,8 +255,14 @@ pub fn run() {
             check_updates,
             open_settings_window,
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to run sbobino desktop app");
+        .build(tauri::generate_context!())
+        .expect("failed to build sbobino desktop app")
+        .run(|app_handle, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                show_main_window(app_handle);
+            }
+        });
 }
 
 fn init_tracing() {

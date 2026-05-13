@@ -2350,11 +2350,11 @@ const translationAdditions: AllTranslations = {
     "setup.firstLaunch.title": "Sbobino is preparing your Mac",
     "appClose.title": "Close Sbobino?",
     "appClose.message":
-      "Do you want to quit Sbobino or keep it available from the Dock?",
+      "Do you want to quit Sbobino or keep it open in the Dock?",
     "appClose.messageWithTranscription":
-      "A transcription is running. Quit Sbobino to stop it, or minimize the window so it can continue in the Dock.",
+      "A transcription is running. Quit Sbobino to stop it, or keep the app open in the Dock so the transcription can continue.",
     "appClose.quitButton": "Quit Sbobino",
-    "appClose.minimizeButton": "Minimize to Dock",
+    "appClose.keepOpenButton": "Keep Open",
     "transcriptionCancel.title": "Cancel transcription?",
     "transcriptionCancel.message": "Stop the current transcription?",
     "transcriptionCancel.messageWithTitle":
@@ -2818,11 +2818,11 @@ const translationAdditions: AllTranslations = {
     "setup.firstLaunch.title": "Sbobino sta preparando il tuo Mac",
     "appClose.title": "Chiudere Sbobino?",
     "appClose.message":
-      "Vuoi chiudere Sbobino o lasciarlo disponibile dal Dock?",
+      "Vuoi chiudere Sbobino o lasciarlo aperto nel Dock?",
     "appClose.messageWithTranscription":
-      "Una trascrizione è in corso. Chiudi Sbobino per interromperla, oppure minimizza la finestra per lasciarla continuare dal Dock.",
+      "Una trascrizione è in corso. Chiudi Sbobino per interromperla, oppure lascia l'app aperta nel Dock per farla continuare.",
     "appClose.quitButton": "Chiudi Sbobino",
-    "appClose.minimizeButton": "Minimizza nel Dock",
+    "appClose.keepOpenButton": "Mantieni aperta",
     "transcriptionCancel.title": "Annullare la trascrizione?",
     "transcriptionCancel.message": "Interrompere la trascrizione in corso?",
     "transcriptionCancel.messageWithTitle":
@@ -3290,11 +3290,11 @@ const translationAdditions: AllTranslations = {
     "setup.firstLaunch.title": "Sbobino está preparando tu Mac",
     "appClose.title": "¿Cerrar Sbobino?",
     "appClose.message":
-      "¿Quieres salir de Sbobino o mantenerlo disponible desde el Dock?",
+      "¿Quieres salir de Sbobino o mantenerlo abierto en el Dock?",
     "appClose.messageWithTranscription":
-      "Hay una transcripción en curso. Sal de Sbobino para detenerla, o minimiza la ventana para que continúe desde el Dock.",
+      "Hay una transcripción en curso. Sal de Sbobino para detenerla, o mantén la app abierta en el Dock para que continúe.",
     "appClose.quitButton": "Salir de Sbobino",
-    "appClose.minimizeButton": "Minimizar al Dock",
+    "appClose.keepOpenButton": "Mantener abierta",
     "transcriptionCancel.title": "¿Cancelar transcripción?",
     "transcriptionCancel.message": "¿Detener la transcripción en curso?",
     "transcriptionCancel.messageWithTitle":
@@ -3763,11 +3763,11 @@ const translationAdditions: AllTranslations = {
     "setup.firstLaunch.title": "Sbobino bereitet Ihren Mac vor",
     "appClose.title": "Sbobino schließen?",
     "appClose.message":
-      "Moechten Sie Sbobino beenden oder im Dock verfuegbar lassen?",
+      "Moechten Sie Sbobino beenden oder im Dock geoeffnet lassen?",
     "appClose.messageWithTranscription":
-      "Eine Transkription laeuft. Beenden Sie Sbobino, um sie zu stoppen, oder minimieren Sie das Fenster, damit sie im Dock weiterlaufen kann.",
+      "Eine Transkription laeuft. Beenden Sie Sbobino, um sie zu stoppen, oder lassen Sie die App im Dock geoeffnet, damit sie weiterlaufen kann.",
     "appClose.quitButton": "Sbobino beenden",
-    "appClose.minimizeButton": "Ins Dock minimieren",
+    "appClose.keepOpenButton": "Geoeffnet lassen",
     "transcriptionCancel.title": "Transkription abbrechen?",
     "transcriptionCancel.message": "Laufende Transkription stoppen?",
     "transcriptionCancel.messageWithTitle":

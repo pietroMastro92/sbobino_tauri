@@ -3411,25 +3411,25 @@ export function App({
         appCloseDialogOpenRef.current = true;
         void (async () => {
           const quitLabel = t("appClose.quitButton", "Quit Sbobino");
-          const minimizeLabel = t("appClose.minimizeButton", "Minimize to Dock");
+          const keepOpenLabel = t("appClose.keepOpenButton", "Keep Open");
           const cancelLabel = t("action.cancel", "Cancel");
           try {
             const result = await messageDialog(
               activeJobIdRef.current
                 ? t(
                     "appClose.messageWithTranscription",
-                    "A transcription is running. Quit Sbobino to stop it, or minimize the window so it can continue in the Dock.",
+                    "A transcription is running. Quit Sbobino to stop it, or keep the app open in the Dock so the transcription can continue.",
                   )
                 : t(
                     "appClose.message",
-                    "Do you want to quit Sbobino or keep it available from the Dock?",
+                    "Do you want to quit Sbobino or keep the app open in the Dock?",
                   ),
               {
                 title: t("appClose.title", "Close Sbobino?"),
                 kind: activeJobIdRef.current ? "warning" : "info",
                 buttons: {
                   yes: quitLabel,
-                  no: minimizeLabel,
+                  no: keepOpenLabel,
                   cancel: cancelLabel,
                 },
               },
@@ -3443,8 +3443,8 @@ export function App({
               await exitProcess(0);
               return;
             }
-            if (result === minimizeLabel || result === "No") {
-              await appWindow.minimize();
+            if (result === keepOpenLabel || result === "No") {
+              await appWindow.hide();
             }
           } catch (closeDialogError) {
             setError(
