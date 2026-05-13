@@ -216,6 +216,54 @@ code {
   gap: 8px;
 }
 
+.sidebar-update-pill {
+  width: 100%;
+  min-height: 28px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  color: var(--sidebar-active-text);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 4px 9px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1;
+  text-decoration: none;
+  box-shadow: none;
+  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+
+.sidebar-update-pill:hover {
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 48%, transparent);
+  transform: translateY(-1px);
+}
+
+.sidebar-update-pill:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 52%, transparent);
+  outline-offset: 2px;
+}
+
+.sidebar-update-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+  flex: 0 0 auto;
+}
+
+.sidebar-update-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sidebar-item-label {
   min-width: 0;
   overflow: hidden;
@@ -600,33 +648,6 @@ code {
   flex-wrap: nowrap;
   justify-content: flex-end;
   min-width: 0;
-}
-
-.topbar-update-button {
-  height: 34px;
-  padding: 0 18px;
-  border: 0;
-  border-radius: 999px;
-  background: #5478c5;
-  color: #ffffff;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  font-size: 0.95rem;
-  font-weight: 700;
-  text-decoration: none;
-  cursor: pointer;
-  box-shadow: 0 8px 20px rgba(84, 120, 197, 0.24);
-}
-
-.topbar-update-button:hover {
-  background: #496cb6;
-}
-
-.topbar-update-button:disabled {
-  opacity: 0.66;
-  cursor: not-allowed;
 }
 
 .history-topbar-controls,
@@ -5894,6 +5915,76 @@ body.sidebar-resizing {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.settings-update-card {
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 88%, var(--accent) 4%);
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.settings-update-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-update-card-header > div {
+  min-width: 0;
+}
+
+.settings-update-card-header strong,
+.settings-update-card-header small {
+  display: block;
+}
+
+.settings-update-card-header small,
+.settings-update-card > small {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.settings-update-action {
+  flex: 0 0 auto;
+}
+
+.settings-update-progress {
+  position: relative;
+  height: 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line) 62%, transparent);
+  overflow: hidden;
+}
+
+.settings-update-progress > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--accent-strong));
+}
+
+.settings-update-progress--indeterminate > span {
+  width: 42%;
+  animation: update-progress-indeterminate 1.15s ease-in-out infinite;
+}
+
+.settings-update-manual-link {
+  justify-self: start;
+  text-decoration: none;
+}
+
+@keyframes update-progress-indeterminate {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(240%);
+  }
 }
 
 .settings-card-block.compact {

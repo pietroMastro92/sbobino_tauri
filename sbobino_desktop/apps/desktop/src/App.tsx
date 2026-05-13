@@ -153,6 +153,7 @@ import {
 } from "./lib/diarizationUi";
 import { loadInitialAppBootstrapData } from "./lib/appBootstrap";
 import {
+  deriveUpdateUiState,
   matchesPyannoteAutoActionMarker,
   PYANNOTE_AUTO_ACTION_MARKER_TTL_MS,
   readDismissedUpdateVersion,
@@ -160,6 +161,7 @@ import {
   readLastSeenAppVersion,
   readSharedUpdateSnapshot,
   shouldShowUpdateBanner,
+  type UpdateInstallPhase,
   writeDismissedUpdateVersion,
   writeLastPyannoteAutoActionMarker,
   writeLastSeenAppVersion,
@@ -2363,7 +2365,6 @@ type DetailToolbarProps = {
   showRetranscribe?: boolean;
   isStartingTrimmedAudioRetranscription?: boolean;
   onRetranscribeTrimmedAudio?: () => void;
-  updateButton?: JSX.Element | null;
   realtimeControls?: {
     state: "idle" | "running" | "paused";
     isStopping: boolean;
@@ -2398,7 +2399,6 @@ function DetailToolbar({
   showRetranscribe,
   isStartingTrimmedAudioRetranscription,
   onRetranscribeTrimmedAudio,
-  updateButton,
   realtimeControls,
 }: DetailToolbarProps): JSX.Element {
   const { t } = useTranslation();
@@ -2474,7 +2474,6 @@ function DetailToolbar({
         </div>
 
         <div className="detail-toolbar-actions">
-          {updateButton}
           {realtimeControls ? (
             <>
               <button
@@ -3099,6 +3098,10 @@ export function App({
     // even when the running app is already up to date.
     return false;
   });
+  const [updateInstallPhase, setUpdateInstallPhase] =
+    useState<UpdateInstallPhase>(
+      () => readSharedUpdateSnapshot()?.installPhase ?? "idle",
+    );
   const [updateDownloadPercent, setUpdateDownloadPercent] = useState<
     number | null
   >(() => readSharedUpdateSnapshot()?.downloadPercent ?? null);
@@ -3137,6 +3140,7 @@ export function App({
   const copiedChatResetTimerRef = useRef<number | null>(null);
   const chatMessageSerialRef = useRef(0);
   const promptTestDefaultInputRef = useRef(getDefaultPromptTestInput());
+  const updateInstallInFlightRef = useRef(false);
   const previousAutoUpdateEnabledRef = useRef<boolean | null>(null);
   const [summaryIncludeTimestamps, setSummaryIncludeTimestamps] = useState(
     defaultSummaryControls.includeTimestamps,
@@ -3945,6 +3949,7 @@ export function App({
       statusMessage: updateStatusMessage,
       checking: checkingUpdates,
       installing: installingUpdate,
+      installPhase: updateInstallPhase,
       downloadPercent: updateDownloadPercent,
       syncedAt: Date.now(),
     });
@@ -3953,6 +3958,7 @@ export function App({
     installingUpdate,
     updateDownloadPercent,
     updateInfo,
+    updateInstallPhase,
     updateSource,
     updateStatusMessage,
   ]);
@@ -4000,6 +4006,7 @@ export function App({
       setUpdateSource(snapshot.updateSource);
       setUpdateStatusMessage(snapshot.statusMessage);
       setCheckingUpdates(snapshot.checking);
+      setUpdateInstallPhase(snapshot.installPhase ?? "idle");
       // Only mirror `installing` from secondary windows that report an
       // actual update in flight. A stale snapshot with installing=true
       // and has_update=false would otherwise pin the banner open.
@@ -9710,56 +9717,63 @@ export function App({
     setCheckingUpdates(true);
     setUpdateStatusMessage(null);
     setUpdateDownloadPercent(null);
+    setUpdateInstallPhase("checking");
     setNativeUpdate(null);
     const isDevRuntime = import.meta.env.DEV;
-    if (!isDevRuntime) {
-      try {
-        const native = await checkAppUpdate();
-        if (shouldCancel?.()) {
-          return;
-        }
-        if (native) {
-          setNativeUpdate(native);
-          setUpdateSource("native");
-          setUpdateInfo({
-            has_update: true,
-            current_version: native.currentVersion,
-            latest_version: native.version,
-            download_url: null,
-          });
-          try {
-            const fallback = await checkUpdates();
-            if (shouldCancel?.()) {
-              return;
-            }
-            if (fallback.download_url) {
-              setUpdateInfo((previous) =>
-                previous
-                  ? {
-                      ...previous,
-                      download_url: fallback.download_url,
-                    }
-                  : previous,
-              );
-            }
-          } catch {
-            // optional GitHub download fallback is best-effort
-          }
-          return;
-        }
-      } catch {
-        // fallback to GitHub release polling
-      }
-    }
-
     try {
+      if (!isDevRuntime) {
+        try {
+          const native = await checkAppUpdate();
+          if (shouldCancel?.()) {
+            return;
+          }
+          if (native) {
+            setNativeUpdate(native);
+            setUpdateSource("native");
+            setUpdateInstallPhase("available");
+            setUpdateInfo({
+              has_update: true,
+              current_version: native.currentVersion,
+              latest_version: native.version,
+              download_url: null,
+            });
+            try {
+              const fallback = await checkUpdates();
+              if (shouldCancel?.()) {
+                return;
+              }
+              if (fallback.download_url) {
+                setUpdateInfo((previous) =>
+                  previous
+                    ? {
+                        ...previous,
+                        download_url: fallback.download_url,
+                      }
+                    : previous,
+                );
+              }
+            } catch {
+              // optional GitHub download fallback is best-effort
+            }
+            return;
+          }
+        } catch {
+          // fallback to GitHub release polling
+        }
+      }
+
       const update = await checkUpdates();
       if (shouldCancel?.()) {
         return;
       }
       setUpdateInfo(update);
       setUpdateSource("github");
+      setUpdateInstallPhase(update.has_update ? "available" : "idle");
     } catch (updateError) {
+      setUpdateInstallPhase("failed");
+      setUpdateStatusMessage(
+        t("settings.general.updateCheckFailed", "Unable to check for updates."),
+      );
       if (!silent) {
         setError(
           formatUiError(
@@ -9803,15 +9817,17 @@ export function App({
   }
 
   async function onInstallUpdate(): Promise<void> {
-    if (!nativeUpdate) {
+    if (!nativeUpdate || updateInstallInFlightRef.current) {
       return;
     }
 
+    updateInstallInFlightRef.current = true;
     setInstallingUpdate(true);
+    setUpdateInstallPhase("downloading");
     setUpdateStatusMessage(
       t("settings.general.downloadingUpdate", "Downloading update..."),
     );
-    setUpdateDownloadPercent(0);
+    setUpdateDownloadPercent(null);
     try {
       let expectedBytes = 0;
       let downloadedBytes = 0;
@@ -9819,6 +9835,8 @@ export function App({
         if (event.event === "Started") {
           expectedBytes = event.data.contentLength ?? 0;
           downloadedBytes = 0;
+          setUpdateInstallPhase("downloading");
+          setUpdateDownloadPercent(expectedBytes > 0 ? 0 : null);
           setUpdateStatusMessage(
             t("settings.general.downloadingUpdate", "Downloading update..."),
           );
@@ -9840,6 +9858,7 @@ export function App({
         }
         if (event.event === "Finished") {
           setUpdateDownloadPercent(100);
+          setUpdateInstallPhase("installing");
           setUpdateStatusMessage(
             t("settings.general.installingUpdate", "Installing update..."),
           );
@@ -9863,6 +9882,7 @@ export function App({
           : previous,
       );
       setNativeUpdate(null);
+      setUpdateInstallPhase("restarting");
       setUpdateStatusMessage(
         t(
           "settings.general.restartingAfterUpdate",
@@ -9886,8 +9906,10 @@ export function App({
             "Update installed. Restart the app to apply it.",
           ),
         );
+        setUpdateInstallPhase("installed");
       }
     } catch (installError) {
+      setUpdateInstallPhase("failed");
       setError(
         formatUiError(
           "error.updateInstallFailed",
@@ -9895,9 +9917,15 @@ export function App({
           installError,
         ),
       );
-      setUpdateStatusMessage(null);
+      setUpdateStatusMessage(
+        t(
+          "settings.general.updateInstallFailed",
+          "Update install failed. You can retry or use Manual Download.",
+        ),
+      );
     } finally {
       setInstallingUpdate(false);
+      updateInstallInFlightRef.current = false;
     }
   }
 
@@ -12565,7 +12593,6 @@ export function App({
             isStartingTrimmedAudioRetranscription={
               isTrimRetranscriptionStarting
             }
-            updateButton={renderCompactUpdateButton()}
             onRetranscribeTrimmedAudio={() => {
               if (effectiveTrimmedAudioDraft) {
                 void onStartTranscription(effectiveTrimmedAudioDraft.path, {
@@ -12916,42 +12943,78 @@ export function App({
     checkingUpdates,
     dismissedUpdateVersion,
   );
+  const updateUiState = deriveUpdateUiState({
+    updateInfo,
+    checking: checkingUpdates,
+    installing: installingUpdate,
+    installPhase: updateInstallPhase,
+    downloadPercent: updateDownloadPercent,
+    hasNativeUpdate: Boolean(nativeUpdate),
+  });
 
-  function renderCompactUpdateButton(): JSX.Element | null {
+  function getUpdatePhaseLabel(phase: UpdateInstallPhase): string {
+    switch (phase) {
+      case "checking":
+        return t("updates.phase.checking", "Checking...");
+      case "available":
+        return t("updates.phase.available", "Update available");
+      case "downloading":
+        return t("updates.phase.downloading", "Downloading update...");
+      case "installing":
+        return t("updates.phase.installing", "Installing update...");
+      case "restarting":
+        return t("updates.phase.restarting", "Restarting...");
+      case "installed":
+        return t("updates.phase.installed", "Update installed");
+      case "failed":
+        return t("updates.phase.failed", "Update failed");
+      case "idle":
+      default:
+        return t("updates.phase.idle", "Up to date");
+    }
+  }
+
+  function renderSidebarUpdateButton(): JSX.Element | null {
     if (!updatePromptVisible || !updateInfo?.has_update) {
       return null;
     }
 
-    const label = installingUpdate
-      ? t("updates.topbar.installing", "Updating...")
-      : t("updates.topbar.update", "Update");
+    const label =
+      checkingUpdates || installingUpdate
+        ? t("updates.sidebar.updating", "Updating")
+        : t("updates.sidebar.update", "Update");
+    const phaseLabel = getUpdatePhaseLabel(updateUiState.phase);
+    const title =
+      updateUiState.phase === "available"
+        ? t("updates.sidebar.installTitle", "Download and install update")
+        : phaseLabel;
 
-    if (nativeUpdate) {
-      return (
-        <button
-          className="topbar-update-button"
-          onClick={() => void onInstallUpdate()}
-          disabled={installingUpdate || checkingUpdates}
-        >
-          {label}
-        </button>
-      );
-    }
-
-    if (updateInfo.download_url) {
-      return (
-        <a
-          className="topbar-update-button"
-          href={updateInfo.download_url}
-          target="_blank"
-          rel="noreferrer"
-        >
-          {t("updates.topbar.update", "Update")}
-        </a>
-      );
-    }
-
-    return null;
+    return (
+      <button
+        type="button"
+        className={`sidebar-update-pill sidebar-update-pill--${updateUiState.phase}`}
+        onClick={() => {
+          if (checkingUpdates || installingUpdate) {
+            void onOpenStandaloneSettingsWindow("general");
+            return;
+          }
+          if (nativeUpdate) {
+            void onInstallUpdate();
+            return;
+          }
+          if (updateInfo.download_url) {
+            window.open(updateInfo.download_url, "_blank", "noreferrer");
+            return;
+          }
+          void onOpenStandaloneSettingsWindow("general");
+        }}
+        title={title}
+        aria-label={title}
+      >
+        <span className="sidebar-update-dot" aria-hidden="true" />
+        <span className="sidebar-update-label">{label}</span>
+      </button>
+    );
   }
 
   function renderSettingsGeneral(): JSX.Element {
@@ -13064,7 +13127,7 @@ export function App({
             <button
               className="secondary-button"
               onClick={() => void onRefreshUpdates()}
-              disabled={checkingUpdates}
+              disabled={checkingUpdates || installingUpdate}
             >
               {checkingUpdates
                 ? t("settings.general.checking", "Checking...")
@@ -13090,32 +13153,76 @@ export function App({
                       )
                   : t("settings.general.upToDate", "Up to date ({version})", {
                       version: updateInfo.current_version,
-                    })}
+                  })}
               </small>
             ) : null}
           </div>
           {updateInfo?.has_update && nativeUpdate ? (
-            <button
-              className="cta-link-button"
-              onClick={() => void onInstallUpdate()}
-              disabled={installingUpdate}
-            >
-              {installingUpdate
-                ? t("settings.general.installing", "Installing{suffix}", {
-                    suffix:
-                      updateDownloadPercent !== null
-                        ? ` (${updateDownloadPercent}%)`
-                        : "...",
-                  })
-                : t(
-                    "settings.general.downloadAndInstall",
-                    "Download & Install",
+            <div className="settings-update-card">
+              <div className="settings-update-card-header">
+                <div>
+                  <strong>{getUpdatePhaseLabel(updateUiState.phase)}</strong>
+                  {updateStatusMessage ? <small>{updateStatusMessage}</small> : null}
+                </div>
+                {!installingUpdate && !checkingUpdates ? (
+                  <button
+                    className="primary-button settings-update-action"
+                    onClick={() => void onInstallUpdate()}
+                    disabled={!updateUiState.canInstall}
+                  >
+                    {updateUiState.phase === "failed"
+                      ? t("settings.general.retryInstall", "Retry Install")
+                      : t(
+                          "settings.general.downloadAndInstall",
+                          "Download & Install",
+                        )}
+                  </button>
+                ) : null}
+              </div>
+              {updateUiState.showProgress ? (
+                <div
+                  className={`settings-update-progress settings-update-progress--${updateUiState.progressKind}`}
+                  role="progressbar"
+                  aria-label={getUpdatePhaseLabel(updateUiState.phase)}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={
+                    updateUiState.progressKind === "determinate" &&
+                    updateUiState.progressPercent !== null
+                      ? updateUiState.progressPercent
+                      : undefined
+                  }
+                >
+                  <span
+                    style={
+                      updateUiState.progressKind === "determinate" &&
+                      updateUiState.progressPercent !== null
+                        ? { width: `${updateUiState.progressPercent}%` }
+                        : undefined
+                    }
+                  />
+                </div>
+              ) : null}
+              {updateUiState.progressKind === "determinate" &&
+              updateUiState.progressPercent !== null ? (
+                <small>
+                  {t("settings.general.downloadProgress", "{percent}% downloaded", {
+                    percent: updateUiState.progressPercent,
+                  })}
+                </small>
+              ) : updateUiState.showProgress ? (
+                <small>
+                  {t(
+                    "settings.general.indeterminateProgress",
+                    "Working... this may take a few minutes.",
                   )}
-            </button>
+                </small>
+              ) : null}
+            </div>
           ) : null}
           {updateInfo?.has_update && updateInfo.download_url ? (
             <a
-              className="cta-link-button"
+              className="secondary-button settings-update-manual-link"
               href={updateInfo.download_url}
               target="_blank"
               rel="noreferrer"
@@ -13125,7 +13232,9 @@ export function App({
                 : t("settings.general.downloadUpdate", "Download Update")}
             </a>
           ) : null}
-          {updateStatusMessage ? <small>{updateStatusMessage}</small> : null}
+          {!nativeUpdate && updateStatusMessage ? (
+            <small>{updateStatusMessage}</small>
+          ) : null}
         </section>
       </div>
     );
@@ -16594,7 +16703,6 @@ export function App({
               data-tauri-drag-region
               aria-hidden="true"
             />
-            {renderCompactUpdateButton()}
           </header>
           {renderSettings()}
           {error ? (
@@ -16768,6 +16876,7 @@ export function App({
           </div>
 
           <div className="sidebar-footer">
+            {renderSidebarUpdateButton()}
             <button
               className="sidebar-item"
               onClick={() => void onOpenStandaloneSettingsWindow("general")}
@@ -16823,8 +16932,6 @@ export function App({
                   aria-hidden="true"
                 />
               </div>
-
-              {renderCompactUpdateButton()}
 
               {section === "home" ||
               section === "queue" ||
