@@ -196,6 +196,7 @@ import {
   replaceQueuedTranscriptionJob,
   shouldFocusStartedTranscription,
   shouldQueueTranscriptionStart,
+  summarizeQueueItems,
   upsertQueueItem,
 } from "./lib/transcriptionQueue";
 import { stripAnsi } from "./lib/ansiText";
@@ -207,10 +208,12 @@ import type {
   AppSettings,
   AutomaticImportPostProcessingSettings,
   AutomaticImportPreset,
+  AutomaticImportQueuedJob,
   AutomaticImportScanResponse,
   AutomaticImportSettings,
   AutomaticImportSource,
   ArtifactKind,
+  ArtifactSourceOrigin,
   EmotionAnalysisResult,
   JobProgress,
   LanguageCode,
@@ -534,6 +537,13 @@ type PendingTranscriptionContext = {
   parentId?: string;
   title?: string;
   detailContext?: ActiveDetailContext | null;
+  sourceOrigin?: ArtifactSourceOrigin;
+  sourceLabel?: string | null;
+  sourceFolder?: string | null;
+  model?: SpeechModel;
+  language?: LanguageCode;
+  preset?: AutomaticImportPreset | null;
+  workspaceId?: string | null;
 };
 
 type TranscriptionStartRequest = PendingTranscriptionContext & {
@@ -550,6 +560,14 @@ type TranscriptionJobSnapshot = {
   deltaSequence: number;
   title: string;
   progress: JobProgress | null;
+  inputPath: string | null;
+  sourceOrigin: ArtifactSourceOrigin | null;
+  sourceLabel: string | null;
+  sourceFolder: string | null;
+  model: SpeechModel | null;
+  language: LanguageCode | null;
+  preset: AutomaticImportPreset | null;
+  workspaceId: string | null;
 };
 
 const languageOptions: Array<{ value: LanguageCode; label: string }> = [
@@ -1794,6 +1812,11 @@ function formatRemoteServiceLabel(
 
 function formatSpeechModelLabel(model: SpeechModel, fallback?: string): string {
   return t(`speechModel.${model}`, fallback ?? model);
+}
+
+function formatLanguageLabel(language: LanguageCode): string {
+  const option = languageOptions.find((entry) => entry.value === language);
+  return t(`lang.${language}`, option?.label ?? language);
 }
 
 function formatArtifactKindLabel(kind: ArtifactKind): string {
@@ -4457,7 +4480,20 @@ export function App({
           ...event,
           message: resolvedMessage,
         };
-        updateTranscriptionJobSnapshot(event.job_id, { progress: queueEvent });
+        updateTranscriptionJobSnapshot(event.job_id, {
+          title:
+            event.title?.trim() ||
+            (event.input_path ? fileLabel(event.input_path) : undefined),
+          inputPath: event.input_path ?? undefined,
+          sourceOrigin: event.source_origin ?? undefined,
+          sourceLabel: event.source_label ?? undefined,
+          sourceFolder: event.source_folder ?? undefined,
+          model: event.model ?? undefined,
+          language: event.language ?? undefined,
+          preset: event.preset ?? undefined,
+          workspaceId: event.workspace_id ?? undefined,
+          progress: queueEvent,
+        });
         setQueueItems((previous) =>
           upsertQueueItem(previous, queueEvent),
         );
@@ -5743,21 +5779,10 @@ export function App({
     () => queueItems,
     [queueItems],
   );
-  const queueSessionCounts = useMemo(() => {
-    let waiting = 0;
-    let running = 0;
-    let finished = 0;
-    for (const item of queueItems) {
-      if (item.stage === "queued") {
-        waiting += 1;
-      } else if (isTerminalJobStage(item.stage)) {
-        finished += 1;
-      } else {
-        running += 1;
-      }
-    }
-    return { waiting, running, finished };
-  }, [queueItems]);
+  const queueSessionCounts = useMemo(
+    () => summarizeQueueItems(queueItems),
+    [queueItems],
+  );
 
   const exportPreviewText = useMemo(() => {
     const transcript = visibleTranscript.trim();
@@ -6035,6 +6060,14 @@ export function App({
       deltaSequence: patch.deltaSequence ?? previous?.deltaSequence ?? -1,
       title: patch.title ?? previous?.title ?? "",
       progress: patch.progress ?? previous?.progress ?? null,
+      inputPath: patch.inputPath ?? previous?.inputPath ?? null,
+      sourceOrigin: patch.sourceOrigin ?? previous?.sourceOrigin ?? null,
+      sourceLabel: patch.sourceLabel ?? previous?.sourceLabel ?? null,
+      sourceFolder: patch.sourceFolder ?? previous?.sourceFolder ?? null,
+      model: patch.model ?? previous?.model ?? null,
+      language: patch.language ?? previous?.language ?? null,
+      preset: patch.preset ?? previous?.preset ?? null,
+      workspaceId: patch.workspaceId ?? previous?.workspaceId ?? null,
     });
   }
 
@@ -6364,6 +6397,58 @@ export function App({
     }
   }
 
+  function registerAutomaticImportQueuedJobs(
+    jobs: AutomaticImportQueuedJob[],
+  ): void {
+    if (jobs.length === 0) {
+      return;
+    }
+    const queueMessage = t(
+      "queue.autoImportQueuedJob",
+      "Queued from watched folder.",
+    );
+    for (const job of jobs) {
+      pendingTranscriptionContextRef.current.set(job.job_id, {
+        inputPath: job.file_path,
+        title: job.title,
+        detailContext: null,
+        sourceOrigin: "imported",
+        sourceLabel: job.source_label,
+        sourceFolder: job.folder_path,
+        model: job.model,
+        language: job.language,
+        preset: job.preset,
+        workspaceId: job.workspace_id ?? null,
+      });
+      updateTranscriptionJobSnapshot(job.job_id, {
+        title: job.title || fileLabel(job.file_path),
+        context: null,
+        inputPath: job.file_path,
+        sourceOrigin: "imported",
+        sourceLabel: job.source_label,
+        sourceFolder: job.folder_path,
+        model: job.model,
+        language: job.language,
+        preset: job.preset,
+        workspaceId: job.workspace_id ?? null,
+        progress:
+          transcriptionJobSnapshotsRef.current.get(job.job_id)?.progress ??
+          buildQueuedTranscriptionJob(job.job_id, queueMessage),
+      });
+    }
+    setQueueItems((previous) =>
+      jobs.reduce((items, job) => {
+        if (items.some((entry) => entry.job_id === job.job_id)) {
+          return items;
+        }
+        return upsertQueueItem(
+          items,
+          buildQueuedTranscriptionJob(job.job_id, queueMessage),
+        );
+      }, previous),
+    );
+  }
+
   async function runAutomaticImportScan(
     reason: "manual" | "startup" | "interval",
   ): Promise<void> {
@@ -6375,6 +6460,7 @@ export function App({
     try {
       const result = await scanAutomaticImport({ reason });
       setAutomaticImportScanResult(result);
+      registerAutomaticImportQueuedJobs(result.queued_jobs);
       await refreshSettingsFromDisk();
     } catch (scanError) {
       setAutomaticImportScanError(
@@ -6395,6 +6481,7 @@ export function App({
     try {
       const result = await retryAutomaticImportQuarantineItem({ id });
       setAutomaticImportScanResult(result);
+      registerAutomaticImportQueuedJobs(result.queued_jobs);
       await refreshSettingsFromDisk();
     } catch (retryError) {
       setAutomaticImportScanError(
@@ -7211,9 +7298,14 @@ export function App({
     if (requests.length === 0) {
       return;
     }
+    const defaultModel = settings?.transcription.model;
+    const defaultLanguage = settings?.transcription.language;
     const queueMessage = t("queue.queuedJob", "Queued transcription job.");
     const queuedStarts = requests.map((request) => ({
       ...request,
+      model: request.model ?? defaultModel,
+      language: request.language ?? defaultLanguage,
+      sourceOrigin: request.sourceOrigin ?? "imported",
       queueId: buildQueuedTranscriptionJobId(
         ++queuedTranscriptionSequenceRef.current,
       ),
@@ -7233,6 +7325,14 @@ export function App({
       updateTranscriptionJobSnapshot(queuedStart.queueId, {
         title: queuedStart.title ?? fileLabel(queuedStart.inputPath),
         context: queuedStart.detailContext ?? null,
+        inputPath: queuedStart.inputPath,
+        sourceOrigin: queuedStart.sourceOrigin ?? "imported",
+        sourceLabel: queuedStart.sourceLabel ?? null,
+        sourceFolder: queuedStart.sourceFolder ?? null,
+        model: queuedStart.model ?? null,
+        language: queuedStart.language ?? null,
+        preset: queuedStart.preset ?? null,
+        workspaceId: queuedStart.workspaceId ?? null,
         progress: buildQueuedTranscriptionJob(queuedStart.queueId, queueMessage),
       });
     }
@@ -7451,6 +7551,9 @@ export function App({
       const requestedTitle = request.title?.trim()
         ? request.title.trim()
         : undefined;
+      const effectiveModel = request.model ?? settings.transcription.model;
+      const effectiveLanguage =
+        request.language ?? settings.transcription.language;
       const nextDetailContext = request.detailContext ?? null;
       const preserveCurrentArtifact = Boolean(
         activeArtifact && section === "detail",
@@ -7491,6 +7594,14 @@ export function App({
         updateTranscriptionJobSnapshot(options.queuedJobId, {
           title: requestedTitle ?? fileLabel(targetFile),
           context: nextDetailContext,
+          inputPath: targetFile,
+          sourceOrigin: request.sourceOrigin ?? "imported",
+          sourceLabel: request.sourceLabel ?? null,
+          sourceFolder: request.sourceFolder ?? null,
+          model: effectiveModel,
+          language: effectiveLanguage,
+          preset: request.preset ?? null,
+          workspaceId: request.workspaceId ?? null,
           progress: {
             job_id: options.queuedJobId,
             stage: "failed",
@@ -7543,6 +7654,14 @@ export function App({
           updateTranscriptionJobSnapshot(optimisticJobId, {
             context: nextDetailContext,
             title: requestedTitle ?? fileLabel(targetFile),
+            inputPath: targetFile,
+            sourceOrigin: request.sourceOrigin ?? "imported",
+            sourceLabel: request.sourceLabel ?? null,
+            sourceFolder: request.sourceFolder ?? null,
+            model: effectiveModel,
+            language: effectiveLanguage,
+            preset: request.preset ?? null,
+            workspaceId: request.workspaceId ?? null,
             progress: optimisticProgress,
           });
           setProgress(optimisticProgress);
@@ -7597,7 +7716,7 @@ export function App({
         try {
           preflight = await withTimeout(
             fetchTranscriptionStartPreflight({
-              model: settings.transcription.model,
+              model: effectiveModel,
             }),
             // v0.1.36 lowered this to 3s; reverted to 8s after field reports
             // that transcriptions did not start. Awaiting repro before
@@ -7654,8 +7773,8 @@ export function App({
           startTranscription({
             input_path: targetFile,
             engine: settings.transcription.engine,
-            language: settings.transcription.language,
-            model: settings.transcription.model,
+            language: effectiveLanguage,
+            model: effectiveModel,
             enable_ai: settings.transcription.enable_ai_post_processing,
             whisper_options: sanitizeWhisperOptions(
               settings.transcription.whisper_options ??
@@ -7663,6 +7782,7 @@ export function App({
             ),
             title: requestedTitle,
             parent_id: parentId,
+            source_origin: request.sourceOrigin ?? "imported",
           }),
           12_000,
           t(
@@ -7677,10 +7797,25 @@ export function App({
           parentId,
           title: requestedTitle,
           detailContext: nextDetailContext,
+          sourceOrigin: request.sourceOrigin ?? "imported",
+          sourceLabel: request.sourceLabel ?? null,
+          sourceFolder: request.sourceFolder ?? null,
+          model: effectiveModel,
+          language: effectiveLanguage,
+          preset: request.preset ?? null,
+          workspaceId: request.workspaceId ?? null,
         });
         updateTranscriptionJobSnapshot(job_id, {
           context: nextDetailContext,
           title: requestedTitle ?? fileLabel(targetFile),
+          inputPath: targetFile,
+          sourceOrigin: request.sourceOrigin ?? "imported",
+          sourceLabel: request.sourceLabel ?? null,
+          sourceFolder: request.sourceFolder ?? null,
+          model: effectiveModel,
+          language: effectiveLanguage,
+          preset: request.preset ?? null,
+          workspaceId: request.workspaceId ?? null,
           progress: optimisticProgress
             ? { ...optimisticProgress, job_id }
             : null,
@@ -7892,7 +8027,13 @@ export function App({
       );
       setQueuedTranscriptionStarts((previous) => [
         ...previous,
-        { ...request, queueId },
+        {
+          ...request,
+          model: request.model ?? settings?.transcription.model,
+          language: request.language ?? settings?.transcription.language,
+          sourceOrigin: request.sourceOrigin ?? "imported",
+          queueId,
+        },
       ]);
       setQueueItems((previous) =>
         upsertQueueItem(
@@ -7903,6 +8044,22 @@ export function App({
           ),
         ),
       );
+      updateTranscriptionJobSnapshot(queueId, {
+        title: requestedTitle ?? fileLabel(targetFile),
+        context: nextDetailContext,
+        inputPath: targetFile,
+        sourceOrigin: request.sourceOrigin ?? "imported",
+        sourceLabel: request.sourceLabel ?? null,
+        sourceFolder: request.sourceFolder ?? null,
+        model: request.model ?? settings?.transcription.model ?? null,
+        language: request.language ?? settings?.transcription.language ?? null,
+        preset: request.preset ?? null,
+        workspaceId: request.workspaceId ?? null,
+        progress: buildQueuedTranscriptionJob(
+          queueId,
+          t("queue.queuedJob", "Queued transcription job."),
+        ),
+      });
       setError(null);
       setTrimRetranscriptionError(null);
       return;
@@ -10295,7 +10452,7 @@ export function App({
             <p className="muted">
               {t(
                 "queue.sessionCounts",
-                "Waiting {waiting} · Running {running} · Finished {finished}",
+                "Waiting {waiting} · Running {running} · Completed {completed} · Failed {failed}",
                 queueSessionCounts,
               )}
             </p>
@@ -10372,6 +10529,50 @@ export function App({
                 item.job_id === activeJobId
                   ? runningJobPercentage
                   : percentageFromJobProgress(item);
+              const queueSourceName =
+                pendingContext?.sourceLabel ??
+                queuedStart?.sourceLabel ??
+                snapshot?.sourceLabel ??
+                null;
+              const queueSourceFolder =
+                pendingContext?.sourceFolder ??
+                queuedStart?.sourceFolder ??
+                snapshot?.sourceFolder ??
+                null;
+              const queueIsAutomatic = Boolean(
+                queueSourceName || queueSourceFolder,
+              );
+              const queueOriginLabel = queueIsAutomatic
+                ? t("queue.sourceAutomatic", "Watched folder")
+                : t("queue.sourceManual", "Manual import");
+              const queueModel =
+                pendingContext?.model ?? queuedStart?.model ?? snapshot?.model;
+              const queueLanguage =
+                pendingContext?.language ??
+                queuedStart?.language ??
+                snapshot?.language;
+              const queuePreset =
+                pendingContext?.preset ?? queuedStart?.preset ?? snapshot?.preset;
+              const queueWorkspaceId =
+                pendingContext?.workspaceId ??
+                queuedStart?.workspaceId ??
+                snapshot?.workspaceId ??
+                null;
+              const queueWorkspaceLabel = queueWorkspaceId
+                ? (workspaceLabelMap.get(queueWorkspaceId) ?? queueWorkspaceId)
+                : null;
+              const queuePath =
+                pendingContext?.inputPath ??
+                queuedStart?.inputPath ??
+                snapshot?.inputPath ??
+                null;
+              const progressTime =
+                item.current_seconds != null && item.total_seconds != null
+                  ? `${formatShortDuration(item.current_seconds)} / ${formatShortDuration(item.total_seconds)}`
+                  : null;
+              const translateToEnglish =
+                settings?.transcription.whisper_options?.translate_to_english ??
+                false;
 
               return (
                 <article
@@ -10394,11 +10595,44 @@ export function App({
                   }
                 >
                   <div className="queue-card-head">
-                    <strong>{queueItemTitle}</strong>
+                    <div className="queue-card-title">
+                      <strong>{queueItemTitle}</strong>
+                      {queuePath ? <small>{queuePath}</small> : null}
+                    </div>
                     <span className="queue-stage">
                       <ProgressRing percentage={displayPercentage} size={18} />
                       <small>{formatJobStageLabel(item.stage)}</small>
                     </span>
+                  </div>
+                  <div className="queue-meta-row">
+                    <span>{queueOriginLabel}</span>
+                    {queueSourceName ? <span>{queueSourceName}</span> : null}
+                    {queueSourceFolder ? (
+                      <span>{queueSourceFolder}</span>
+                    ) : null}
+                    {queueModel ? (
+                      <span>{formatSpeechModelLabel(queueModel)}</span>
+                    ) : null}
+                    {queueLanguage ? (
+                      <span>{formatLanguageLabel(queueLanguage)}</span>
+                    ) : null}
+                    {queuePreset ? (
+                      <span>
+                        {formatAutomaticImportPresetLabel(queuePreset, t)}
+                      </span>
+                    ) : null}
+                    {queueWorkspaceLabel ? (
+                      <span>{queueWorkspaceLabel}</span>
+                    ) : null}
+                    {translateToEnglish ? (
+                      <span>
+                        {t(
+                          "queue.translateToEnglishActive",
+                          "Translate to English active",
+                        )}
+                      </span>
+                    ) : null}
+                    {progressTime ? <span>{progressTime}</span> : null}
                   </div>
                   <p>{item.message}</p>
                   <div className="queue-progress">
